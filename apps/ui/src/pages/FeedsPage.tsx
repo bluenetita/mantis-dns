@@ -5,6 +5,7 @@ import {
   Center,
   Group,
   Loader,
+  Modal,
   NumberInput,
   Select,
   Stack,
@@ -15,6 +16,7 @@ import {
   Title,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
+import { useDisclosure } from "@mantine/hooks";
 import { modals } from "@mantine/modals";
 import { notifications } from "@mantine/notifications";
 import { IconPlus, IconRefresh, IconTrash } from "@tabler/icons-react";
@@ -91,14 +93,7 @@ export function FeedsPage() {
   const updateFeed = useUpdateFeed();
   const deleteFeed = useDeleteFeed();
   const ingestNow = useIngestFeedNow();
-
-  function openAddModal() {
-    const id = modals.open({
-      title: "Add custom feed",
-      size: "md",
-      children: <AddFeedForm onDone={() => modals.close(id)} />,
-    });
-  }
+  const [addModalOpened, { open: openAddModal, close: closeAddModal }] = useDisclosure(false);
 
   function toggleEnabled(feed: Feed) {
     updateFeed.mutate(
@@ -224,6 +219,10 @@ export function FeedsPage() {
           </Table>
         </Card>
       ))}
+
+      <Modal opened={addModalOpened} onClose={closeAddModal} title="Add custom feed" size="md">
+        <AddFeedForm onDone={closeAddModal} />
+      </Modal>
     </Stack>
   );
 }

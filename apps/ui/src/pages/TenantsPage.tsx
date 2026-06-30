@@ -1,5 +1,6 @@
-import { Button, Group, Stack, Table, Title, Card, Text, Loader, Center } from "@mantine/core";
+import { Button, Group, Stack, Table, Title, Card, Text, Loader, Center, Modal } from "@mantine/core";
 import { useForm } from "@mantine/form";
+import { useDisclosure } from "@mantine/hooks";
 import { modals } from "@mantine/modals";
 import { notifications } from "@mantine/notifications";
 import { TextInput } from "@mantine/core";
@@ -42,13 +43,7 @@ export function TenantsPage() {
   const { data: tenants, isLoading, error } = useTenants();
   const deleteTenant = useDeleteTenant();
   const navigate = useNavigate();
-
-  function openCreateModal() {
-    const id = modals.open({
-      title: "New tenant",
-      children: <CreateTenantForm onDone={() => modals.close(id)} />,
-    });
-  }
+  const [createOpened, { open: openCreateModal, close: closeCreateModal }] = useDisclosure(false);
 
   function confirmDelete(tenantId: string, name: string) {
     modals.openConfirmModal({
@@ -119,6 +114,10 @@ export function TenantsPage() {
           </Table.Tbody>
         </Table>
       )}
+
+      <Modal opened={createOpened} onClose={closeCreateModal} title="New tenant">
+        <CreateTenantForm onDone={closeCreateModal} />
+      </Modal>
     </Stack>
   );
 }

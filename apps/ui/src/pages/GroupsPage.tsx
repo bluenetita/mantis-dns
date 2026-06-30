@@ -1,6 +1,6 @@
-import { Button, Group, Stack, Table, Title, Card, Text, Loader, Center, TextInput, Badge, Breadcrumbs, Anchor } from "@mantine/core";
+import { Button, Group, Stack, Table, Title, Card, Text, Loader, Center, TextInput, Badge, Breadcrumbs, Anchor, Modal } from "@mantine/core";
 import { useForm } from "@mantine/form";
-import { modals } from "@mantine/modals";
+import { useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
 import { IconPlus } from "@tabler/icons-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -56,14 +56,7 @@ export function GroupsPage() {
   const navigate = useNavigate();
 
   const tenant = tenants?.find((t) => t.id === tenantId);
-
-  function openCreateModal() {
-    if (!tenantId) return;
-    const id = modals.open({
-      title: "New group",
-      children: <CreateGroupForm tenantId={tenantId} onDone={() => modals.close(id)} />,
-    });
-  }
+  const [createOpened, { open: openCreateModal, close: closeCreateModal }] = useDisclosure(false);
 
   if (isLoading)
     return (
@@ -122,6 +115,12 @@ export function GroupsPage() {
             ))}
           </Table.Tbody>
         </Table>
+      )}
+
+      {tenantId && (
+        <Modal opened={createOpened} onClose={closeCreateModal} title="New group">
+          <CreateGroupForm tenantId={tenantId} onDone={closeCreateModal} />
+        </Modal>
       )}
     </Stack>
   );
