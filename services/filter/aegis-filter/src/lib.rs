@@ -5,6 +5,7 @@
 //! Sprint 5, see design.md §7.3).
 
 mod cache;
+mod router;
 
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -145,9 +146,16 @@ pub async fn fetch_public_key(control_url: &str) -> Result<VerifyingKey> {
     Ok(VerifyingKey::from_bytes(&arr)?)
 }
 
-/// Fetches the latest compiled bundle for a group and publishes it if newer
-/// than what's currently loaded. Safe to call repeatedly (e.g. on a poll loop).
-pub async fn refresh_bundle(state: &AppState, control_url: &str, group_id: &str) -> Result<()> {
+/// Fetches the latest compiled bundle for a group and publishes it into
+/// `store` if newer than what's currently loaded. Safe to call repeatedly
+/// (e.g. on a poll loop). Shared by the single-tenant `AppState` path and the
+/// multi-tenant `TenantRouter` path (router.rs), one per routed group.
+pub async fn fetch_and_publish_bundle(
+    store: &BundleStore,
+    public_key: &VerifyingKey,
+    control_url: &str,
+    group_id: &str,
+) -> Result<()> {
     let resp = reqwest::get(format!("{control_url}/api/v1/groups/{group_id}/bundle")).await?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         debug!("no bundle compiled yet for group {group_id}");
@@ -156,7 +164,7 @@ pub async fn refresh_bundle(state: &AppState, control_url: &str, group_id: &str)
     let bytes = resp.error_for_status()?.bytes().await?;
     let bundle = Bundle::decode(bytes.as_ref())?;
 
-    match state.store.try_publish(bundle, &state.public_key) {
+    match store.try_publish(bundle, public_key) {
         Ok(()) => info!("published new bundle for group {group_id}"),
         Err(e) if e.to_string().contains("refusing to publish stale bundle") => {
             debug!("bundle for group {group_id} unchanged");
@@ -164,6 +172,11 @@ pub async fn refresh_bundle(state: &AppState, control_url: &str, group_id: &str)
         Err(e) => warn!("rejected bundle for group {group_id}: {e}"),
     }
     Ok(())
+}
+
+/// Single-tenant convenience wrapper around [`fetch_and_publish_bundle`].
+pub async fn refresh_bundle(state: &AppState, control_url: &str, group_id: &str) -> Result<()> {
+    fetch_and_publish_bundle(&state.store, &state.public_key, control_url, group_id).await
 }
 
 pub async fn bundle_refresh_loop(
@@ -199,7 +212,8 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
             }
         };
 
-        let response = build_response(&query, &state).await;
+        let bundle = state.store.current();
+        let response = build_response(&query, bundle.as_deref(), &state.cache, state.forwarder.as_ref()).await;
         match response.to_bytes() {
             Ok(bytes) => {
                 if let Err(e) = socket.send_to(&bytes, peer).await {
@@ -211,7 +225,18 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
     }
 }
 
-async fn build_response(query: &Message, state: &AppState) -> Message {
+/// Core decision + response logic, parameterized over the resolved bundle so
+/// both the single-tenant `AppState` path and the multi-tenant `TenantRouter`
+/// path (see router.rs) share it instead of duplicating the response-building
+/// rules.
+pub use router::{refresh_routes, routing_refresh_loop, run_router_udp_server, test_support, TenantRouter};
+
+pub(crate) async fn build_response(
+    query: &Message,
+    bundle: Option<&Bundle>,
+    cache: &DnsCache,
+    forwarder: &dyn Forwarder,
+) -> Message {
     let mut response = Message::new();
     response.set_id(query.id());
     response.set_message_type(MessageType::Response);
@@ -228,20 +253,22 @@ async fn build_response(query: &Message, state: &AppState) -> Message {
     };
     let qname = question.name().to_utf8();
 
-    let Some(bundle) = state.store.current() else {
-        // No bundle loaded yet. Fail-open by default at this stage (dev-friendly);
-        // per-tenant FailurePolicy enforcement lands in Sprint 9 HA hardening.
+    let Some(bundle) = bundle else {
+        // No bundle loaded yet (or no tenant matched, in router mode).
+        // Fail-open by default at this stage (dev-friendly); per-tenant
+        // FailurePolicy enforcement lands in Sprint 9 HA hardening.
         response.set_response_code(ResponseCode::ServFail);
         return response;
     };
 
-    match decide(&bundle, &qname) {
+    match decide(bundle, &qname) {
         Decision::Block => {
             response.set_response_code(ResponseCode::NXDomain);
         }
         Decision::Allow => {
             if question.query_type() == RecordType::A {
-                resolve_a_record(&qname, question.name().clone(), state, &mut response).await;
+                resolve_a_record(&qname, question.name().clone(), cache, forwarder, &mut response)
+                    .await;
             } else {
                 // Only A records are resolved/cached/forwarded as of Sprint 4 —
                 // everything else gets an empty NOERROR (effectively NODATA).
@@ -255,10 +282,11 @@ async fn build_response(query: &Message, state: &AppState) -> Message {
 async fn resolve_a_record(
     qname: &str,
     record_name: hickory_proto::rr::Name,
-    state: &AppState,
+    cache: &DnsCache,
+    forwarder: &dyn Forwarder,
     response: &mut Message,
 ) {
-    if let Some(ips) = state.cache.get(qname) {
+    if let Some(ips) = cache.get(qname) {
         response.set_response_code(ResponseCode::NoError);
         for ip in ips {
             response.add_answer(Record::from_rdata(record_name.clone(), 60, RData::A(A(ip))));
@@ -266,9 +294,9 @@ async fn resolve_a_record(
         return;
     }
 
-    match state.forwarder.lookup_a(qname).await {
+    match forwarder.lookup_a(qname).await {
         Ok((ips, ttl)) => {
-            state.cache.put(qname.to_string(), ips.clone(), Duration::from_secs(ttl as u64));
+            cache.put(qname.to_string(), ips.clone(), Duration::from_secs(ttl as u64));
 
             response.set_response_code(ResponseCode::NoError);
             for ip in ips {

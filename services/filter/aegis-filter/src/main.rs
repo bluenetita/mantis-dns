@@ -2,7 +2,10 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aegis_filter::{bundle_refresh_loop, fetch_public_key, refresh_bundle, run_udp_server, AppState};
+use aegis_filter::{
+    bundle_refresh_loop, fetch_public_key, refresh_bundle, run_router_udp_server, run_udp_server,
+    AppState, DotForwarder, TenantRouter,
+};
 use tokio::net::UdpSocket;
 use tracing::{error, info, warn};
 
@@ -29,9 +32,13 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let state = Arc::new(AppState::new(public_key));
+    let socket = UdpSocket::bind(&bind_addr).await?;
 
     if !group_id.is_empty() {
+        // Legacy single-tenant mode: one GROUP_ID, one bundle. Kept for
+        // back-compat with existing deployments; new multi-tenant deployments
+        // should leave GROUP_ID unset to use the source-IP router below.
+        let state = Arc::new(AppState::new(public_key));
         if let Err(e) = refresh_bundle(&state, &control_url, &group_id).await {
             warn!("initial bundle fetch failed (will retry on poll loop): {e}");
         }
@@ -41,11 +48,21 @@ async fn main() -> anyhow::Result<()> {
             group_id,
             Duration::from_secs(poll_secs),
         ));
+        run_udp_server(socket, state).await?;
     } else {
-        warn!("GROUP_ID not set — node will serve with no policy bundle (fail-open ServFail for now)");
+        // Multi-tenant mode (design.md §7.3 option 2): tenant resolved by
+        // source IP against a routing table fetched from the control plane.
+        info!("GROUP_ID not set — running in multi-tenant source-IP routing mode");
+        let router = Arc::new(TenantRouter::new(public_key, Box::new(DotForwarder::new_default())));
+        if let Err(e) = aegis_filter::refresh_routes(&router, &control_url).await {
+            warn!("initial routing table fetch failed (will retry on poll loop): {e}");
+        }
+        tokio::spawn(aegis_filter::routing_refresh_loop(
+            router.clone(),
+            control_url,
+            Duration::from_secs(poll_secs),
+        ));
+        run_router_udp_server(socket, router).await?;
     }
-
-    let socket = UdpSocket::bind(&bind_addr).await?;
-    run_udp_server(socket, state).await?;
     Ok(())
 }

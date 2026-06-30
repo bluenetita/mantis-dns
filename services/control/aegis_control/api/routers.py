@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ipaddress
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
@@ -45,6 +47,13 @@ def delete_tenant(tenant_id: str, db: Session = Depends(get_db)) -> None:
     db.commit()
 
 
+def _validate_cidr(cidr: str) -> str:
+    try:
+        return str(ipaddress.ip_network(cidr, strict=True))
+    except ValueError as e:
+        raise HTTPException(422, f"invalid CIDR '{cidr}': {e}") from e
+
+
 @router.post("/tenants/{tenant_id}/groups", response_model=schemas.GroupOut, status_code=201)
 def create_group(
     tenant_id: str, payload: schemas.GroupCreate, db: Session = Depends(get_db)
@@ -52,7 +61,8 @@ def create_group(
     tenant = db.get(models.Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(404, "tenant not found")
-    group = models.Group(tenant_id=tenant_id, name=payload.name)
+    vpn_subnet = _validate_cidr(payload.vpn_subnet) if payload.vpn_subnet else None
+    group = models.Group(tenant_id=tenant_id, name=payload.name, vpn_subnet=vpn_subnet)
     db.add(group)
     db.commit()
     db.refresh(group)
@@ -62,6 +72,27 @@ def create_group(
 @router.get("/tenants/{tenant_id}/groups", response_model=list[schemas.GroupOut])
 def list_groups(tenant_id: str, db: Session = Depends(get_db)) -> list[models.Group]:
     return list(db.query(models.Group).filter(models.Group.tenant_id == tenant_id).all())
+
+
+@router.put("/groups/{group_id}/subnet", response_model=schemas.GroupOut)
+def set_group_subnet(
+    group_id: str, payload: schemas.GroupSubnetUpdate, db: Session = Depends(get_db)
+) -> models.Group:
+    group = db.get(models.Group, group_id)
+    if group is None:
+        raise HTTPException(404, "group not found")
+    group.vpn_subnet = _validate_cidr(payload.vpn_subnet)
+    db.commit()
+    db.refresh(group)
+    return group
+
+
+@router.get("/routing-table", response_model=list[schemas.RoutingTableEntry])
+def get_routing_table(db: Session = Depends(get_db)) -> list[schemas.RoutingTableEntry]:
+    """Source-IP -> tenant routing table for filter nodes (design.md §7.3
+    option 2). Only groups with a subnet assigned are routable."""
+    groups = db.query(models.Group).filter(models.Group.vpn_subnet.is_not(None)).all()
+    return [schemas.RoutingTableEntry(cidr=g.vpn_subnet, group_id=g.id) for g in groups]
 
 
 @router.get("/groups/{group_id}/policy", response_model=schemas.PolicyOut)

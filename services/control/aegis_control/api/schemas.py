@@ -18,6 +18,7 @@ class TenantOut(BaseModel):
 
 class GroupCreate(BaseModel):
     name: str
+    vpn_subnet: str | None = None
 
 
 class GroupOut(BaseModel):
@@ -25,7 +26,17 @@ class GroupOut(BaseModel):
     id: str
     tenant_id: str
     name: str
+    vpn_subnet: str | None
     created_at: datetime
+
+
+class GroupSubnetUpdate(BaseModel):
+    vpn_subnet: str
+
+
+class RoutingTableEntry(BaseModel):
+    cidr: str
+    group_id: str
 
 
 class CategoryToggleIn(BaseModel):

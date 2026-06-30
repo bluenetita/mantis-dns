@@ -38,6 +38,10 @@ class Group(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"))
     name: Mapped[str] = mapped_column(String(255))
+    # CIDR of this group's OpenVPN IP pool, e.g. "10.8.1.0/24" (design.md §7.3
+    # option 2 — source-IP tenant resolution). Null until an operator wires
+    # the group to a real VPN subnet.
+    vpn_subnet: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
     tenant: Mapped[Tenant] = relationship(back_populates="groups")
