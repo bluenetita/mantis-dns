@@ -172,3 +172,28 @@ export function useIngestFeedNow() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["feeds"] }),
   });
 }
+
+// --- Analytics ---
+
+export function useAnalyticsSummary() {
+  return useQuery({
+    queryKey: ["analytics-summary"],
+    queryFn: async () => unwrap(await apiClient.GET("/api/v1/analytics/summary")),
+    refetchInterval: 15_000,
+  });
+}
+
+// --- Audit log ---
+
+export function useAuditLog(resourceType?: string) {
+  return useQuery({
+    queryKey: ["audit-log", resourceType],
+    queryFn: async () =>
+      unwrap(
+        await apiClient.GET("/api/v1/audit-log", {
+          params: { query: resourceType ? { resource_type: resourceType } : {} },
+        })
+      ),
+    refetchInterval: 15_000,
+  });
+}

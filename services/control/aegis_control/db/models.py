@@ -106,6 +106,21 @@ class QueryEvent(Base):
     occurred_at: Mapped[datetime] = mapped_column(default=_now, index=True)
 
 
+class AuditLog(Base):
+    """Append-only audit trail for mutating API calls. No UPDATE/DELETE path
+    exposed anywhere in this codebase on purpose — see write_audit_log()."""
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    occurred_at: Mapped[datetime] = mapped_column(default=_now, index=True)
+    actor: Mapped[str] = mapped_column(String(255), default="unauthenticated")
+    action: Mapped[str] = mapped_column(String(64))  # e.g. "policy.update", "feed.delete"
+    resource_type: Mapped[str] = mapped_column(String(64))  # "tenant" | "group" | "policy" | "feed"
+    resource_id: Mapped[str] = mapped_column(String(64))
+    detail: Mapped[str] = mapped_column(String(2000), default="")
+
+
 class Feed(Base):
     """Declarative feed registry — see design doc §18.6."""
 

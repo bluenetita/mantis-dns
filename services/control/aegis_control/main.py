@@ -6,6 +6,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from aegis_control.api.audit_routers import router as audit_router
 from aegis_control.api.feed_routers import router as feed_router
 from aegis_control.api.routers import router as api_router
 from aegis_control.api.telemetry_routers import router as telemetry_router
@@ -29,6 +30,7 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api/v1")
 app.include_router(feed_router, prefix="/api/v1")
 app.include_router(telemetry_router, prefix="/api/v1")
+app.include_router(audit_router, prefix="/api/v1")
 
 
 @app.on_event("startup")

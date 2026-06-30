@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from aegis_control.audit import write_audit_log
 from aegis_control.config import FEED_STORAGE_DIR
 from aegis_control.db import models
 from aegis_control.db.session import get_db
@@ -68,6 +69,8 @@ def create_feed(payload: FeedCreate, db: Session = Depends(get_db)) -> models.Fe
         raise HTTPException(409, "feed with this id already exists")
     feed = models.Feed(**payload.model_dump(), from_catalog=False)
     db.add(feed)
+    db.flush()
+    write_audit_log(db, "feed.create", "feed", feed.id, detail=f"category_id={feed.category_id} url={feed.url}")
     db.commit()
     db.refresh(feed)
     sync_feed_schedule(feed)
@@ -88,9 +91,11 @@ def update_feed(feed_id: str, payload: FeedUpdate, db: Session = Depends(get_db)
     if feed is None:
         raise HTTPException(404, "feed not found")
 
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    for field, value in changes.items():
         setattr(feed, field, value)
 
+    write_audit_log(db, "feed.update", "feed", feed.id, detail=str(changes))
     db.commit()
     db.refresh(feed)
     sync_feed_schedule(feed)
@@ -103,6 +108,7 @@ def delete_feed(feed_id: str, db: Session = Depends(get_db)) -> None:
     if feed is None:
         raise HTTPException(404, "feed not found")
     unschedule_feed(feed_id)
+    write_audit_log(db, "feed.delete", "feed", feed.id, detail=f"category_id={feed.category_id}")
     db.delete(feed)
     db.commit()
 

@@ -4,6 +4,9 @@ import { TenantsPage } from "./pages/TenantsPage";
 import { GroupsPage } from "./pages/GroupsPage";
 import { PolicyPage } from "./pages/PolicyPage";
 import { FeedsPage } from "./pages/FeedsPage";
+import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { AuditPage } from "./pages/AuditPage";
+import { SettingsPage } from "./pages/SettingsPage";
 
 export default function App() {
   return (
@@ -14,6 +17,9 @@ export default function App() {
         <Route path="/tenants/:tenantId" element={<GroupsPage />} />
         <Route path="/tenants/:tenantId/groups/:groupId" element={<PolicyPage />} />
         <Route path="/feeds" element={<FeedsPage />} />
+        <Route path="/analytics" element={<AnalyticsPage />} />
+        <Route path="/audit" element={<AuditPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/tenants" replace />} />
       </Route>
     </Routes>

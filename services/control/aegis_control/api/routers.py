@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from aegis_control.api import schemas
+from aegis_control.audit import write_audit_log
 from aegis_control.compiler.build_policy_bundle import compile_and_store
 from aegis_control.compiler.keys import KEY_ID, load_or_create_signing_key, public_key_bytes_for
 from aegis_control.config import BUNDLE_STORAGE_DIR
@@ -20,6 +21,8 @@ _signing_key = load_or_create_signing_key()
 def create_tenant(payload: schemas.TenantCreate, db: Session = Depends(get_db)) -> models.Tenant:
     tenant = models.Tenant(name=payload.name)
     db.add(tenant)
+    db.flush()
+    write_audit_log(db, "tenant.create", "tenant", tenant.id, detail=f"name={tenant.name}")
     db.commit()
     db.refresh(tenant)
     return tenant
@@ -43,6 +46,7 @@ def delete_tenant(tenant_id: str, db: Session = Depends(get_db)) -> None:
     tenant = db.get(models.Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(404, "tenant not found")
+    write_audit_log(db, "tenant.delete", "tenant", tenant.id, detail=f"name={tenant.name}")
     db.delete(tenant)
     db.commit()
 
@@ -64,6 +68,8 @@ def create_group(
     vpn_subnet = _validate_cidr(payload.vpn_subnet) if payload.vpn_subnet else None
     group = models.Group(tenant_id=tenant_id, name=payload.name, vpn_subnet=vpn_subnet)
     db.add(group)
+    db.flush()
+    write_audit_log(db, "group.create", "group", group.id, detail=f"name={group.name} tenant_id={tenant_id}")
     db.commit()
     db.refresh(group)
     return group
@@ -82,6 +88,7 @@ def set_group_subnet(
     if group is None:
         raise HTTPException(404, "group not found")
     group.vpn_subnet = _validate_cidr(payload.vpn_subnet)
+    write_audit_log(db, "group.subnet_update", "group", group.id, detail=f"vpn_subnet={group.vpn_subnet}")
     db.commit()
     db.refresh(group)
     return group
@@ -137,6 +144,13 @@ def upsert_policy(
             )
         )
 
+    write_audit_log(
+        db,
+        "policy.update",
+        "policy",
+        policy.id,
+        detail=f"group_id={group_id} categories={len(payload.category_toggles)} overrides={len(payload.overrides)}",
+    )
     db.commit()
     db.refresh(policy)
     return policy
@@ -161,6 +175,7 @@ def compile_bundle(group_id: str, db: Session = Depends(get_db)) -> Response:
         raise HTTPException(404, "policy not found for group")
 
     policy.bundle_version += 1
+    write_audit_log(db, "bundle.compile", "policy", policy.id, detail=f"version={policy.bundle_version}")
     db.commit()
     db.refresh(policy)
 
