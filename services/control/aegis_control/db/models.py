@@ -117,6 +117,10 @@ class Feed(Base):
     format: Mapped[str] = mapped_column(String(32))
     interval_seconds: Mapped[int] = mapped_column(default=86400)
     license: Mapped[str] = mapped_column(String(255), default="")
+    provider: Mapped[str] = mapped_column(String(255), default="")
+    # True for feeds seeded from catalog.json; lets the UI distinguish
+    # "built-in, toggle me" from "custom, you can delete me".
+    from_catalog: Mapped[bool] = mapped_column(default=False)
     enabled: Mapped[bool] = mapped_column(default=True)
     last_fetched_at: Mapped[datetime | None] = mapped_column(nullable=True)
     last_version: Mapped[str | None] = mapped_column(String(64), nullable=True)

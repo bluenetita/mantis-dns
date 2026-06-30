@@ -38,6 +38,26 @@ export interface TopDomain {
   count: number;
 }
 
+export interface Feed {
+  id: string;
+  category_id: string;
+  url: string;
+  format: string;
+  interval_seconds: number;
+  license: string;
+  provider: string;
+  from_catalog: boolean;
+  enabled: boolean;
+  last_domain_count: number | null;
+  last_version: string | null;
+}
+
+export interface IngestResult {
+  status: string;
+  domain_count: number;
+  reason: string;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
@@ -89,4 +109,20 @@ export const api = {
     }),
 
   topDomains: (groupId: string) => request<TopDomain[]>(`/api/v1/groups/${groupId}/top-domains`),
+
+  listFeeds: () => request<Feed[]>("/api/v1/feeds"),
+  createFeed: (feed: {
+    id: string;
+    category_id: string;
+    url: string;
+    format: string;
+    interval_seconds: number;
+    license: string;
+    provider: string;
+  }) => request<Feed>("/api/v1/feeds", { method: "POST", body: JSON.stringify(feed) }),
+  updateFeed: (feedId: string, patch: Partial<Pick<Feed, "enabled" | "interval_seconds" | "url" | "license">>) =>
+    request<Feed>(`/api/v1/feeds/${feedId}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteFeed: (feedId: string) => request<void>(`/api/v1/feeds/${feedId}`, { method: "DELETE" }),
+  ingestFeedNow: (feedId: string) =>
+    request<IngestResult>(`/api/v1/feeds/${feedId}/ingest`, { method: "POST" }),
 };

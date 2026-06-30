@@ -9,6 +9,7 @@ from aegis_control.config import FEED_STORAGE_DIR
 from aegis_control.db import models
 from aegis_control.db.session import get_db
 from aegis_control.feeds.ingest import fetch_and_ingest
+from aegis_control.scheduler import sync_feed_schedule, unschedule_feed
 
 router = APIRouter()
 
@@ -20,6 +21,22 @@ class FeedCreate(BaseModel):
     format: str
     interval_seconds: int = 86400
     license: str = ""
+    provider: str = ""
+    enabled: bool = True
+
+
+class FeedUpdate(BaseModel):
+    """All fields optional — PATCH semantics. Used by the UI's feed toggle
+    and edit controls; takes effect immediately (reschedules the live
+    APScheduler job), no restart needed."""
+
+    category_id: str | None = None
+    url: str | None = None
+    format: str | None = None
+    interval_seconds: int | None = None
+    license: str | None = None
+    provider: str | None = None
+    enabled: bool | None = None
 
 
 class FeedOut(BaseModel):
@@ -29,6 +46,8 @@ class FeedOut(BaseModel):
     format: str
     interval_seconds: int
     license: str
+    provider: str
+    from_catalog: bool
     enabled: bool
     last_domain_count: int | None
     last_version: str | None
@@ -47,16 +66,45 @@ class IngestOut(BaseModel):
 def create_feed(payload: FeedCreate, db: Session = Depends(get_db)) -> models.Feed:
     if db.get(models.Feed, payload.id) is not None:
         raise HTTPException(409, "feed with this id already exists")
-    feed = models.Feed(**payload.model_dump())
+    feed = models.Feed(**payload.model_dump(), from_catalog=False)
     db.add(feed)
     db.commit()
     db.refresh(feed)
+    sync_feed_schedule(feed)
     return feed
 
 
 @router.get("/feeds", response_model=list[FeedOut])
 def list_feeds(db: Session = Depends(get_db)) -> list[models.Feed]:
     return list(db.query(models.Feed).all())
+
+
+@router.patch("/feeds/{feed_id}", response_model=FeedOut)
+def update_feed(feed_id: str, payload: FeedUpdate, db: Session = Depends(get_db)) -> models.Feed:
+    """Toggle enabled, change interval/url/etc — the UI's main feed-config
+    surface. Catalog feeds can be edited/disabled here too; only their
+    initial seeding is special-cased, not ongoing management."""
+    feed = db.get(models.Feed, feed_id)
+    if feed is None:
+        raise HTTPException(404, "feed not found")
+
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(feed, field, value)
+
+    db.commit()
+    db.refresh(feed)
+    sync_feed_schedule(feed)
+    return feed
+
+
+@router.delete("/feeds/{feed_id}", status_code=204)
+def delete_feed(feed_id: str, db: Session = Depends(get_db)) -> None:
+    feed = db.get(models.Feed, feed_id)
+    if feed is None:
+        raise HTTPException(404, "feed not found")
+    unschedule_feed(feed_id)
+    db.delete(feed)
+    db.commit()
 
 
 @router.post("/feeds/{feed_id}/ingest", response_model=IngestOut)

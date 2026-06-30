@@ -105,3 +105,45 @@
   padding: 4px 8px;
   border-bottom: 1px solid #333;
 }
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.tabs button {
+  padding: 8px 16px;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.tabs button.active {
+  background: #1a1a1a;
+  opacity: 1;
+}
+
+.feed-category {
+  margin-bottom: 20px;
+}
+
+.feeds-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+
+.feeds-table th,
+.feeds-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #333;
+  text-align: left;
+}
+
+.tag.catalog {
+  background: #2a3a5c;
+  font-size: 0.7em;
+}

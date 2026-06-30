@@ -1,0 +1,74 @@
+[
+  {
+    "id": "urlhaus-malware",
+    "category_id": "malware",
+    "url": "https://urlhaus.abuse.ch/downloads/hostfile/",
+    "format": "hostfile",
+    "interval_seconds": 3600,
+    "license": "abuse.ch CC0",
+    "provider": "abuse.ch"
+  },
+  {
+    "id": "blocklistproject-malware",
+    "category_id": "malware",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/malware.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  },
+  {
+    "id": "blocklistproject-phishing",
+    "category_id": "phishing",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/phishing.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  },
+  {
+    "id": "blocklistproject-adult",
+    "category_id": "adult",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/porn.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  },
+  {
+    "id": "blocklistproject-gambling",
+    "category_id": "gambling",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/gambling.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  },
+  {
+    "id": "blocklistproject-ads",
+    "category_id": "ads",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/ads.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  },
+  {
+    "id": "stevenblack-ads",
+    "category_id": "ads",
+    "url": "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "StevenBlack/hosts"
+  },
+  {
+    "id": "blocklistproject-tracking",
+    "category_id": "tracking",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/tracking.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  }
+]

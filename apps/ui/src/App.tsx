@@ -1,10 +1,16 @@
 import { useEffect, useState } from "react";
 import { api, NotFoundError, type CategoryToggle, type Group, type Override, type Policy, type Tenant, type TopDomain } from "./api";
+import { FeedManager } from "./FeedManager";
 import "./App.css";
 
-const KNOWN_CATEGORIES = ["adult", "gambling", "weapons", "malware", "ads", "social", "proxies"];
+// Catalog-backed by default (see services/control/aegis_control/feeds/catalog.json):
+// adult, gambling, malware, ads, phishing, tracking. weapons/social/proxies have
+// no vetted free source yet — toggle still works, bloom is empty until a feed
+// is added for that category via the Feeds tab.
+const KNOWN_CATEGORIES = ["adult", "gambling", "weapons", "malware", "ads", "phishing", "tracking", "social", "proxies"];
 
 export default function App() {
+  const [tab, setTab] = useState<"policies" | "feeds">("policies");
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -55,6 +61,16 @@ export default function App() {
           {error} (click to dismiss)
         </div>
       )}
+      <div className="tabs">
+        <button className={tab === "policies" ? "active" : ""} onClick={() => setTab("policies")}>
+          Policies
+        </button>
+        <button className={tab === "feeds" ? "active" : ""} onClick={() => setTab("feeds")}>
+          Feeds
+        </button>
+      </div>
+      {tab === "feeds" && <FeedManager onError={setError} />}
+      {tab === "policies" && (
       <div className="columns">
         <section className="column">
           <h2>Tenants</h2>
@@ -98,6 +114,7 @@ export default function App() {
           {selectedGroup && <PolicyEditor group={selectedGroup} onError={setError} />}
         </section>
       </div>
+      )}
     </div>
   );
 }
