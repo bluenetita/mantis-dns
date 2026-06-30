@@ -5,7 +5,11 @@
 //! Sprint 5, see design.md §7.3).
 
 mod cache;
+pub mod metrics_init;
 mod router;
+mod telemetry;
+
+pub use telemetry::TelemetryEmitter;
 
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -81,6 +85,7 @@ pub struct AppState {
     pub public_key: VerifyingKey,
     pub cache: DnsCache,
     pub forwarder: Box<dyn Forwarder>,
+    pub telemetry: TelemetryEmitter,
 }
 
 impl AppState {
@@ -94,7 +99,15 @@ impl AppState {
             public_key,
             cache: DnsCache::new(10_000),
             forwarder,
+            telemetry: TelemetryEmitter::noop(),
         }
+    }
+
+    /// Builder-style: attach a real telemetry emitter (defaults to a no-op
+    /// that silently drops events, used by tests and until main.rs opts in).
+    pub fn with_telemetry(mut self, telemetry: TelemetryEmitter) -> Self {
+        self.telemetry = telemetry;
+        self
     }
 }
 
@@ -213,7 +226,14 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
         };
 
         let bundle = state.store.current();
-        let response = build_response(&query, bundle.as_deref(), &state.cache, state.forwarder.as_ref()).await;
+        let response = build_response(
+            &query,
+            bundle.as_deref(),
+            &state.cache,
+            state.forwarder.as_ref(),
+            &state.telemetry,
+        )
+        .await;
         match response.to_bytes() {
             Ok(bytes) => {
                 if let Err(e) = socket.send_to(&bytes, peer).await {
@@ -225,17 +245,31 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
     }
 }
 
+pub use router::{refresh_routes, routing_refresh_loop, run_router_udp_server, test_support, TenantRouter};
+
 /// Core decision + response logic, parameterized over the resolved bundle so
 /// both the single-tenant `AppState` path and the multi-tenant `TenantRouter`
 /// path (see router.rs) share it instead of duplicating the response-building
 /// rules.
-pub use router::{refresh_routes, routing_refresh_loop, run_router_udp_server, test_support, TenantRouter};
-
 pub(crate) async fn build_response(
     query: &Message,
     bundle: Option<&Bundle>,
     cache: &DnsCache,
     forwarder: &dyn Forwarder,
+    telemetry: &TelemetryEmitter,
+) -> Message {
+    let start = std::time::Instant::now();
+    let response = build_response_inner(query, bundle, cache, forwarder, telemetry).await;
+    metrics::histogram!("aegis_dns_response_seconds").record(start.elapsed().as_secs_f64());
+    response
+}
+
+async fn build_response_inner(
+    query: &Message,
+    bundle: Option<&Bundle>,
+    cache: &DnsCache,
+    forwarder: &dyn Forwarder,
+    telemetry: &TelemetryEmitter,
 ) -> Message {
     let mut response = Message::new();
     response.set_id(query.id());
@@ -257,15 +291,20 @@ pub(crate) async fn build_response(
         // No bundle loaded yet (or no tenant matched, in router mode).
         // Fail-open by default at this stage (dev-friendly); per-tenant
         // FailurePolicy enforcement lands in Sprint 9 HA hardening.
+        metrics::counter!("aegis_dns_queries_total", "decision" => "no_bundle").increment(1);
         response.set_response_code(ResponseCode::ServFail);
         return response;
     };
 
     match decide(bundle, &qname) {
         Decision::Block => {
+            metrics::counter!("aegis_dns_queries_total", "decision" => "block").increment(1);
+            telemetry.emit(&bundle.group_id, &qname, "block");
             response.set_response_code(ResponseCode::NXDomain);
         }
         Decision::Allow => {
+            metrics::counter!("aegis_dns_queries_total", "decision" => "allow").increment(1);
+            telemetry.emit(&bundle.group_id, &qname, "allow");
             if question.query_type() == RecordType::A {
                 resolve_a_record(&qname, question.name().clone(), cache, forwarder, &mut response)
                     .await;
@@ -287,12 +326,14 @@ async fn resolve_a_record(
     response: &mut Message,
 ) {
     if let Some(ips) = cache.get(qname) {
+        metrics::counter!("aegis_dns_cache_total", "result" => "hit").increment(1);
         response.set_response_code(ResponseCode::NoError);
         for ip in ips {
             response.add_answer(Record::from_rdata(record_name.clone(), 60, RData::A(A(ip))));
         }
         return;
     }
+    metrics::counter!("aegis_dns_cache_total", "result" => "miss").increment(1);
 
     match forwarder.lookup_a(qname).await {
         Ok((ips, ttl)) => {
@@ -304,6 +345,7 @@ async fn resolve_a_record(
             }
         }
         Err(e) => {
+            metrics::counter!("aegis_dns_upstream_errors_total").increment(1);
             debug!("upstream resolution failed for {qname}: {e}");
             response.set_response_code(ResponseCode::ServFail);
         }

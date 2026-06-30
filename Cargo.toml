@@ -25,3 +25,5 @@ hickory-proto = "0.25"
 hickory-resolver = { version = "0.25", features = ["tls-ring", "webpki-roots"] }
 ipnet = "2"
 serde = { version = "1", features = ["derive"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", default-features = false, features = ["http-listener"] }

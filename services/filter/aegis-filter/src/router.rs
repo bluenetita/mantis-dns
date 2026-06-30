@@ -20,7 +20,7 @@ use serde::Deserialize;
 use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
 
-use crate::{build_response, cache::DnsCache, fetch_and_publish_bundle, Forwarder};
+use crate::{build_response, cache::DnsCache, fetch_and_publish_bundle, Forwarder, TelemetryEmitter};
 
 #[derive(Deserialize)]
 struct RoutingTableEntry {
@@ -40,6 +40,7 @@ pub struct TenantRouter {
     cache: DnsCache,
     forwarder: Box<dyn Forwarder>,
     routes: ArcSwap<Vec<RouteEntry>>,
+    telemetry: TelemetryEmitter,
 }
 
 impl TenantRouter {
@@ -49,7 +50,13 @@ impl TenantRouter {
             cache: DnsCache::new(10_000),
             forwarder,
             routes: ArcSwap::from_pointee(Vec::new()),
+            telemetry: TelemetryEmitter::noop(),
         }
+    }
+
+    pub fn with_telemetry(mut self, telemetry: TelemetryEmitter) -> Self {
+        self.telemetry = telemetry;
+        self
     }
 
     /// Longest-prefix match: the most specific matching subnet wins, so a
@@ -187,7 +194,14 @@ pub async fn run_router_udp_server(socket: UdpSocket, router: Arc<TenantRouter>)
         }
         let bundle = bundle_store.as_ref().and_then(|s| s.current());
 
-        let response = build_response(&query, bundle.as_deref(), &router.cache, router.forwarder.as_ref()).await;
+        let response = build_response(
+            &query,
+            bundle.as_deref(),
+            &router.cache,
+            router.forwarder.as_ref(),
+            &router.telemetry,
+        )
+        .await;
         match response.to_bytes() {
             Ok(bytes) => {
                 if let Err(e) = socket.send_to(&bytes, peer).await {

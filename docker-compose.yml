@@ -48,13 +48,34 @@ services:
       dockerfile: services/filter/Dockerfile
     ports:
       - "1053:1053/udp"
+      - "9090:9090"
     environment:
       - RUST_LOG=info
       - CONTROL_URL=http://control:8000
       - GROUP_ID=${GROUP_ID:-}
       - DNS_BIND_ADDR=0.0.0.0:1053
+      - METRICS_BIND_ADDR=0.0.0.0:9090
     depends_on:
       - control
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - filter
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    depends_on:
+      - prometheus
 
 volumes:
   pgdata:

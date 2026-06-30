@@ -92,6 +92,20 @@ class PolicyOverride(Base):
     policy: Mapped[Policy] = relationship(back_populates="overrides")
 
 
+class QueryEvent(Base):
+    """Lightweight query log. Sprint 6: Postgres. design.md §6 calls for
+    Kafka -> ClickHouse at scale; this is the local-disk-storage-equivalent
+    stepping stone, same pattern as bundle/feed storage."""
+
+    __tablename__ = "query_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    group_id: Mapped[str] = mapped_column(String(36), index=True)
+    qname: Mapped[str] = mapped_column(String(255))
+    decision: Mapped[str] = mapped_column(String(20))  # "allow" | "block"
+    occurred_at: Mapped[datetime] = mapped_column(default=_now, index=True)
+
+
 class Feed(Base):
     """Declarative feed registry — see design doc §18.6."""
 
