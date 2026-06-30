@@ -183,6 +183,23 @@ export function useAnalyticsSummary() {
   });
 }
 
+export function useAnalyticsTimeseries(hours = 24) {
+  return useQuery({
+    queryKey: ["analytics-timeseries", hours],
+    queryFn: async () =>
+      unwrap(await apiClient.GET("/api/v1/analytics/timeseries", { params: { query: { hours } } })),
+    refetchInterval: 15_000,
+  });
+}
+
+export function useAnalyticsByGroup() {
+  return useQuery({
+    queryKey: ["analytics-by-group"],
+    queryFn: async () => unwrap(await apiClient.GET("/api/v1/analytics/by-group")),
+    refetchInterval: 15_000,
+  });
+}
+
 // --- Audit log ---
 
 export function useAuditLog(resourceType?: string) {

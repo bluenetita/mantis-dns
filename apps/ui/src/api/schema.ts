@@ -273,6 +273,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/timeseries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Analytics Timeseries
+         * @description Hourly query volume for the last `hours` hours, org-wide. Buckets with
+         *     zero queries are included (not just present-in-DB rows) so charts don't
+         *     show misleading gaps.
+         */
+        get: operations["analytics_timeseries_api_v1_analytics_timeseries_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/by-group": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Analytics By Group */
+        get: operations["analytics_by_group_api_v1_analytics_by_group_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit-log": {
         parameters: {
             query?: never;
@@ -445,6 +484,21 @@ export interface components {
             /** Enabled */
             enabled?: boolean | null;
         };
+        /** GroupBreakdown */
+        GroupBreakdown: {
+            /** Group Id */
+            group_id: string;
+            /** Group Name */
+            group_name: string;
+            /** Tenant Name */
+            tenant_name: string;
+            /** Total */
+            total: number;
+            /** Blocked */
+            blocked: number;
+            /** Block Ratio */
+            block_ratio: number;
+        };
         /** GroupCreate */
         GroupCreate: {
             /** Name */
@@ -569,6 +623,20 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** TimeseriesPoint */
+        TimeseriesPoint: {
+            /**
+             * Bucket
+             * Format: date-time
+             */
+            bucket: string;
+            /** Total */
+            total: number;
+            /** Blocked */
+            blocked: number;
+            /** Allowed */
+            allowed: number;
         };
         /** TopDomain */
         TopDomain: {
@@ -1215,6 +1283,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnalyticsSummary"];
+                };
+            };
+        };
+    };
+    analytics_timeseries_api_v1_analytics_timeseries_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimeseriesPoint"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    analytics_by_group_api_v1_analytics_by_group_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GroupBreakdown"][];
                 };
             };
         };
