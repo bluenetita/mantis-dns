@@ -10,6 +10,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
 import App from "./App";
+import { ErrorBoundary } from "./app/ErrorBoundary";
 import { theme } from "./theme";
 
 const queryClient = new QueryClient({
@@ -25,13 +26,15 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <MantineProvider theme={theme} defaultColorScheme="auto">
       <Notifications position="top-right" />
-      <ModalsProvider>
-        <QueryClientProvider client={queryClient}>
-          <BrowserRouter>
-            <App />
-          </BrowserRouter>
-        </QueryClientProvider>
-      </ModalsProvider>
+      <ErrorBoundary>
+        <ModalsProvider>
+          <QueryClientProvider client={queryClient}>
+            <BrowserRouter>
+              <App />
+            </BrowserRouter>
+          </QueryClientProvider>
+        </ModalsProvider>
+      </ErrorBoundary>
     </MantineProvider>
   </StrictMode>
 );
