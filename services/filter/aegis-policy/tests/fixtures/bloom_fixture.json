@@ -1,0 +1,16 @@
+{
+  "num_hashes": 4,
+  "num_bits": 4096,
+  "seed": 1234,
+  "included": [
+    "ads.example.com",
+    "tracker.test",
+    "casino.example",
+    "porn.example.net"
+  ],
+  "excluded": [
+    "totally-unrelated.org",
+    "my-bank.example",
+    "internal.corp.local"
+  ]
+}

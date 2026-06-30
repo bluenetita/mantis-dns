@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from aegis_control.api import schemas
+from aegis_control.compiler.build_policy_bundle import compile_and_store
+from aegis_control.compiler.keys import KEY_ID, load_or_create_signing_key, public_key_bytes_for
 from aegis_control.db import models
 from aegis_control.db.session import get_db
 
 router = APIRouter()
+_BUNDLE_STORAGE_DIR = Path("bundles")
+_signing_key = load_or_create_signing_key()
 
 
 @router.post("/tenants", response_model=schemas.TenantOut, status_code=201)
@@ -105,3 +111,41 @@ def upsert_policy(
     db.commit()
     db.refresh(policy)
     return policy
+
+
+@router.get("/public-key")
+def get_public_key() -> Response:
+    """Filter nodes fetch this once and pin it for bundle verification."""
+    return Response(
+        content=public_key_bytes_for(_signing_key),
+        media_type="application/octet-stream",
+        headers={"X-Key-Id": KEY_ID},
+    )
+
+
+@router.post("/groups/{group_id}/bundle", status_code=201)
+def compile_bundle(group_id: str, db: Session = Depends(get_db)) -> Response:
+    """Compiles the group's current policy into a signed bundle, stores it
+    content-addressed on disk, bumps the version, and returns the bytes."""
+    policy = db.query(models.Policy).filter(models.Policy.group_id == group_id).one_or_none()
+    if policy is None:
+        raise HTTPException(404, "policy not found for group")
+
+    policy.bundle_version += 1
+    db.commit()
+    db.refresh(policy)
+
+    bundle_path = compile_and_store(
+        policy, policy.bundle_version, _signing_key, KEY_ID, _BUNDLE_STORAGE_DIR
+    )
+    return Response(content=bundle_path.read_bytes(), media_type="application/octet-stream")
+
+
+@router.get("/groups/{group_id}/bundle")
+def get_latest_bundle(group_id: str) -> Response:
+    pointer = _BUNDLE_STORAGE_DIR / f"{group_id}.latest"
+    if not pointer.exists():
+        raise HTTPException(404, "no bundle compiled yet for this group")
+    digest = pointer.read_text().strip()
+    bundle_bytes = (_BUNDLE_STORAGE_DIR / f"{digest}.bin").read_bytes()
+    return Response(content=bundle_bytes, media_type="application/octet-stream")

@@ -52,6 +52,7 @@ class Policy(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     group_id: Mapped[str] = mapped_column(ForeignKey("groups.id"), unique=True)
     on_load_failure: Mapped[str] = mapped_column(String(20), default="FAIL_OPEN")
+    bundle_version: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
