@@ -48,3 +48,16 @@ The bloom-filter hashing scheme is duplicated (not shared as code) in:
 These two MUST stay in lockstep — see the fixture tests in
 `services/control/tests/test_bloom.py` and `aegis-policy`'s unit tests.
 Any change to the hashing scheme requires updating both sides in the same PR.
+
+Python protobuf bindings are generated and committed at
+`services/control/aegis_control/gen/`. Regenerate after editing `bundle.proto`:
+```
+cd services/control
+.venv/Scripts/python -m grpc_tools.protoc -I../../proto --python_out=aegis_control/gen --pyi_out=aegis_control/gen ../../proto/bundle.proto
+```
+
+Sprint 1 exit-criteria check (Python signs a bundle, Rust verifies it):
+```
+cd services/control && .venv/Scripts/python -m aegis_control.compiler.build_empty_bundle
+cd .. && cargo run -p aegis-bundle --example verify_bundle -- services/control/bundle.bin services/control/bundle_pubkey.bin
+```

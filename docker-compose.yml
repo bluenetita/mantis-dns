@@ -1,4 +1,20 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_USER=aegis
+      - POSTGRES_PASSWORD=aegis
+      - POSTGRES_DB=aegis
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aegis"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   control:
     build:
       context: .
@@ -9,6 +25,10 @@ services:
       - ./services/control:/app
     environment:
       - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql+psycopg://aegis:aegis@postgres:5432/aegis
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   ui:
     build:
@@ -30,3 +50,6 @@ services:
       - RUST_LOG=info
     # No DNS listener until Sprint 3 — container logs a startup line and exits.
     # restart left unset on purpose so `docker compose up` doesn't loop-crash it.
+
+volumes:
+  pgdata:

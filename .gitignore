@@ -26,3 +26,7 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Dev-generated bundle artifacts (services/control/aegis_control/compiler/build_empty_bundle.py)
+services/control/bundle.bin
+services/control/bundle_pubkey.bin
