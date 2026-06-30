@@ -1,4 +1,4 @@
-import { AppShell, Burger, Group, NavLink as MantineNavLink, Text, Tooltip, ActionIcon, useMantineColorScheme } from "@mantine/core";
+import { AppShell, Badge, Burger, Group, NavLink as MantineNavLink, Text, Tooltip, ActionIcon, useMantineColorScheme } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import {
   IconBuildingSkyscraper,
@@ -53,12 +53,18 @@ export function Shell() {
           const active = location.pathname.startsWith(item.to);
           if (!item.enabled) {
             return (
-              <Tooltip key={item.to} label="Coming in a future release" position="right">
+              <Tooltip key={item.to} label="Not built yet — see design.md §19 / Epic J" position="right">
                 <div>
                   <MantineNavLink
                     label={item.label}
                     leftSection={<item.icon size={18} aria-hidden="true" />}
+                    rightSection={
+                      <Badge size="xs" variant="light" color="gray">
+                        Soon
+                      </Badge>
+                    }
                     disabled
+                    style={{ opacity: 0.5, cursor: "not-allowed" }}
                   />
                 </div>
               </Tooltip>
