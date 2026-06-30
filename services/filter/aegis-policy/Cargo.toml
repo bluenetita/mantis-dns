@@ -1,0 +1,10 @@
+[package]
+name = "aegis-policy"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+aegis-bundle = { path = "../aegis-bundle" }
+anyhow = { workspace = true }
+
+[dev-dependencies]

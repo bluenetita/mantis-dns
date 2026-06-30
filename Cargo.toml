@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+    "services/filter/aegis-filter",
+    "services/filter/aegis-bundle",
+    "services/filter/aegis-policy",
+]
+
+[workspace.package]
+edition = "2021"
+license = "Proprietary"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+prost = "0.13"
+prost-types = "0.13"
+ed25519-dalek = "2"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1"
+thiserror = "2"

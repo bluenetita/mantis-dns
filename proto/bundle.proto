@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package aegis.bundle.v1;
+
+// Signed, immutable policy bundle distributed from control plane to filter nodes.
+// Built by the Python policy compiler, verified and loaded by the Rust filter node.
+message Bundle {
+  string tenant_id = 1;
+  string group_id = 2;
+  uint64 version = 3;
+  int64 built_at_unix = 4;
+
+  repeated CategorySet categories = 5;
+  repeated string allow_overrides = 6;  // exact domains, always win over category block
+  repeated string deny_overrides = 7;   // exact domains, blocked regardless of category state
+
+  FailurePolicy on_load_failure = 8;
+
+  bytes signature = 15;       // ed25519 signature over the serialized message with this field zeroed
+  string signer_key_id = 16;
+}
+
+message CategorySet {
+  string category_id = 1;     // e.g. "adult", "gambling", "weapons", "malware"
+  string source_feed_id = 2;
+  string feed_version = 3;
+  string license = 4;
+
+  BloomParams bloom = 5;
+  bytes bloom_bits = 6;       // raw bloom filter bitset
+
+  Action action = 7;          // block | log_only | allow
+}
+
+message BloomParams {
+  uint32 num_hashes = 1;
+  uint64 num_bits = 2;
+  uint64 seed = 3;            // MUST match exactly between Python builder and Rust reader
+}
+
+enum Action {
+  ACTION_UNSPECIFIED = 0;
+  ACTION_BLOCK = 1;
+  ACTION_LOG_ONLY = 2;
+  ACTION_ALLOW = 3;
+}
+
+enum FailurePolicy {
+  FAILURE_POLICY_UNSPECIFIED = 0;
+  FAIL_OPEN = 1;   // resolve normally if bundle fails to load/verify
+  FAIL_CLOSED = 2; // block all resolution until a valid bundle loads
+}

@@ -1,0 +1,16 @@
+[package]
+name = "aegis-filter"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "aegis-filter"
+path = "src/main.rs"
+
+[dependencies]
+aegis-bundle = { path = "../aegis-bundle" }
+aegis-policy = { path = "../aegis-policy" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
