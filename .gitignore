@@ -32,3 +32,4 @@ services/control/bundle.bin
 services/control/bundle_pubkey.bin
 services/control/bundles/
 services/control/signing_key.bin
+services/control/feed_domains/

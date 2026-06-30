@@ -9,7 +9,18 @@ gate. Do not change the hash functions without updating the Rust side in lockste
 Scheme: Kirsch-Mitzenmacher double hashing.
   h1 = fnv1a_64(seed_bytes ++ domain)
   h2 = fnv1a_64(domain ++ seed_bytes)   (note: operand order swapped vs h1)
-  bit_i = (h1 + i * h2) % num_bits,  for i in 0..num_hashes
+  bit_i = (h1 +(wrapping) i *(wrapping) h2) % num_bits,  for i in 0..num_hashes
+
+IMPORTANT: `i * h2` and the subsequent `+ h1` must be truncated to 64 bits at
+each step (mask with MASK_64), matching Rust's wrapping_mul/wrapping_add.
+Python integers don't overflow, so without explicit masking this silently
+diverges from the Rust side once `i * h2` exceeds 2**64 — which happens
+routinely for real domain counts (e.g. num_hashes >= 5 on typical FNV
+outputs). This bit it Sprint 5 in production: a 388-domain feed compiled
+fine, verified fine structurally, but `might_contain` returned false for
+every domain because of this exact divergence. The cross-language fixture
+test (gen_bloom_fixture.py) didn't catch it because its small fixture
+(4 hashes) didn't reliably trigger the overflow case.
 """
 
 from __future__ import annotations
@@ -44,6 +55,14 @@ def _hash_pair(domain: str, seed: int) -> tuple[int, int]:
     return h1, h2
 
 
+def _bit_index(h1: int, h2: int, i: int, num_bits: int) -> int:
+    """Mirrors Rust's `h1.wrapping_add(i.wrapping_mul(h2)) % num_bits` exactly,
+    including 64-bit truncation at each step. See module docstring."""
+    step = (i * h2) & MASK_64
+    combined = (h1 + step) & MASK_64
+    return combined % num_bits
+
+
 class BloomFilterBuilder:
     """Builds a bloom filter bitset from a domain set, matching the Rust reader."""
 
@@ -54,7 +73,7 @@ class BloomFilterBuilder:
     def add(self, domain: str) -> None:
         h1, h2 = _hash_pair(domain, self.params.seed)
         for i in range(self.params.num_hashes):
-            bit_index = (h1 + i * h2) % self.params.num_bits
+            bit_index = _bit_index(h1, h2, i, self.params.num_bits)
             byte_index = bit_index // 8
             bit_offset = bit_index % 8
             self._bits[byte_index] |= 1 << bit_offset
@@ -62,7 +81,7 @@ class BloomFilterBuilder:
     def might_contain(self, domain: str) -> bool:
         h1, h2 = _hash_pair(domain, self.params.seed)
         for i in range(self.params.num_hashes):
-            bit_index = (h1 + i * h2) % self.params.num_bits
+            bit_index = _bit_index(h1, h2, i, self.params.num_bits)
             byte_index = bit_index // 8
             bit_offset = bit_index % 8
             if not (self._bits[byte_index] & (1 << bit_offset)):

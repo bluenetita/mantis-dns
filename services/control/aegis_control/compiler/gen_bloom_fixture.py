@@ -15,9 +15,21 @@ from aegis_control.compiler.bloom import BloomFilterBuilder, BloomParams
 
 FIXTURE_DIR = Path(__file__).resolve().parents[3] / "filter" / "aegis-policy" / "tests" / "fixtures"
 
-PARAMS = BloomParams(num_hashes=4, num_bits=4096, seed=1234)
-INCLUDED = ["ads.example.com", "tracker.test", "casino.example", "porn.example.net"]
-EXCLUDED = ["totally-unrelated.org", "my-bank.example", "internal.corp.local"]
+# num_hashes=10 deliberately mirrors a real production sizing (recommended_params
+# for ~400 items) — a smaller num_hashes (e.g. 4) failed to trigger the 64-bit
+# wraparound bug that slipped through Sprint 5 (see bloom.py module docstring).
+PARAMS = BloomParams(num_hashes=10, num_bits=5579, seed=1234)
+INCLUDED = [f"included-{i}.example.test" for i in range(50)] + [
+    "ads.example.com",
+    "tracker.test",
+    "casino.example",
+    "porn.example.net",
+]
+EXCLUDED = [f"excluded-{i}.example.test" for i in range(50)] + [
+    "totally-unrelated.org",
+    "my-bank.example",
+    "internal.corp.local",
+]
 
 
 def main() -> None:

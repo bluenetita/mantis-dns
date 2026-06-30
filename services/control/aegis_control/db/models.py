@@ -102,3 +102,5 @@ class Feed(Base):
     enabled: Mapped[bool] = mapped_column(default=True)
     last_fetched_at: Mapped[datetime | None] = mapped_column(nullable=True)
     last_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_etag: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_domain_count: Mapped[int | None] = mapped_column(nullable=True)

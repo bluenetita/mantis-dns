@@ -1,0 +1,104 @@
+import httpx
+import pytest
+
+from aegis_control.db.models import Feed
+from aegis_control.feeds.ingest import MUST_NEVER_BLOCK, fetch_and_ingest, load_domains, _sanity_check
+from aegis_control.feeds.parsers import parse_domain_list, parse_hostfile
+
+
+def test_parse_hostfile_basic():
+    text = """
+    # comment
+    0.0.0.0 ads.example.com
+    127.0.0.1 tracker.example.net
+    0.0.0.0 www.duplicate.example
+
+    0.0.0.0 www.duplicate.example
+    """
+    domains = parse_hostfile(text)
+    assert domains == {"ads.example.com", "tracker.example.net", "duplicate.example"}
+
+
+def test_parse_hostfile_skips_localhost():
+    text = "0.0.0.0 localhost\n0.0.0.0 real.example\n"
+    assert parse_hostfile(text) == {"real.example"}
+
+
+def test_parse_domain_list_basic():
+    text = "ads.example.com\n# comment\n\ntracker.example.net\n"
+    assert parse_domain_list(text) == {"ads.example.com", "tracker.example.net"}
+
+
+def test_sanity_check_rejects_must_never_block():
+    new_domains = {"ads.example.com", "google.com"}
+    reason = _sanity_check(new_domains, previous_count=None)
+    assert reason is not None
+    assert "must-never-block" in reason
+
+
+def test_sanity_check_rejects_large_delta():
+    new_domains = {f"domain{i}.example" for i in range(10)}
+    reason = _sanity_check(new_domains, previous_count=1000)
+    assert reason is not None
+    assert "exceeds" in reason
+
+
+def test_sanity_check_passes_normal_update():
+    new_domains = {f"domain{i}.example" for i in range(100)}
+    reason = _sanity_check(new_domains, previous_count=95)
+    assert reason is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_ingest_updates_and_stores(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="0.0.0.0 malicious.example\n0.0.0.0 bad.example\n")
+
+    transport = httpx.MockTransport(handler)
+    feed = Feed(id="test-feed", category_id="malware", url="https://example.test/feed", format="hostfile")
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await fetch_and_ingest(feed, tmp_path, client)
+
+    assert result.status == "updated"
+    assert result.domain_count == 2
+    assert load_domains(tmp_path, "test-feed") == {"malicious.example", "bad.example"}
+    assert feed.last_domain_count == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_ingest_rejects_poisoned_feed(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="0.0.0.0 google.com\n")
+
+    transport = httpx.MockTransport(handler)
+    feed = Feed(id="test-feed", category_id="malware", url="https://example.test/feed", format="hostfile")
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await fetch_and_ingest(feed, tmp_path, client)
+
+    assert result.status == "rejected"
+    assert load_domains(tmp_path, "test-feed") == set()  # nothing written on rejection
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_ingest_unchanged_on_304(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get("If-None-Match") == "abc123"
+        return httpx.Response(304)
+
+    transport = httpx.MockTransport(handler)
+    feed = Feed(
+        id="test-feed",
+        category_id="malware",
+        url="https://example.test/feed",
+        format="hostfile",
+        last_etag="abc123",
+        last_domain_count=42,
+    )
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        result = await fetch_and_ingest(feed, tmp_path, client)
+
+    assert result.status == "unchanged"
+    assert result.domain_count == 42

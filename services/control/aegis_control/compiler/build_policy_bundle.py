@@ -12,14 +12,18 @@ import time
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from aegis_control.compiler.bloom import BloomFilterBuilder, recommended_params
+from aegis_control.compiler.bloom import BloomFilterBuilder, BloomParams, recommended_params
 from aegis_control.compiler.signing import sign_bundle
-from aegis_control.db.models import Policy
+from aegis_control.config import FEED_STORAGE_DIR
+from aegis_control.db.models import Feed, Policy
+from aegis_control.feeds.ingest import load_domains
 from aegis_control.gen import bundle_pb2
 
-# Default sizing for a category with no known domain count yet (Sprint 2).
-# Real counts come from the feed ingester (Sprint 4) and reuse recommended_params().
+# Sizing for a category with no ingested feed yet (empty bloom, matches behavior
+# before Sprint 5's feed ingester existed).
 _EMPTY_CATEGORY_PARAMS = recommended_params(expected_items=1000, seed=1234)
 
 _FAILURE_POLICY_MAP = {
@@ -33,7 +37,27 @@ _ACTION_MAP = {
 }
 
 
-def build_bundle(policy: Policy, version: int) -> bundle_pb2.Bundle:
+def _category_bloom(db: Session, category_id: str) -> tuple[bytes, BloomParams, Feed | None]:
+    """Builds a category's bloom filter from its ingested feed domains, if any
+    feed has been ingested for this category yet. Falls back to an empty
+    filter (pre-Sprint-5 behavior) when no feed has run."""
+    feed = db.execute(
+        select(Feed).where(Feed.category_id == category_id, Feed.enabled.is_(True))
+    ).scalars().first()
+
+    if feed is None or not feed.last_domain_count:
+        bf = BloomFilterBuilder(_EMPTY_CATEGORY_PARAMS)
+        return bf.to_bytes(), _EMPTY_CATEGORY_PARAMS, feed
+
+    domains = load_domains(FEED_STORAGE_DIR, feed.id)
+    params = recommended_params(expected_items=max(len(domains), 1), seed=1234)
+    bf = BloomFilterBuilder(params)
+    for domain in domains:
+        bf.add(domain)
+    return bf.to_bytes(), params, feed
+
+
+def build_bundle(policy: Policy, version: int, db: Session) -> bundle_pb2.Bundle:
     bundle = bundle_pb2.Bundle(
         tenant_id=policy.group.tenant_id,
         group_id=policy.group_id,
@@ -43,19 +67,19 @@ def build_bundle(policy: Policy, version: int) -> bundle_pb2.Bundle:
     )
 
     for toggle in policy.category_toggles:
-        bf = BloomFilterBuilder(_EMPTY_CATEGORY_PARAMS)  # no domains yet — Sprint 4 ingester fills this in
+        bloom_bytes, params, feed = _category_bloom(db, toggle.category_id)
         bundle.categories.append(
             bundle_pb2.CategorySet(
                 category_id=toggle.category_id,
-                source_feed_id="",
-                feed_version="",
-                license="",
+                source_feed_id=feed.id if feed else "",
+                feed_version=feed.last_version or "" if feed else "",
+                license=feed.license if feed else "",
                 bloom=bundle_pb2.BloomParams(
-                    num_hashes=_EMPTY_CATEGORY_PARAMS.num_hashes,
-                    num_bits=_EMPTY_CATEGORY_PARAMS.num_bits,
-                    seed=_EMPTY_CATEGORY_PARAMS.seed,
+                    num_hashes=params.num_hashes,
+                    num_bits=params.num_bits,
+                    seed=params.seed,
                 ),
-                bloom_bits=bf.to_bytes(),
+                bloom_bits=bloom_bytes,
                 action=_ACTION_MAP.get(toggle.action, bundle_pb2.ACTION_BLOCK),
             )
         )
@@ -88,8 +112,13 @@ def store_bundle(signed_bytes: bytes, storage_dir: Path, group_id: str) -> Path:
 
 
 def compile_and_store(
-    policy: Policy, version: int, private_key: Ed25519PrivateKey, key_id: str, storage_dir: Path
+    policy: Policy,
+    version: int,
+    private_key: Ed25519PrivateKey,
+    key_id: str,
+    storage_dir: Path,
+    db: Session,
 ) -> Path:
-    bundle = build_bundle(policy, version)
+    bundle = build_bundle(policy, version, db)
     signed_bytes = sign_bundle(bundle, private_key, key_id)
     return store_bundle(signed_bytes, storage_dir, policy.group_id)
