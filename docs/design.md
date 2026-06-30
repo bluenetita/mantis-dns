@@ -510,4 +510,104 @@ Adding a category = adding feed rows; no code change. The ingester, compiler, an
 
 ---
 
+## 19. Management UI — Enterprise-Grade Plan
+
+### 19.1 Current state (honest baseline)
+
+The UI shipped through Sprint 6 is a **working prototype, not an enterprise product**. It proves the API contract end to end (tenant/group/policy CRUD, category toggles, overrides, bundle compile, feed management, live telemetry) but is deliberately unpolished:
+
+- Browser-native `prompt()` / `alert()` / `confirm()` for all input and feedback.
+- Hand-rolled `fetch` + `useState`, no server-state caching, no optimistic updates, no retry.
+- Raw HTML tables with no pagination, virtualization, sorting, or filtering — they will not survive a feed of 500k domains or a query log of millions of rows.
+- No authentication, no routing, no design system, no empty/loading/error states, no accessibility, no tests.
+
+This section is the plan to take it from prototype to a console an enterprise would actually procure and operate. It supersedes the single "UI polish" bullet previously buried in Sprint 8.
+
+### 19.2 Enterprise requirements (what "enterprise-grade" actually means here)
+
+| # | Requirement | Why it's non-negotiable |
+|---|-------------|-------------------------|
+| U1 | Authentication + session management (OIDC/SAML SSO) | No enterprise runs an unauthenticated admin console; ties to §9 RBAC. |
+| U2 | Role-aware UI (super-admin, tenant-admin, policy-author, auditor) | UI must hide/disable what the role can't do, not just rely on API 403s. |
+| U3 | Multi-tenant navigation + tenant/org context switcher | MSPs manage dozens of tenants; the 3-column prototype doesn't scale past ~5. |
+| U4 | Data-grid views: server-side pagination, sorting, filtering, virtualization | Feeds (100k–1M domains) and query logs (millions of rows) cannot be client-loaded. |
+| U5 | Real forms with validation (no prompt/alert) | CIDR, domain, URL, interval inputs need inline validation + good error UX. |
+| U6 | Async server-state layer (cache, refetch, optimistic, error/loading states) | Every view currently reimplements fetch+loading+error by hand. |
+| U7 | Toast notifications + confirmation dialogs for destructive actions | Deleting a feed or tenant via `confirm()` is not acceptable. |
+| U8 | In-app observability: dashboards, query-log explorer, propagation status | Ops shouldn't have to bounce to Grafana for the common case (§11). |
+| U9 | Audit log viewer (who changed which policy when) | Compliance (SOC2/ISO27001) requires it; ties to §5.3 audit log. |
+| U10 | Accessibility (WCAG 2.1 AA, keyboard nav, screen-reader) | Public-sector / large-enterprise procurement mandates it (Section 508, VPAT). |
+| U11 | Theming (light/dark) + optional per-tenant white-label | MSP resale scenarios brand the console per customer. |
+| U12 | i18n scaffolding | Multi-region enterprises require localization readiness. |
+| U13 | Performance budget (code-split routes, bundle-size ceiling) | Admin consoles bloat fast; enforce a budget in CI. |
+| U14 | Test coverage: component, E2E, visual regression | A console driving security policy needs regression protection. |
+
+### 19.3 Target front-end architecture
+
+```
+apps/ui/
+ ├── api/                 generated OpenAPI client (typed, from FastAPI /openapi.json)
+ ├── auth/                OIDC PKCE flow, session context, role guards
+ ├── routes/             file/route-based code splitting (lazy)
+ │    ├── tenants/        list, detail, create
+ │    ├── groups/         per-tenant, subnet wiring, policy editor
+ │    ├── feeds/          catalog browser + custom feeds + ingest status
+ │    ├── analytics/      query-log explorer, top domains, block ratio
+ │    ├── audit/          audit log viewer
+ │    └── settings/       SSO, RBAC, API keys, white-label
+ ├── components/         design-system wrappers (Button, DataGrid, Form, Modal, Toast)
+ └── lib/                query client, validation schemas (Zod), formatters
+```
+
+**Stack decisions (recommended, not mandatory):**
+
+| Concern | Choice | Rationale |
+|---------|--------|-----------|
+| Component library | **Mantine** (or Ant Design) | Batteries-included enterprise admin kit: data grids, forms, modals, notifications, dark mode, a11y out of the box. Ant Design is the other strong fit (literally built for admin consoles); Mantine is lighter and more themeable. |
+| Server state | **TanStack Query** | Caching, background refetch, optimistic updates, request dedup — deletes most of the hand-rolled fetch/useState code. |
+| Data grids | **TanStack Table** + virtualization | Headless, handles server-side pagination/sort/filter and 100k-row virtualization. |
+| Forms + validation | **React Hook Form + Zod** | Typed schemas shared with the API client; inline validation; no `prompt()`. |
+| Routing | **TanStack Router** or React Router | Type-safe params, lazy route code-splitting. |
+| API client | **openapi-typescript** codegen | FastAPI already emits `/openapi.json`; generate the typed client instead of hand-writing `api.ts` (eliminates a whole class of drift, same philosophy as the proto contract on the backend). |
+| Auth | **oidc-client-ts** | Standard OIDC PKCE against Keycloak/Okta/Entra (§9). |
+| Toasts/modals | Mantine notifications + modals | Replaces every `alert()`/`confirm()`. |
+| Testing | **Vitest + Testing Library**, **Playwright** (E2E), **Storybook** + Chromatic (visual regression) | Component, end-to-end, and visual coverage. |
+| Quality gates | ESLint, Prettier, `tsc --noEmit`, bundle-size check | Enforced in CI (§ Cross-cutting). |
+
+### 19.4 Information architecture
+
+- **App shell**: persistent left nav (Tenants, Feeds, Analytics, Audit, Settings), top bar with tenant/org switcher, global search, user menu, theme toggle.
+- **Breadcrumbs** for deep navigation (Tenant → Group → Policy).
+- **Tenant context** is global state: selecting a tenant scopes every subsequent view; super-admins get an "all tenants" overview.
+- **Empty / loading / error states** are first-class for every data view (skeleton loaders, actionable empty states, error boundaries — not blank screens).
+
+### 19.5 Key views to (re)build
+
+1. **Policy editor** — replace the prototype: category toggles with live domain counts and per-category action (block / log-only / allow), override management with validated domain input, a **domain test box** (enter a domain → see which category/feed matches and the resulting decision — the explainability feature from §18.5, still unbuilt), bundle compile + propagation status indicator.
+2. **Feed manager** — catalog browser with search/filter, per-feed ingest status + last-run/next-run, sanity-gate rejection surfacing, license display, add/edit/delete with real forms.
+3. **Query-log explorer** — server-side paginated, filterable by tenant/group/decision/time-range, backed by ClickHouse once §6 lands (Postgres for now).
+4. **Analytics dashboard** — block ratio, QPS, cache-hit ratio, top blocked domains, per-category volume; either embedded Grafana panels or native charts off the metrics/telemetry APIs.
+5. **Audit log viewer** — immutable, filterable, exportable.
+6. **Settings** — SSO config, RBAC role assignment, API keys, white-label branding.
+
+### 19.6 Accessibility & i18n
+
+- Target **WCAG 2.1 AA**: keyboard-operable everything, visible focus, ARIA on custom widgets, contrast-checked theme tokens. Mantine/AntD give most of this; the audit is on us.
+- Wrap user-facing strings in an i18n layer (e.g. `react-i18next`) from the start — retrofitting localization is far more expensive than scaffolding it early, even if only `en` ships initially.
+
+### 19.7 Phased delivery (folds into the sprint plan)
+
+| Phase | Deliverable |
+|-------|-------------|
+| UI-0 | Foundation: component library, TanStack Query, OpenAPI-generated client, app shell + routing, theme. Port existing prototype views onto it (no new features, just the platform). |
+| UI-1 | Auth + RBAC: OIDC login, session, role-gated nav/actions (depends on backend §9 / Sprint 8). |
+| UI-2 | Data grids: feed manager + query-log explorer with server-side pagination/sort/filter/virtualization. |
+| UI-3 | Forms + UX: replace all prompt/alert/confirm with validated forms, modals, toasts, confirmation dialogs. |
+| UI-4 | Analytics + audit: dashboards, domain-test explainability box, audit log viewer. |
+| UI-5 | Hardening: a11y audit (WCAG AA), i18n scaffolding, E2E + visual-regression tests, performance budget in CI. |
+
+UI-0 is the unlock and should land before piling on features — every feature built on the prototype's hand-rolled foundation is throwaway work.
+
+---
+
 *End of document.*

@@ -26,10 +26,16 @@ Epic C: Control plane API + DB (Python)        (Sprints 1-3)
 Epic D: Category feed ingestion + auto-update  (Sprints 4-6)
 Epic E: OpenVPN integration (AS + Proxmox)     (Sprints 5-7)
 Epic F: Telemetry & observability              (Sprints 6-8)
-Epic G: Management UI (TypeScript)             (Sprints 3-8, parallel)
+Epic G: Management UI — prototype (TS)         (Sprints 3-6, parallel)
 Epic H: HA / multi-node / Proxmox profile      (Sprints 8-9)
 Epic I: Migration tooling + cutover            (Sprint 10)
+Epic J: Enterprise UI redesign (TS)            (Sprints 11-13) — see design.md §19
 ```
+
+> **UI status (logged gap):** Epic G delivered a *working prototype* (prompt/alert,
+> hand-rolled fetch, raw tables — functional, not enterprise-grade). The full
+> enterprise UI is **Epic J** below, broken out of the old single "UI polish"
+> bullet so it can't be silently dropped. Plan: design.md §19.
 
 Epics B and C start in parallel sprint 1 once the bundle schema (Epic A) is frozen — that's the contract between Rust and Python, so it's the critical-path blocker for everything else.
 
@@ -119,14 +125,17 @@ Epics B and C start in parallel sprint 1 once the bundle schema (Epic A) is froz
 
 ---
 
-## Sprint 8 — Auth/RBAC + audit + UI polish
+## Sprint 8 — Auth/RBAC + audit (backend)
 
 - [ ] Python: OIDC/SSO integration (Keycloak target), RBAC middleware, scoped tenant access.
-- [ ] Python: append-only audit log on all mutating endpoints.
-- [ ] TypeScript: multi-tenant UI nav, RBAC-aware UI (hide actions by role), audit log viewer.
+- [ ] Python: append-only audit log on all mutating endpoints + read API for the audit viewer.
 - [ ] Rust: per-tenant fail-open/fail-closed policy on bundle-load failure.
 
-**Exit criteria:** RBAC enforced end to end; audit trail visible in UI for every policy change.
+> UI for RBAC nav and the audit-log viewer moved to **Epic J / Sprint 12** — they
+> belong on the enterprise UI foundation (design.md §19), not bolted onto the
+> prototype. This sprint delivers the backend they consume.
+
+**Exit criteria:** RBAC enforced at the API; audit trail queryable via API for every policy change.
 
 ---
 
@@ -152,6 +161,37 @@ Epics B and C start in parallel sprint 1 once the bundle schema (Epic A) is froz
 
 ---
 
+## Epic J — Enterprise UI redesign (Sprints 11–13)
+
+The prototype UI (Epic G) proved the API contract but is not enterprise-grade. This epic rebuilds it on a real foundation. Full plan and stack rationale: **design.md §19**. Backend dependencies (OIDC/RBAC, audit API, ClickHouse query logs) land in Sprints 8–9, so this epic follows them.
+
+### Sprint 11 — UI foundation (UI-0)
+
+- [ ] Component library (Mantine or Ant Design), theme tokens, light/dark.
+- [ ] TanStack Query server-state layer; OpenAPI-generated typed client from FastAPI `/openapi.json` (retire hand-written `api.ts`).
+- [ ] App shell: left nav, tenant/org context switcher, breadcrumbs, routing with lazy code-split routes.
+- [ ] Port existing prototype views (tenants, groups, policy, feeds) onto the foundation — **no new features**, just the platform; first-class empty/loading/error states.
+
+**Exit criteria:** prototype feature parity, zero `prompt`/`alert`/`confirm` left, all server state through the query client.
+
+### Sprint 12 — Auth, RBAC, data grids, audit (UI-1, UI-2 partial)
+
+- [ ] OIDC PKCE login + session; role-gated nav and actions (super-admin / tenant-admin / policy-author / auditor).
+- [ ] Data grids with server-side pagination/sort/filter + virtualization: feed manager, query-log explorer.
+- [ ] Audit log viewer (consumes Sprint 8 audit API).
+
+**Exit criteria:** a non-admin role sees only what it may touch; a 500k-domain feed and a million-row query log both render without client-side load.
+
+### Sprint 13 — Forms/UX, analytics, hardening (UI-3, UI-4, UI-5)
+
+- [ ] Replace all remaining native dialogs with validated forms (React Hook Form + Zod), modals, toasts, destructive-action confirmations.
+- [ ] Analytics dashboard (block ratio, QPS, cache-hit, top domains) + domain-test explainability box (§18.5).
+- [ ] Hardening: WCAG 2.1 AA audit, i18n scaffolding, Vitest + Playwright + visual-regression tests, bundle-size budget in CI.
+
+**Exit criteria:** WCAG AA pass, E2E green, performance budget enforced; the console is something an enterprise would procure.
+
+---
+
 ## Cross-cutting (every sprint)
 
 - Cross-language fixture tests (Python-built bundle → Rust-verified) run in CI on every change to the protobuf schema.
@@ -168,6 +208,7 @@ Epics B and C start in parallel sprint 1 once the bundle schema (Epic A) is froz
 | Protobuf schema evolution breaking either side | Schema in shared `proto/` package, semver, CI fails on incompatible change without version bump |
 | Python ingestion slow under many feeds | Feeds fetched concurrently (`asyncio.gather`), diff-only recompilation limits blast radius |
 | Rust async DNS edge cases (UDP truncation, TCP fallback) | Rely on `hickory` crate's tested implementation rather than hand-rolling protocol details |
+| Building enterprise UI features on the throwaway prototype foundation | Epic J Sprint 11 (UI-0) lands the real foundation *first*; no enterprise UI feature is built on the prototype's hand-rolled fetch/tables |
 
 ---
 
