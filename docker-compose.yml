@@ -1,0 +1,32 @@
+services:
+  control:
+    build:
+      context: .
+      dockerfile: services/control/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./services/control:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  ui:
+    build:
+      context: apps/ui
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./apps/ui:/app
+      - /app/node_modules
+    depends_on:
+      - control
+
+  filter:
+    build:
+      context: .
+      dockerfile: services/filter/Dockerfile
+    environment:
+      - RUST_LOG=info
+    # No DNS listener until Sprint 3 — container logs a startup line and exits.
+    # restart left unset on purpose so `docker compose up` doesn't loop-crash it.

@@ -1,0 +1,10 @@
+target/
+**/target/
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+.git/
+.github/
+docs/
