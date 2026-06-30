@@ -46,10 +46,15 @@ services:
     build:
       context: .
       dockerfile: services/filter/Dockerfile
+    ports:
+      - "1053:1053/udp"
     environment:
       - RUST_LOG=info
-    # No DNS listener until Sprint 3 — container logs a startup line and exits.
-    # restart left unset on purpose so `docker compose up` doesn't loop-crash it.
+      - CONTROL_URL=http://control:8000
+      - GROUP_ID=${GROUP_ID:-}
+      - DNS_BIND_ADDR=0.0.0.0:1053
+    depends_on:
+      - control
 
 volumes:
   pgdata:

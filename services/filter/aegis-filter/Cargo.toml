@@ -3,6 +3,10 @@ name = "aegis-filter"
 version = "0.1.0"
 edition.workspace = true
 
+[lib]
+name = "aegis_filter"
+path = "src/lib.rs"
+
 [[bin]]
 name = "aegis-filter"
 path = "src/main.rs"
@@ -14,3 +18,9 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+hickory-proto = { workspace = true }
+reqwest = { workspace = true }
+ed25519-dalek = { workspace = true }
+prost = { workspace = true }
+
+[dev-dependencies]

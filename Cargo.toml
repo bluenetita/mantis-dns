@@ -21,3 +21,4 @@ anyhow = "1"
 thiserror = "2"
 arc-swap = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+hickory-proto = "0.25"

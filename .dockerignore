@@ -8,3 +8,7 @@ dist/
 .git/
 .github/
 docs/
+services/control/bundles/
+services/control/signing_key.bin
+services/control/bundle.bin
+services/control/bundle_pubkey.bin
