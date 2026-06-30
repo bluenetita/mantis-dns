@@ -6,13 +6,25 @@ use std::sync::Arc;
 
 use aegis_bundle::gen::{Action, BloomParams, FailurePolicy};
 use aegis_bundle::{Bundle, CategorySet};
-use aegis_filter::{run_udp_server, AppState};
+use aegis_filter::{run_udp_server, AppState, Forwarder};
 use ed25519_dalek::{Signer, SigningKey};
 use hickory_proto::op::{Message, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::{Name, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use prost::Message as _;
+use std::net::Ipv4Addr;
 use tokio::net::UdpSocket;
+
+/// Deterministic stand-in for real upstream resolution — no network/port 853
+/// dependency in tests. Always "resolves" to a fixed test-net IP.
+struct MockForwarder;
+
+#[async_trait::async_trait]
+impl Forwarder for MockForwarder {
+    async fn lookup_a(&self, _qname: &str) -> anyhow::Result<(Vec<Ipv4Addr>, u32)> {
+        Ok((vec![Ipv4Addr::new(198, 51, 100, 1)], 60))
+    }
+}
 
 fn signed_test_bundle(signing_key: &SigningKey) -> Bundle {
     let mut bundle = Bundle {
@@ -82,7 +94,7 @@ async fn start_test_server() -> (std::net::SocketAddr, SigningKey) {
     let signing_key = SigningKey::from_bytes(&[9u8; 32]);
     let public_key = signing_key.verifying_key();
 
-    let state = Arc::new(AppState::new(public_key));
+    let state = Arc::new(AppState::with_forwarder(public_key, Box::new(MockForwarder)));
     let bundle = signed_test_bundle(&signing_key);
     state.store.try_publish(bundle, &public_key).unwrap();
 

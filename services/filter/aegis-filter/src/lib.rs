@@ -1,9 +1,10 @@
 //! Aegis filter node: DNS frontend + policy engine.
 //!
-//! Sprint 3 scope: real UDP DNS listener, tenant resolution is a single
-//! global bundle (per-listener/source-IP tenant mapping is Sprint 5, see
-//! design.md §7.3). Allowed queries get a synthetic stub answer — real
-//! upstream forwarding + cache lands in Sprint 4.
+//! Sprint 4 scope: real cache + DoT upstream forwarding. Tenant resolution
+//! is still a single global bundle (per-listener/source-IP tenant mapping is
+//! Sprint 5, see design.md §7.3).
+
+mod cache;
 
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -12,25 +13,86 @@ use std::time::Duration;
 use aegis_bundle::{Bundle, BundleStore};
 use aegis_policy::BloomFilter;
 use anyhow::{Context, Result};
+use cache::DnsCache;
 use ed25519_dalek::VerifyingKey;
 use hickory_proto::op::{Message, MessageType, ResponseCode};
 use hickory_proto::rr::rdata::A;
 use hickory_proto::rr::{RData, Record, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
+use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+use hickory_resolver::name_server::TokioConnectionProvider;
+use hickory_resolver::Resolver;
 use prost::Message as _;
 use tokio::net::UdpSocket;
 use tracing::{debug, info, warn};
 
+pub type DotResolver = Resolver<TokioConnectionProvider>;
+
+/// Abstraction over upstream resolution so tests/CI don't depend on live
+/// network + port 853 egress (the real DoT path is exercised by the example
+/// client against a running Docker deployment instead — see README).
+#[async_trait::async_trait]
+pub trait Forwarder: Send + Sync {
+    async fn lookup_a(&self, qname: &str) -> Result<(Vec<Ipv4Addr>, u32)>;
+}
+
+pub struct DotForwarder(DotResolver);
+
+impl DotForwarder {
+    /// DNS-over-TLS to Cloudflare by default (design.md §9: upstream privacy
+    /// via DoT/DoH). Override target is a Sprint-4-follow-up config knob,
+    /// not yet wired to an env var.
+    pub fn new_default() -> Self {
+        let resolver = Resolver::builder_with_config(
+            ResolverConfig::cloudflare_tls(),
+            TokioConnectionProvider::default(),
+        )
+        .with_options(ResolverOpts::default())
+        .build();
+        Self(resolver)
+    }
+}
+
+#[async_trait::async_trait]
+impl Forwarder for DotForwarder {
+    async fn lookup_a(&self, qname: &str) -> Result<(Vec<Ipv4Addr>, u32)> {
+        let lookup = self.0.lookup_ip(qname).await?;
+        let ttl = lookup
+            .as_lookup()
+            .records()
+            .iter()
+            .map(|r| r.ttl())
+            .min()
+            .unwrap_or(60);
+        let ips: Vec<Ipv4Addr> = lookup
+            .iter()
+            .filter_map(|ip| match ip {
+                std::net::IpAddr::V4(v4) => Some(v4),
+                _ => None,
+            })
+            .collect();
+        Ok((ips, ttl))
+    }
+}
+
 pub struct AppState {
     pub store: BundleStore,
     pub public_key: VerifyingKey,
+    pub cache: DnsCache,
+    pub forwarder: Box<dyn Forwarder>,
 }
 
 impl AppState {
     pub fn new(public_key: VerifyingKey) -> Self {
+        Self::with_forwarder(public_key, Box::new(DotForwarder::new_default()))
+    }
+
+    pub fn with_forwarder(public_key: VerifyingKey, forwarder: Box<dyn Forwarder>) -> Self {
         Self {
             store: BundleStore::empty(),
             public_key,
+            cache: DnsCache::new(10_000),
+            forwarder,
         }
     }
 }
@@ -137,7 +199,7 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
             }
         };
 
-        let response = build_response(&query, &state);
+        let response = build_response(&query, &state).await;
         match response.to_bytes() {
             Ok(bytes) => {
                 if let Err(e) = socket.send_to(&bytes, peer).await {
@@ -149,7 +211,7 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
     }
 }
 
-fn build_response(query: &Message, state: &AppState) -> Message {
+async fn build_response(query: &Message, state: &AppState) -> Message {
     let mut response = Message::new();
     response.set_id(query.id());
     response.set_message_type(MessageType::Response);
@@ -178,17 +240,44 @@ fn build_response(query: &Message, state: &AppState) -> Message {
             response.set_response_code(ResponseCode::NXDomain);
         }
         Decision::Allow => {
-            response.set_response_code(ResponseCode::NoError);
             if question.query_type() == RecordType::A {
-                // Synthetic stub answer — real cache + upstream DoT forwarding is Sprint 4.
-                let record = Record::from_rdata(
-                    question.name().clone(),
-                    60,
-                    RData::A(A(Ipv4Addr::new(198, 51, 100, 1))),
-                );
-                response.add_answer(record);
+                resolve_a_record(&qname, question.name().clone(), state, &mut response).await;
+            } else {
+                // Only A records are resolved/cached/forwarded as of Sprint 4 —
+                // everything else gets an empty NOERROR (effectively NODATA).
+                response.set_response_code(ResponseCode::NoError);
             }
         }
     }
     response
+}
+
+async fn resolve_a_record(
+    qname: &str,
+    record_name: hickory_proto::rr::Name,
+    state: &AppState,
+    response: &mut Message,
+) {
+    if let Some(ips) = state.cache.get(qname) {
+        response.set_response_code(ResponseCode::NoError);
+        for ip in ips {
+            response.add_answer(Record::from_rdata(record_name.clone(), 60, RData::A(A(ip))));
+        }
+        return;
+    }
+
+    match state.forwarder.lookup_a(qname).await {
+        Ok((ips, ttl)) => {
+            state.cache.put(qname.to_string(), ips.clone(), Duration::from_secs(ttl as u64));
+
+            response.set_response_code(ResponseCode::NoError);
+            for ip in ips {
+                response.add_answer(Record::from_rdata(record_name.clone(), ttl, RData::A(A(ip))));
+            }
+        }
+        Err(e) => {
+            debug!("upstream resolution failed for {qname}: {e}");
+            response.set_response_code(ResponseCode::ServFail);
+        }
+    }
 }
