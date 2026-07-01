@@ -7,10 +7,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from aegis_control.api.audit_routers import router as audit_router
+from aegis_control.api.auth_routers import router as auth_router
 from aegis_control.api.feed_routers import router as feed_router
 from aegis_control.api.routers import router as api_router
 from aegis_control.api.telemetry_routers import router as telemetry_router
-from aegis_control.db.models import Base, Feed
+from aegis_control.auth import hash_password
+from aegis_control.db.models import Base, Feed, User
 from aegis_control.db.session import SessionLocal, engine
 from aegis_control.feeds.seed import seed_catalog
 from aegis_control.scheduler import schedule_feed, scheduler
@@ -31,6 +33,7 @@ app.include_router(api_router, prefix="/api/v1")
 app.include_router(feed_router, prefix="/api/v1")
 app.include_router(telemetry_router, prefix="/api/v1")
 app.include_router(audit_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/v1")
 
 
 @app.on_event("startup")
@@ -46,6 +49,15 @@ def on_startup() -> None:
 
         for feed in db.query(Feed).filter(Feed.enabled.is_(True)).all():
             schedule_feed(feed)
+
+        if db.query(User).count() == 0:
+            admin_email = os.environ.get("ADMIN_EMAIL", "admin@aegis.local")
+            admin_password = os.environ.get("ADMIN_PASSWORD", "change-me-now")
+            db.add(User(email=admin_email, password_hash=hash_password(admin_password), role="admin"))
+            db.commit()
+            logging.getLogger(__name__).warning(
+                f"seeded initial admin user {admin_email!r} — change ADMIN_PASSWORD / log in and rotate it"
+            )
     finally:
         db.close()
     scheduler.start()

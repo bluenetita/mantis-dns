@@ -23,6 +23,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useCompileBundle, useTopDomains, usePolicy, useUpsertPolicy } from "../api/hooks";
 import type { components } from "../api/schema";
+import { useAuth } from "../auth/AuthContext";
 
 type CategoryToggle = components["schemas"]["CategoryToggleIn"];
 type Override = components["schemas"]["OverrideIn"];
@@ -185,14 +186,16 @@ export function PolicyPage() {
         />
       </Card>
 
-      <Group>
-        <Button onClick={save} loading={upsertPolicy.isPending}>
-          Save policy
-        </Button>
-        <Button variant="default" onClick={compile} loading={compileBundle.isPending}>
-          Compile & publish bundle
-        </Button>
-      </Group>
+      {useAuth().hasRole("operator") && (
+        <Group>
+          <Button onClick={save} loading={upsertPolicy.isPending}>
+            Save policy
+          </Button>
+          <Button variant="default" onClick={compile} loading={compileBundle.isPending}>
+            Compile & publish bundle
+          </Button>
+        </Group>
+      )}
 
       <Card withBorder>
         <Title order={4} mb="sm">

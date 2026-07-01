@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from aegis_control.api import schemas
 from aegis_control.audit import write_audit_log
+from aegis_control.auth import get_current_user, require_role
 from aegis_control.compiler.build_policy_bundle import compile_and_store
 from aegis_control.compiler.keys import KEY_ID, load_or_create_signing_key, public_key_bytes_for
 from aegis_control.config import BUNDLE_STORAGE_DIR
@@ -18,23 +19,29 @@ _signing_key = load_or_create_signing_key()
 
 
 @router.post("/tenants", response_model=schemas.TenantOut, status_code=201)
-def create_tenant(payload: schemas.TenantCreate, db: Session = Depends(get_db)) -> models.Tenant:
+def create_tenant(
+    payload: schemas.TenantCreate,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_role("admin", "operator")),
+) -> models.Tenant:
     tenant = models.Tenant(name=payload.name)
     db.add(tenant)
     db.flush()
-    write_audit_log(db, "tenant.create", "tenant", tenant.id, detail=f"name={tenant.name}")
+    write_audit_log(db, "tenant.create", "tenant", tenant.id, detail=f"name={tenant.name}", actor=user.email)
     db.commit()
     db.refresh(tenant)
     return tenant
 
 
 @router.get("/tenants", response_model=list[schemas.TenantOut])
-def list_tenants(db: Session = Depends(get_db)) -> list[models.Tenant]:
+def list_tenants(db: Session = Depends(get_db), _user: models.User = Depends(get_current_user)) -> list[models.Tenant]:
     return list(db.query(models.Tenant).all())
 
 
 @router.get("/tenants/{tenant_id}", response_model=schemas.TenantOut)
-def get_tenant(tenant_id: str, db: Session = Depends(get_db)) -> models.Tenant:
+def get_tenant(
+    tenant_id: str, db: Session = Depends(get_db), _user: models.User = Depends(get_current_user)
+) -> models.Tenant:
     tenant = db.get(models.Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(404, "tenant not found")
@@ -42,11 +49,15 @@ def get_tenant(tenant_id: str, db: Session = Depends(get_db)) -> models.Tenant:
 
 
 @router.delete("/tenants/{tenant_id}", status_code=204)
-def delete_tenant(tenant_id: str, db: Session = Depends(get_db)) -> None:
+def delete_tenant(
+    tenant_id: str,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_role("admin")),
+) -> None:
     tenant = db.get(models.Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(404, "tenant not found")
-    write_audit_log(db, "tenant.delete", "tenant", tenant.id, detail=f"name={tenant.name}")
+    write_audit_log(db, "tenant.delete", "tenant", tenant.id, detail=f"name={tenant.name}", actor=user.email)
     db.delete(tenant)
     db.commit()
 
@@ -60,7 +71,10 @@ def _validate_cidr(cidr: str) -> str:
 
 @router.post("/tenants/{tenant_id}/groups", response_model=schemas.GroupOut, status_code=201)
 def create_group(
-    tenant_id: str, payload: schemas.GroupCreate, db: Session = Depends(get_db)
+    tenant_id: str,
+    payload: schemas.GroupCreate,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_role("admin", "operator")),
 ) -> models.Group:
     tenant = db.get(models.Tenant, tenant_id)
     if tenant is None:
@@ -69,26 +83,31 @@ def create_group(
     group = models.Group(tenant_id=tenant_id, name=payload.name, vpn_subnet=vpn_subnet)
     db.add(group)
     db.flush()
-    write_audit_log(db, "group.create", "group", group.id, detail=f"name={group.name} tenant_id={tenant_id}")
+    write_audit_log(db, "group.create", "group", group.id, detail=f"name={group.name} tenant_id={tenant_id}", actor=user.email)
     db.commit()
     db.refresh(group)
     return group
 
 
 @router.get("/tenants/{tenant_id}/groups", response_model=list[schemas.GroupOut])
-def list_groups(tenant_id: str, db: Session = Depends(get_db)) -> list[models.Group]:
+def list_groups(
+    tenant_id: str, db: Session = Depends(get_db), _user: models.User = Depends(get_current_user)
+) -> list[models.Group]:
     return list(db.query(models.Group).filter(models.Group.tenant_id == tenant_id).all())
 
 
 @router.put("/groups/{group_id}/subnet", response_model=schemas.GroupOut)
 def set_group_subnet(
-    group_id: str, payload: schemas.GroupSubnetUpdate, db: Session = Depends(get_db)
+    group_id: str,
+    payload: schemas.GroupSubnetUpdate,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_role("admin", "operator")),
 ) -> models.Group:
     group = db.get(models.Group, group_id)
     if group is None:
         raise HTTPException(404, "group not found")
     group.vpn_subnet = _validate_cidr(payload.vpn_subnet)
-    write_audit_log(db, "group.subnet_update", "group", group.id, detail=f"vpn_subnet={group.vpn_subnet}")
+    write_audit_log(db, "group.subnet_update", "group", group.id, detail=f"vpn_subnet={group.vpn_subnet}", actor=user.email)
     db.commit()
     db.refresh(group)
     return group
@@ -97,13 +116,17 @@ def set_group_subnet(
 @router.get("/routing-table", response_model=list[schemas.RoutingTableEntry])
 def get_routing_table(db: Session = Depends(get_db)) -> list[schemas.RoutingTableEntry]:
     """Source-IP -> tenant routing table for filter nodes (design.md §7.3
-    option 2). Only groups with a subnet assigned are routable."""
+    option 2). Polled machine-to-machine by Rust filter nodes — no user JWT
+    involved, so this stays unauthenticated like /public-key and the bundle
+    GET endpoint. A service-to-service token is a later hardening item."""
     groups = db.query(models.Group).filter(models.Group.vpn_subnet.is_not(None)).all()
     return [schemas.RoutingTableEntry(cidr=g.vpn_subnet, group_id=g.id) for g in groups]
 
 
 @router.get("/groups/{group_id}/policy", response_model=schemas.PolicyOut)
-def get_policy(group_id: str, db: Session = Depends(get_db)) -> models.Policy:
+def get_policy(
+    group_id: str, db: Session = Depends(get_db), _user: models.User = Depends(get_current_user)
+) -> models.Policy:
     policy = db.query(models.Policy).filter(models.Policy.group_id == group_id).one_or_none()
     if policy is None:
         raise HTTPException(404, "policy not found for group")
@@ -112,7 +135,10 @@ def get_policy(group_id: str, db: Session = Depends(get_db)) -> models.Policy:
 
 @router.put("/groups/{group_id}/policy", response_model=schemas.PolicyOut)
 def upsert_policy(
-    group_id: str, payload: schemas.PolicyUpsert, db: Session = Depends(get_db)
+    group_id: str,
+    payload: schemas.PolicyUpsert,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_role("admin", "operator")),
 ) -> models.Policy:
     group = db.get(models.Group, group_id)
     if group is None:
@@ -150,6 +176,7 @@ def upsert_policy(
         "policy",
         policy.id,
         detail=f"group_id={group_id} categories={len(payload.category_toggles)} overrides={len(payload.overrides)}",
+        actor=user.email,
     )
     db.commit()
     db.refresh(policy)
@@ -158,7 +185,8 @@ def upsert_policy(
 
 @router.get("/public-key")
 def get_public_key() -> Response:
-    """Filter nodes fetch this once and pin it for bundle verification."""
+    """Filter nodes fetch this once and pin it for bundle verification.
+    Machine-to-machine, unauthenticated like /routing-table."""
     return Response(
         content=public_key_bytes_for(_signing_key),
         media_type="application/octet-stream",
@@ -167,7 +195,11 @@ def get_public_key() -> Response:
 
 
 @router.post("/groups/{group_id}/bundle", status_code=201)
-def compile_bundle(group_id: str, db: Session = Depends(get_db)) -> Response:
+def compile_bundle(
+    group_id: str,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_role("admin", "operator")),
+) -> Response:
     """Compiles the group's current policy into a signed bundle, stores it
     content-addressed on disk, bumps the version, and returns the bytes."""
     policy = db.query(models.Policy).filter(models.Policy.group_id == group_id).one_or_none()
@@ -175,7 +207,7 @@ def compile_bundle(group_id: str, db: Session = Depends(get_db)) -> Response:
         raise HTTPException(404, "policy not found for group")
 
     policy.bundle_version += 1
-    write_audit_log(db, "bundle.compile", "policy", policy.id, detail=f"version={policy.bundle_version}")
+    write_audit_log(db, "bundle.compile", "policy", policy.id, detail=f"version={policy.bundle_version}", actor=user.email)
     db.commit()
     db.refresh(policy)
 

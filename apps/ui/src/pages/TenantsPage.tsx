@@ -7,6 +7,7 @@ import { TextInput } from "@mantine/core";
 import { IconPlus, IconTrash } from "@tabler/icons-react";
 import { useNavigate } from "react-router-dom";
 import { useCreateTenant, useDeleteTenant, useTenants } from "../api/hooks";
+import { useAuth } from "../auth/AuthContext";
 
 function CreateTenantForm({ onDone }: { onDone: () => void }) {
   const createTenant = useCreateTenant();
@@ -44,6 +45,9 @@ export function TenantsPage() {
   const deleteTenant = useDeleteTenant();
   const navigate = useNavigate();
   const [createOpened, { open: openCreateModal, close: closeCreateModal }] = useDisclosure(false);
+  const { hasRole } = useAuth();
+  const canWrite = hasRole("operator");
+  const canDelete = hasRole("admin");
 
   function confirmDelete(tenantId: string, name: string) {
     modals.openConfirmModal({
@@ -71,9 +75,11 @@ export function TenantsPage() {
     <Stack>
       <Group justify="space-between">
         <Title order={2}>Tenants</Title>
-        <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
-          New tenant
-        </Button>
+        {canWrite && (
+          <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
+            New tenant
+          </Button>
+        )}
       </Group>
 
       {tenants?.length === 0 && (
@@ -99,15 +105,17 @@ export function TenantsPage() {
                 <Table.Td>{t.name}</Table.Td>
                 <Table.Td>{new Date(t.created_at).toLocaleString()}</Table.Td>
                 <Table.Td onClick={(e) => e.stopPropagation()}>
-                  <Button
-                    variant="subtle"
-                    color="red"
-                    size="xs"
-                    leftSection={<IconTrash size={14} />}
-                    onClick={() => confirmDelete(t.id, t.name)}
-                  >
-                    Delete
-                  </Button>
+                  {canDelete && (
+                    <Button
+                      variant="subtle"
+                      color="red"
+                      size="xs"
+                      leftSection={<IconTrash size={14} />}
+                      onClick={() => confirmDelete(t.id, t.name)}
+                    >
+                      Delete
+                    </Button>
+                  )}
                 </Table.Td>
               </Table.Tr>
             ))}

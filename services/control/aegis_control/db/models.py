@@ -121,6 +121,19 @@ class AuditLog(Base):
     detail: Mapped[str] = mapped_column(String(2000), default="")
 
 
+class User(Base):
+    """Sprint 8: minimal RBAC. Roles are a fixed hierarchy, not a separate
+    table — admin > operator > viewer, see auth.py for the enforcement."""
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    email: Mapped[str] = mapped_column(String(255), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(20), default="viewer")  # admin | operator | viewer
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
 class Feed(Base):
     """Declarative feed registry — see design doc §18.6."""
 

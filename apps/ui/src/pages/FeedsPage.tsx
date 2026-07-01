@@ -22,6 +22,7 @@ import { notifications } from "@mantine/notifications";
 import { IconPlus, IconRefresh, IconTrash } from "@tabler/icons-react";
 import { useCreateFeed, useDeleteFeed, useFeeds, useIngestFeedNow, useUpdateFeed } from "../api/hooks";
 import type { components } from "../api/schema";
+import { useAuth } from "../auth/AuthContext";
 
 type Feed = components["schemas"]["FeedOut"];
 
@@ -94,6 +95,8 @@ export function FeedsPage() {
   const deleteFeed = useDeleteFeed();
   const ingestNow = useIngestFeedNow();
   const [addModalOpened, { open: openAddModal, close: closeAddModal }] = useDisclosure(false);
+  const { hasRole } = useAuth();
+  const canWrite = hasRole("operator");
 
   function toggleEnabled(feed: Feed) {
     updateFeed.mutate(
@@ -147,9 +150,11 @@ export function FeedsPage() {
     <Stack>
       <Group justify="space-between">
         <Title order={2}>Feeds</Title>
-        <Button leftSection={<IconPlus size={16} />} onClick={openAddModal}>
-          Add custom feed
-        </Button>
+        {canWrite && (
+          <Button leftSection={<IconPlus size={16} />} onClick={openAddModal}>
+            Add custom feed
+          </Button>
+        )}
       </Group>
       <Text c="dimmed" size="sm">
         Pre-loaded from a vetted catalog (StevenBlack, The Block List Project, URLhaus). Changes take effect
@@ -189,29 +194,31 @@ export function FeedsPage() {
                   <Table.Td>{f.last_domain_count ?? <Text c="dimmed">not yet ingested</Text>}</Table.Td>
                   <Table.Td>{Math.round(f.interval_seconds / 60)}m</Table.Td>
                   <Table.Td>
-                    <Switch checked={f.enabled} onChange={() => toggleEnabled(f)} />
+                    <Switch checked={f.enabled} disabled={!canWrite} onChange={() => toggleEnabled(f)} />
                   </Table.Td>
                   <Table.Td>
-                    <Group gap="xs">
-                      <Button
-                        size="xs"
-                        variant="default"
-                        leftSection={<IconRefresh size={14} />}
-                        onClick={() => ingest(f)}
-                        loading={ingestNow.isPending}
-                      >
-                        Ingest now
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="subtle"
-                        color="red"
-                        leftSection={<IconTrash size={14} />}
-                        onClick={() => confirmDelete(f)}
-                      >
-                        Delete
-                      </Button>
-                    </Group>
+                    {canWrite && (
+                      <Group gap="xs">
+                        <Button
+                          size="xs"
+                          variant="default"
+                          leftSection={<IconRefresh size={14} />}
+                          onClick={() => ingest(f)}
+                          loading={ingestNow.isPending}
+                        >
+                          Ingest now
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          color="red"
+                          leftSection={<IconTrash size={14} />}
+                          onClick={() => confirmDelete(f)}
+                        >
+                          Delete
+                        </Button>
+                      </Group>
+                    )}
                   </Table.Td>
                 </Table.Tr>
               ))}

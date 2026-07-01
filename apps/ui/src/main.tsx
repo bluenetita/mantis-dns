@@ -12,6 +12,7 @@ import { BrowserRouter } from "react-router-dom";
 
 import App from "./App";
 import { ErrorBoundary } from "./app/ErrorBoundary";
+import { AuthProvider } from "./auth/AuthContext";
 import { theme } from "./theme";
 
 const queryClient = new QueryClient({
@@ -31,7 +32,9 @@ createRoot(document.getElementById("root")!).render(
         <ModalsProvider>
           <QueryClientProvider client={queryClient}>
             <BrowserRouter>
-              <App />
+              <AuthProvider>
+                <App />
+              </AuthProvider>
             </BrowserRouter>
           </QueryClientProvider>
         </ModalsProvider>

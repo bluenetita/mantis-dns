@@ -5,6 +5,7 @@ import { notifications } from "@mantine/notifications";
 import { IconPlus } from "@tabler/icons-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useCreateGroup, useGroups, useTenants } from "../api/hooks";
+import { useAuth } from "../auth/AuthContext";
 
 const CIDR_RE = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
 
@@ -57,6 +58,7 @@ export function GroupsPage() {
 
   const tenant = tenants?.find((t) => t.id === tenantId);
   const [createOpened, { open: openCreateModal, close: closeCreateModal }] = useDisclosure(false);
+  const canWrite = useAuth().hasRole("operator");
 
   if (isLoading)
     return (
@@ -77,9 +79,11 @@ export function GroupsPage() {
 
       <Group justify="space-between">
         <Title order={2}>Groups</Title>
-        <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
-          New group
-        </Button>
+        {canWrite && (
+          <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
+            New group
+          </Button>
+        )}
       </Group>
 
       {groups?.length === 0 && (

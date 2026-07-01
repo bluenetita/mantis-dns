@@ -1,5 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Shell } from "./app/Shell";
+import { RequireAuth } from "./auth/RequireAuth";
+import { LoginPage } from "./pages/LoginPage";
 import { TenantsPage } from "./pages/TenantsPage";
 import { GroupsPage } from "./pages/GroupsPage";
 import { PolicyPage } from "./pages/PolicyPage";
@@ -11,16 +13,19 @@ import { SettingsPage } from "./pages/SettingsPage";
 export default function App() {
   return (
     <Routes>
-      <Route element={<Shell />}>
-        <Route path="/" element={<Navigate to="/tenants" replace />} />
-        <Route path="/tenants" element={<TenantsPage />} />
-        <Route path="/tenants/:tenantId" element={<GroupsPage />} />
-        <Route path="/tenants/:tenantId/groups/:groupId" element={<PolicyPage />} />
-        <Route path="/feeds" element={<FeedsPage />} />
-        <Route path="/analytics" element={<AnalyticsPage />} />
-        <Route path="/audit" element={<AuditPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="*" element={<Navigate to="/tenants" replace />} />
+      <Route path="/login" element={<LoginPage />} />
+      <Route element={<RequireAuth />}>
+        <Route element={<Shell />}>
+          <Route path="/" element={<Navigate to="/tenants" replace />} />
+          <Route path="/tenants" element={<TenantsPage />} />
+          <Route path="/tenants/:tenantId" element={<GroupsPage />} />
+          <Route path="/tenants/:tenantId/groups/:groupId" element={<PolicyPage />} />
+          <Route path="/feeds" element={<FeedsPage />} />
+          <Route path="/analytics" element={<AnalyticsPage />} />
+          <Route path="/audit" element={<AuditPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="*" element={<Navigate to="/tenants" replace />} />
+        </Route>
       </Route>
     </Routes>
   );

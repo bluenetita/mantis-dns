@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from aegis_control.audit import write_audit_log
+from aegis_control.auth import get_current_user, require_role
 from aegis_control.config import FEED_STORAGE_DIR
 from aegis_control.db import models
 from aegis_control.db.session import get_db
@@ -64,13 +65,17 @@ class IngestOut(BaseModel):
 
 
 @router.post("/feeds", response_model=FeedOut, status_code=201)
-def create_feed(payload: FeedCreate, db: Session = Depends(get_db)) -> models.Feed:
+def create_feed(
+    payload: FeedCreate,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_role("admin", "operator")),
+) -> models.Feed:
     if db.get(models.Feed, payload.id) is not None:
         raise HTTPException(409, "feed with this id already exists")
     feed = models.Feed(**payload.model_dump(), from_catalog=False)
     db.add(feed)
     db.flush()
-    write_audit_log(db, "feed.create", "feed", feed.id, detail=f"category_id={feed.category_id} url={feed.url}")
+    write_audit_log(db, "feed.create", "feed", feed.id, detail=f"category_id={feed.category_id} url={feed.url}", actor=user.email)
     db.commit()
     db.refresh(feed)
     sync_feed_schedule(feed)
@@ -78,12 +83,17 @@ def create_feed(payload: FeedCreate, db: Session = Depends(get_db)) -> models.Fe
 
 
 @router.get("/feeds", response_model=list[FeedOut])
-def list_feeds(db: Session = Depends(get_db)) -> list[models.Feed]:
+def list_feeds(db: Session = Depends(get_db), _user: models.User = Depends(get_current_user)) -> list[models.Feed]:
     return list(db.query(models.Feed).all())
 
 
 @router.patch("/feeds/{feed_id}", response_model=FeedOut)
-def update_feed(feed_id: str, payload: FeedUpdate, db: Session = Depends(get_db)) -> models.Feed:
+def update_feed(
+    feed_id: str,
+    payload: FeedUpdate,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_role("admin", "operator")),
+) -> models.Feed:
     """Toggle enabled, change interval/url/etc — the UI's main feed-config
     surface. Catalog feeds can be edited/disabled here too; only their
     initial seeding is special-cased, not ongoing management."""
@@ -95,7 +105,7 @@ def update_feed(feed_id: str, payload: FeedUpdate, db: Session = Depends(get_db)
     for field, value in changes.items():
         setattr(feed, field, value)
 
-    write_audit_log(db, "feed.update", "feed", feed.id, detail=str(changes))
+    write_audit_log(db, "feed.update", "feed", feed.id, detail=str(changes), actor=user.email)
     db.commit()
     db.refresh(feed)
     sync_feed_schedule(feed)
@@ -103,18 +113,26 @@ def update_feed(feed_id: str, payload: FeedUpdate, db: Session = Depends(get_db)
 
 
 @router.delete("/feeds/{feed_id}", status_code=204)
-def delete_feed(feed_id: str, db: Session = Depends(get_db)) -> None:
+def delete_feed(
+    feed_id: str,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_role("admin", "operator")),
+) -> None:
     feed = db.get(models.Feed, feed_id)
     if feed is None:
         raise HTTPException(404, "feed not found")
     unschedule_feed(feed_id)
-    write_audit_log(db, "feed.delete", "feed", feed.id, detail=f"category_id={feed.category_id}")
+    write_audit_log(db, "feed.delete", "feed", feed.id, detail=f"category_id={feed.category_id}", actor=user.email)
     db.delete(feed)
     db.commit()
 
 
 @router.post("/feeds/{feed_id}/ingest", response_model=IngestOut)
-async def ingest_feed(feed_id: str, db: Session = Depends(get_db)) -> IngestOut:
+async def ingest_feed(
+    feed_id: str,
+    db: Session = Depends(get_db),
+    _user: models.User = Depends(require_role("admin", "operator")),
+) -> IngestOut:
     feed = db.get(models.Feed, feed_id)
     if feed is None:
         raise HTTPException(404, "feed not found")

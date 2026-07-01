@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
+from aegis_control.auth import require_role
 from aegis_control.db import models
 from aegis_control.db.session import get_db
 
@@ -31,6 +32,7 @@ def list_audit_log(
     limit: int = 100,
     resource_type: str | None = None,
     db: Session = Depends(get_db),
+    _user: models.User = Depends(require_role("admin", "operator")),
 ) -> list[models.AuditLog]:
     query = db.query(models.AuditLog)
     if resource_type:

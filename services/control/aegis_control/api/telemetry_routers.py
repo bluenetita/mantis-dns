@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from aegis_control.auth import get_current_user
 from aegis_control.db import models
 from aegis_control.db.session import get_db
 
@@ -71,7 +72,9 @@ def ingest_query_events(payload: QueryEventBatch, db: Session = Depends(get_db))
 
 
 @router.get("/groups/{group_id}/top-domains", response_model=list[TopDomain])
-def top_domains(group_id: str, limit: int = 20, db: Session = Depends(get_db)) -> list[TopDomain]:
+def top_domains(
+    group_id: str, limit: int = 20, db: Session = Depends(get_db), _user: models.User = Depends(get_current_user)
+) -> list[TopDomain]:
     rows = db.execute(
         select(
             models.QueryEvent.qname,
@@ -87,7 +90,7 @@ def top_domains(group_id: str, limit: int = 20, db: Session = Depends(get_db)) -
 
 
 @router.get("/analytics/summary", response_model=AnalyticsSummary)
-def analytics_summary(db: Session = Depends(get_db)) -> AnalyticsSummary:
+def analytics_summary(db: Session = Depends(get_db), _user: models.User = Depends(get_current_user)) -> AnalyticsSummary:
     """Org-wide rollup across all tenants/groups. Postgres for now (design.md
     §6: Kafka -> ClickHouse is the at-scale target); fine at current volumes."""
     total = db.query(func.count(models.QueryEvent.id)).scalar() or 0
@@ -126,7 +129,9 @@ def analytics_summary(db: Session = Depends(get_db)) -> AnalyticsSummary:
 
 
 @router.get("/analytics/timeseries", response_model=list[TimeseriesPoint])
-def analytics_timeseries(hours: int = 24, db: Session = Depends(get_db)) -> list[TimeseriesPoint]:
+def analytics_timeseries(
+    hours: int = 24, db: Session = Depends(get_db), _user: models.User = Depends(get_current_user)
+) -> list[TimeseriesPoint]:
     """Hourly query volume for the last `hours` hours, org-wide. Buckets with
     zero queries are included (not just present-in-DB rows) so charts don't
     show misleading gaps."""
@@ -162,7 +167,7 @@ def analytics_timeseries(hours: int = 24, db: Session = Depends(get_db)) -> list
 
 
 @router.get("/analytics/by-group", response_model=list[GroupBreakdown])
-def analytics_by_group(db: Session = Depends(get_db)) -> list[GroupBreakdown]:
+def analytics_by_group(db: Session = Depends(get_db), _user: models.User = Depends(get_current_user)) -> list[GroupBreakdown]:
     rows = db.execute(
         select(
             models.QueryEvent.group_id,
