@@ -30,6 +30,7 @@ Epic G: Management UI — prototype (TS)         (Sprints 3-6, parallel)
 Epic H: HA / multi-node / Proxmox profile      (Sprints 8-9)
 Epic I: Migration tooling + cutover            (Sprint 10)
 Epic J: Enterprise UI redesign (TS)            (Sprints 11-13) — see design.md §19
+Epic K: SIEM integration                       (Sprints 14-16) — see design.md §20
 ```
 
 > **UI status (logged gap):** Epic G delivered a *working prototype* (prompt/alert,
@@ -189,6 +190,42 @@ The prototype UI (Epic G) proved the API contract but is not enterprise-grade. T
 - [ ] Hardening: WCAG 2.1 AA audit, i18n scaffolding, Vitest + Playwright + visual-regression tests, bundle-size budget in CI.
 
 **Exit criteria:** WCAG AA pass, E2E green, performance budget enforced; the console is something an enterprise would procure.
+
+---
+
+## Epic K — SIEM integration (Sprints 14–16)
+
+Full architecture and data model: **design.md §20**.
+
+The DNS query stream is the most complete network telemetry source in the stack. This epic exposes it to any SIEM via a cursor-based pull API and HMAC-signed webhook push, in JSON and CEF formats, with enriched event fields (client IP, matched category, feed, latency) that make the data actionable without post-processing.
+
+### Sprint 14 — Event enrichment + pull API
+
+- [ ] **QueryEvent schema enrichment** (Postgres + Rust): add `client_ip`, `qtype`, `response_code`, `matched_category`, `matched_feed_id`, `latency_us`, `cache_hit`, `tenant_id` (denormalized). Rust filter node populates all fields before telemetry emit.
+- [ ] **Pull API** `GET /api/v1/siem/events`: cursor-based (`after_id`), `limit` (max 10k), filters (`tenant_id`, `group_id`, `decision`, `since`, `until`), `format=json|cef`. Auth: operator+.
+- [ ] **CEF serialization**: map enriched fields to CEF extension keys per design.md §20.5.
+- [ ] **Analytics page refresh**: enrich existing timeseries/by-group views with new fields (category breakdown, top clients by query volume).
+
+**Exit criteria:** `curl /api/v1/siem/events?format=cef` returns valid CEF lines with all enriched fields populated from a live DNS query; cursor advances correctly across pages; format verified against CEF spec.
+
+### Sprint 15 — Webhook push + Settings UI
+
+- [ ] **`SiemWebhook` model** (Postgres): url, secret (encrypted at rest), format, batch_size, flush_interval_s, filter_decision, enabled, delivery state.
+- [ ] **Delivery engine** (Python APScheduler job): batch events since last cursor, POST with HMAC-SHA256 `X-Aegis-Signature`, retry with exponential backoff (5 s / 30 s / 2 min / 10 min / 1 h), disable after 6 consecutive failures + audit log entry.
+- [ ] **Settings UI — SIEM section**: add/edit/delete webhook configs, enable/disable, "send test event" button, last-delivery timestamp + last-error display.
+- [ ] **Webhook audit trail**: every delivery attempt (success + failure) recorded in `AuditLog`.
+
+**Exit criteria:** configure a webhook in UI → test-event button triggers a delivery → Splunk/Elastic/webhook.site receives valid signed JSON batch; disable after failure threshold verified by test.
+
+### Sprint 16 — Client registry
+
+- [ ] **`ClientEntry` model**: `ip`, `hostname`, `owner`, `device_type`, `tags`, `last_seen`, `group_id`, `tenant_id`.
+- [ ] **Auto-discovery**: control plane updates `last_seen` and creates stub entries (hostname/owner null) for any `client_ip` not yet in the registry on query event ingest.
+- [ ] **Client registry API**: CRUD (`GET /api/v1/clients`, `PUT /api/v1/clients/{ip}`, `DELETE`), bulk CSV import endpoint.
+- [ ] **UI**: Clients page under each tenant — table of known/unknown clients, edit hostname/owner/tags, mark as registered, filter by "unregistered".
+- [ ] **Event enrichment**: embed `client_name`, `owner`, `device_type`, `tags` in all SIEM exports once registered.
+
+**Exit criteria:** register a client IP via UI → next query event export for that IP contains `client_name` and `owner`; unregistered IPs surface in "unknown clients" list.
 
 ---
 

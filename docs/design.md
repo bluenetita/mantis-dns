@@ -1,8 +1,8 @@
 # Enterprise DNS Filtering Platform — Design Document
 
 **Codename:** Aegis-DNS
-**Status:** Draft v1.1
-**Date:** 2026-06-30
+**Status:** Draft v1.2
+**Date:** 2026-07-01
 **Audience:** Platform engineering, network security, SRE
 
 > **Deployment profiles.** The platform targets two profiles from one codebase:
@@ -149,10 +149,12 @@ Scaling: add nodes behind anycast/LB. No coordination needed — pure function o
 
 ### 5.4 Telemetry pipeline
 
-- Query events → message bus (Kafka or NATS JetStream), partitioned by tenant.
-- Stream processor enriches (geo, category) → **ClickHouse** for high-cardinality, fast analytical query logs with TTL-based retention.
+- Query events are **enriched at the filter node** before leaving the data plane: client IP, query type, response code, matched category, matched feed ID, and resolution latency are attached at source — not inferred later from partial data.
+- Enriched events → message bus (Kafka or NATS JetStream), partitioned by tenant.
+- Stream processor → **ClickHouse** for high-cardinality, fast analytical query logs with TTL-based retention.
 - **Prometheus** for node/system metrics; **OpenTelemetry** traces on the resolve path; **Loki/ELK** for operational logs.
 - Dashboards (Grafana): QPS, block ratio, cache hit ratio, p50/p99 latency, upstream health, per-tenant volume.
+- **SIEM export layer** (§20): query event stream exposed via pull API (cursor-based REST) and push webhook, in JSON or CEF format, so any SIEM can consume without a custom connector.
 
 ---
 
@@ -166,6 +168,7 @@ Scaling: add nodes behind anycast/LB. No coordination needed — pure function o
 | Shared cache | Redis Cluster | Cross-node DNS cache | Sharded + replicas |
 | Query logs | ClickHouse | Analytics, search, retention | Sharded + replicated |
 | Audit | Append-only (Postgres/ClickHouse + object archive) | Compliance | WORM archive |
+| SIEM config | PostgreSQL | Webhook endpoints, delivery state, cursor | Same as source of truth |
 | Secrets | Vault / cloud KMS | Keys, upstream creds | HA Vault |
 
 **Key principle:** the hot DNS path depends on *none* of these synchronously. It reads only the in-memory policy bundle and local cache. Control/management stores being down degrades management, not resolution.
@@ -610,4 +613,237 @@ UI-0 is the unlock and should land before piling on features — every feature b
 
 ---
 
-*End of document.*
+## 20. SIEM Integration
+
+Enterprise DNS filtering produces the highest-fidelity network telemetry available: every DNS query from every device, timestamped to the microsecond, with a policy decision attached. That data belongs in the SIEM, not siloed in Aegis. This section defines the integration architecture.
+
+---
+
+### 20.1 Design principles
+
+1. **Enrich at source, not at the SIEM.** The filter node has full context (client IP, matched category, matched feed, latency) that the SIEM cannot reconstruct from raw DNS traffic. Enrichment at the SIEM requires custom parsers and is fragile; enrichment at the filter node is authoritative.
+2. **Both pull and push.** Pull (REST cursor API) works with any SIEM that has an HTTP poller — zero additional infrastructure. Push (webhook) covers real-time requirements and SIEMs that only receive. The same enriched event model feeds both.
+3. **Standard formats.** JSON for API-native SIEMs (Elastic, Splunk HEC, Panther, Chronicle). CEF (Common Event Format) for legacy SIEMs (ArcSight, QRadar, many MSSPs). Format is a serialization choice, not a separate pipeline.
+4. **Delivery guarantees.** At-least-once delivery with idempotency keys. Cursor-based pull is inherently resumable. Webhook push includes retry with exponential backoff and a dead-letter log visible in the UI.
+5. **No performance impact on DNS path.** SIEM export is fully async and decoupled from query resolution. A SIEM outage or slow consumer cannot increase DNS latency.
+
+---
+
+### 20.2 Enriched query event schema
+
+The filter node emits this event for every resolved query. All fields populated at the Rust layer before the event enters the async telemetry channel.
+
+```
+QueryEvent {
+    // identity
+    id              UUID            // globally unique, used as idempotency key
+    occurred_at     timestamp(µs)   // UTC, microsecond precision
+    tenant_id       UUID            // denormalized — no join needed at SIEM
+    tenant_name     string
+    group_id        UUID
+    group_name      string
+
+    // client
+    client_ip       string          // actual VPN client IP (e.g. 10.8.1.47)
+    client_name     string | null   // resolved from client registry if registered
+
+    // query
+    qname           string          // queried domain, lowercased, trailing dot stripped
+    qtype           string          // "A" | "AAAA" | "MX" | "TXT" | "CNAME" | …
+    query_id        uint16          // DNS wire protocol ID (for correlation with pcap)
+
+    // decision
+    decision        "allow" | "block"
+    matched_rule    "category" | "override_allow" | "override_deny" | "default"
+    matched_category string | null  // e.g. "malware", "adult", "gambling"
+    matched_feed_id  string | null  // e.g. "urlhaus-malware"
+
+    // response
+    response_code   "NOERROR" | "NXDOMAIN" | "REFUSED" | "SERVFAIL"
+    upstream_used   string | null   // DoT resolver hostname (if forwarded)
+    cache_hit       bool
+    latency_us      uint32          // total resolution latency in microseconds
+}
+```
+
+**Current implementation state (Sprint 6 baseline):** `group_id`, `qname`, `decision`, `occurred_at` are stored. All other fields are targeted for Sprint 14 enrichment work.
+
+---
+
+### 20.3 Pull API (cursor-based REST)
+
+```
+GET /api/v1/siem/events
+    ?after_id=<uuid>          cursor (exclusive); omit for first page
+    &limit=<int>              default 500, max 10 000
+    &tenant_id=<uuid>         filter (admin sees all tenants; operator sees own)
+    &group_id=<uuid>          filter
+    &decision=block|allow     filter
+    &since=<ISO8601>          lower-bound timestamp (alternative to cursor for initial backfill)
+    &until=<ISO8601>          upper-bound timestamp
+    &format=json|cef          default json
+```
+
+Response (JSON):
+```json
+{
+  "events": [ ...QueryEvent... ],
+  "next_cursor": "018f4a...",      // null if no more events
+  "total_in_window": 3847          // informational, not guaranteed exact
+}
+```
+
+Response (CEF, `format=cef`):
+```
+CEF:0|AegisDNS|aegis-filter|1.0|DNS_QUERY|DNS query event|3|
+  start=1719830400000000 
+  src=10.8.1.47 shost=fabio-laptop 
+  dhost=casino.com
+  cs1=gambling cs1Label=matchedCategory
+  cs2=urlhaus-malware cs2Label=matchedFeed
+  act=block
+  cn1=1240 cn1Label=latencyMicros
+  tenantId=9319a77d tenant=acme-corp
+  groupId=3cdf4d87 grp=employees
+  rt=1719830400000
+```
+
+**Pagination contract:**
+- `after_id` is the `id` of the last event the caller processed. Exclusive — the next page starts *after* that event.
+- Pages are ordered by `(occurred_at ASC, id ASC)` — stable across retries.
+- The cursor survives server restarts; it is just a UUID, not a session token.
+- SIEM pollers should store `next_cursor` durably between poll cycles to avoid re-processing on restart.
+
+**Auth:** standard Bearer JWT (§9 / Sprint 8). Operators see only their own tenants. Admins see all.
+
+---
+
+### 20.4 Webhook push
+
+#### Configuration model
+
+```
+SiemWebhook {
+    id              UUID
+    tenant_id       UUID | null     // null = org-wide (admin only)
+    name            string          // human label, e.g. "Splunk HEC prod"
+    url             string          // HTTPS only in production
+    secret          string          // stored encrypted; used for HMAC-SHA256 signing
+    format          "json" | "cef"
+    batch_size      int             // events per POST, default 200, max 2000
+    flush_interval_s int            // max seconds between POSTs, default 30
+    enabled         bool
+    filter_decision "all" | "block" | "allow"  // only push matching decisions
+    last_delivered_at  timestamp | null
+    last_error         string | null
+    consecutive_failures int        // reset to 0 on success
+}
+```
+
+#### Delivery
+
+Each POST to the webhook URL:
+```
+POST <url>
+Content-Type: application/json          (or text/plain for CEF)
+X-Aegis-Signature: sha256=<hex>         HMAC-SHA256 of raw body, keyed on secret
+X-Aegis-Delivery-Id: <uuid>             idempotency key for this batch
+X-Aegis-Timestamp: <unix_ms>
+
+{ "events": [...], "delivery_id": "...", "cursor": "..." }
+```
+
+The receiving SIEM must return 2xx within 10 s. On failure:
+- Retry with exponential backoff: 5 s, 30 s, 2 min, 10 min, 1 h.
+- After 6 consecutive failures, mark webhook `enabled=false` and emit an alert to the Aegis audit log + (if configured) an operator notification.
+- Backlog is bounded: if the webhook is disabled or consistently failing, events are still available via the pull API.
+
+#### HMAC verification (receiver side)
+```python
+import hmac, hashlib
+expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+received = request.headers["X-Aegis-Signature"].removeprefix("sha256=")
+assert hmac.compare_digest(expected, received)
+```
+
+---
+
+### 20.5 Format details — CEF mapping
+
+| CEF field | Aegis field | Notes |
+|---|---|---|
+| `start` | `occurred_at` | epoch milliseconds |
+| `src` | `client_ip` | |
+| `shost` | `client_name` | omitted if null |
+| `dhost` | `qname` | |
+| `act` | `decision` | "block" / "allow" |
+| `cs1` / `cs1Label` | `matched_category` / "matchedCategory" | |
+| `cs2` / `cs2Label` | `matched_feed_id` / "matchedFeed" | |
+| `cs3` / `cs3Label` | `qtype` / "queryType" | |
+| `cn1` / `cn1Label` | `latency_us` / "latencyMicros" | |
+| `cn2` / `cn2Label` | `cache_hit` (0/1) / "cacheHit" | |
+| `outcome` | `response_code` | |
+| `deviceExternalId` | `id` | UUID, idempotency key |
+
+CEF severity mapping: `block` → `7` (High), `allow` → `3` (Low).
+
+---
+
+### 20.6 Client registry
+
+Client identity is the missing link between a raw IP in a query event and a meaningful SIEM alert. The client registry bridges them.
+
+```
+ClientEntry {
+    id          UUID
+    tenant_id   UUID
+    group_id    UUID
+    ip          string          // VPN-assigned IP (e.g. 10.8.1.47); unique within tenant
+    hostname    string | null   // FQDN if known (e.g. fabio-laptop.corp.local)
+    owner       string | null   // email or username
+    device_type string | null   // "laptop" | "server" | "mobile" | "iot"
+    tags        string[]        // freeform (e.g. ["contractor", "unmanaged"])
+    last_seen   timestamp       // updated each time a query event is processed
+    registered_at timestamp
+    registered_by string        // actor (from audit)
+}
+```
+
+**Auto-discovery:** filter nodes emit `client_ip` on every query. The control plane surfaces any IP not in the registry as an "unregistered client" in the UI and in query events (`client_name = null`). Operators register them on-demand or via bulk import.
+
+**SIEM value:** `client_name`, `owner`, `device_type`, and `tags` are embedded in every exported query event once registered, enabling SIEM rules like:
+- *"Block event from device tagged `unmanaged` targeting category `malware`"* → P1 alert.
+- *"Any contractor device querying internal hostnames"* → anomaly flag.
+
+---
+
+### 20.7 SIEM connector compatibility
+
+| SIEM | Integration method | Format | Notes |
+|---|---|---|---|
+| Splunk | HTTP Event Collector (HEC) webhook | JSON | Set `url` to HEC endpoint, token in header via `secret` field; or use pull with Splunk's REST input |
+| Elastic (SIEM/Security) | Webhook → Logstash/Elastic Agent HTTP input | JSON | Or use pull with Filebeat HTTP poller |
+| Microsoft Sentinel | Webhook → Log Analytics Data Collector API | JSON (CEF optionally via AMA) | Azure Function as relay is optional |
+| IBM QRadar | Pull API → Universal DSM | CEF (`format=cef`) | Or syslog relay (future §20.8) |
+| Palo Alto Cortex XSIAM | Webhook | JSON | Native HTTP event ingestion |
+| Chronicle (Google SecOps) | Webhook | JSON (UDM mapping via ingestion API) | |
+| Panther | Pull API | JSON | Native REST poller |
+| Any MSSP | Pull API | CEF | MSSP controls polling cadence |
+
+---
+
+### 20.8 Future: syslog export
+
+Syslog (RFC 5424, TLS) is a thin adapter on top of the same enriched event model — iterate the event stream, serialize as CEF, and write to a TCP/TLS socket. Not in scope for Sprint 14 but the data model is compatible. The control-plane config gains a `SiemSyslog` table parallel to `SiemWebhook`.
+
+---
+
+### 20.9 Sprint plan update
+
+| Sprint | Scope |
+|---|---|
+| **Sprint 14** | QueryEvent enrichment (client_ip, qtype, rcode, matched_category, matched_feed_id, latency_us) in Rust filter node + Postgres schema. Pull API `/api/v1/siem/events` with cursor pagination, tenant/decision filters, JSON + CEF format. Auth gated (operator+). |
+| **Sprint 15** | `SiemWebhook` model + delivery engine (async, retry/backoff, HMAC signing). Webhook management UI in Settings. Delivery status + last-error surface. |
+| **Sprint 16** | Client registry (CRUD API + UI, auto-discovery from query events, `client_name` embedded in events). |
+
+---
