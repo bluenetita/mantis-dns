@@ -7,6 +7,8 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
 from aegis_control.auth import get_current_user
 from aegis_control.db import models
 from aegis_control.db.session import get_db
@@ -97,6 +99,27 @@ def ingest_query_events(payload: QueryEventBatch, db: Session = Depends(get_db))
                 latency_us=event.latency_us,
             )
         )
+    # Sprint 16 (design.md §20.6) auto-discovery: touch/create a stub
+    # ClientEntry for every unique (tenant_id, ip) seen in this batch, so
+    # unregistered clients surface in the UI without the DNS hot path ever
+    # having to know about the registry.
+    seen: dict[tuple[str, str], str] = {}
+    for event in payload.events:
+        tenant_id = tenant_by_group.get(event.group_id)
+        if event.client_ip and tenant_id:
+            seen[(tenant_id, event.client_ip)] = event.group_id
+    now = datetime.now(timezone.utc)
+    for (tenant_id, ip), group_id in seen.items():
+        stmt = (
+            pg_insert(models.ClientEntry)
+            .values(tenant_id=tenant_id, ip=ip, group_id=group_id, last_seen=now)
+            .on_conflict_do_update(
+                index_elements=["tenant_id", "ip"],
+                set_={"last_seen": now, "group_id": group_id},
+            )
+        )
+        db.execute(stmt)
+
     db.commit()
     return {"accepted": len(payload.events)}
 

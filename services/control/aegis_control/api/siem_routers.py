@@ -1,7 +1,10 @@
 """SIEM export — pull API (design.md §20.3). Cursor-based, JSON or CEF.
 
-Webhook push (§20.4) and the client registry (§20.6) are later Sprint-15/16
-items; this module is the Sprint-14 foundation both depend on.
+Sprint 16 (§20.6): events are enriched with client registry data
+(client_name/owner/device_type/tags) where the client IP has been
+registered — this is what turns a raw client IP into an actionable SIEM
+alert. `build_siem_events` is shared with the webhook delivery engine
+(siem_delivery.py) so both export paths enrich identically.
 """
 
 from __future__ import annotations
@@ -29,6 +32,10 @@ class SiemEvent(BaseModel):
     tenant_id: str | None
     group_id: str
     client_ip: str | None
+    client_name: str | None = None
+    owner: str | None = None
+    device_type: str | None = None
+    tags: list[str] = []
     qname: str
     qtype: str | None
     decision: str
@@ -49,12 +56,58 @@ class SiemEventsPage(BaseModel):
     total_in_window: int
 
 
-def _to_cef(e: models.QueryEvent) -> str:
-    """Maps an enriched QueryEvent to a CEF:0 line per design.md §20.5."""
+def build_siem_events(db: Session, rows: list[models.QueryEvent]) -> list[SiemEvent]:
+    """Batch-enriches QueryEvent rows with client registry data (one query
+    for the whole batch, not one per row)."""
+    pairs = {(r.tenant_id, r.client_ip) for r in rows if r.tenant_id and r.client_ip}
+    clients: dict[tuple[str, str], models.ClientEntry] = {}
+    if pairs:
+        tenant_ids = {p[0] for p in pairs}
+        ips = {p[1] for p in pairs}
+        for c in (
+            db.query(models.ClientEntry)
+            .filter(models.ClientEntry.tenant_id.in_(tenant_ids), models.ClientEntry.ip.in_(ips))
+            .all()
+        ):
+            clients[(c.tenant_id, c.ip)] = c
+
+    events = []
+    for r in rows:
+        c = clients.get((r.tenant_id, r.client_ip)) if r.tenant_id and r.client_ip else None
+        events.append(
+            SiemEvent(
+                id=r.id,
+                seq=r.seq,
+                occurred_at=r.occurred_at,
+                tenant_id=r.tenant_id,
+                group_id=r.group_id,
+                client_ip=r.client_ip,
+                client_name=c.hostname if c else None,
+                owner=c.owner if c else None,
+                device_type=c.device_type if c else None,
+                tags=c.tags if c else [],
+                qname=r.qname,
+                qtype=r.qtype,
+                decision=r.decision,
+                matched_rule=r.matched_rule,
+                matched_category=r.matched_category,
+                matched_feed_id=r.matched_feed_id,
+                response_code=r.response_code,
+                cache_hit=r.cache_hit,
+                latency_us=r.latency_us,
+            )
+        )
+    return events
+
+
+def _to_cef(e: SiemEvent) -> str:
+    """Maps an enriched SiemEvent to a CEF:0 line per design.md §20.5."""
     severity = 7 if e.decision == "block" else 3
     parts = [f"start={int(e.occurred_at.timestamp() * 1_000_000)}"]
     if e.client_ip:
         parts.append(f"src={e.client_ip}")
+    if e.client_name:
+        parts.append(f"shost={e.client_name}")
     parts.append(f"dhost={e.qname}")
     if e.matched_category:
         parts.append(f"cs1={e.matched_category} cs1Label=matchedCategory")
@@ -112,12 +165,13 @@ def list_siem_events(
 
     query = query.order_by(models.QueryEvent.seq.asc()).limit(limit)
     rows = list(db.execute(query).scalars().all())
+    events = build_siem_events(db, rows)
 
     if format == "cef":
-        return PlainTextResponse("\n".join(_to_cef(r) for r in rows), media_type="text/plain")
+        return PlainTextResponse("\n".join(_to_cef(e) for e in events), media_type="text/plain")
 
     return SiemEventsPage(
-        events=[SiemEvent.model_validate(r) for r in rows],
+        events=events,
         next_cursor=str(rows[-1].seq) if len(rows) == limit else None,
         total_in_window=len(rows),
     )

@@ -477,6 +477,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tenants/{tenant_id}/clients": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Clients */
+        get: operations["list_clients_api_v1_tenants__tenant_id__clients_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tenants/{tenant_id}/clients/{ip}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Register Client
+         * @description Upsert: registers a not-yet-seen IP directly (rather than requiring a
+         *     query event first) or edits an already-auto-discovered stub.
+         */
+        put: operations["register_client_api_v1_tenants__tenant_id__clients__ip__put"];
+        post?: never;
+        /** Delete Client */
+        delete: operations["delete_client_api_v1_tenants__tenant_id__clients__ip__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -553,6 +592,48 @@ export interface components {
             category_id: string;
             /** Action */
             action: string;
+        };
+        /** ClientOut */
+        ClientOut: {
+            /** Id */
+            id: string;
+            /** Tenant Id */
+            tenant_id: string;
+            /** Group Id */
+            group_id: string | null;
+            /** Ip */
+            ip: string;
+            /** Hostname */
+            hostname: string | null;
+            /** Owner */
+            owner: string | null;
+            /** Device Type */
+            device_type: string | null;
+            /** Tags */
+            tags: string[];
+            /**
+             * Last Seen
+             * Format: date-time
+             */
+            last_seen: string;
+            /** Registered At */
+            registered_at: string | null;
+            /** Registered By */
+            registered_by: string | null;
+        };
+        /** ClientUpsert */
+        ClientUpsert: {
+            /** Hostname */
+            hostname?: string | null;
+            /** Owner */
+            owner?: string | null;
+            /** Device Type */
+            device_type?: string | null;
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
         };
         /** FeedCreate */
         FeedCreate: {
@@ -1980,6 +2061,105 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TestDeliveryResult"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_clients_api_v1_tenants__tenant_id__clients_get: {
+        parameters: {
+            query?: {
+                unregistered_only?: boolean;
+            };
+            header?: never;
+            path: {
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_client_api_v1_tenants__tenant_id__clients__ip__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_id: string;
+                ip: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClientUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_client_api_v1_tenants__tenant_id__clients__ip__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_id: string;
+                ip: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

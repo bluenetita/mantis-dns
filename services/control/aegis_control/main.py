@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from aegis_control.api.audit_routers import router as audit_router
 from aegis_control.api.auth_routers import router as auth_router
+from aegis_control.api.client_routers import router as client_router
 from aegis_control.api.feed_routers import router as feed_router
 from aegis_control.api.routers import router as api_router
 from aegis_control.api.siem_routers import router as siem_router
@@ -39,6 +40,7 @@ app.include_router(audit_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(siem_router, prefix="/api/v1")
 app.include_router(siem_webhook_router, prefix="/api/v1")
+app.include_router(client_router, prefix="/api/v1")
 
 
 @app.on_event("startup")

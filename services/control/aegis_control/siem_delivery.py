@@ -19,7 +19,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from aegis_control.api.siem_routers import SiemEvent, _to_cef
+from aegis_control.api.siem_routers import SiemEvent, _to_cef, build_siem_events
 from aegis_control.audit import write_audit_log
 from aegis_control.crypto import decrypt_secret
 from aegis_control.db import models
@@ -33,11 +33,11 @@ def _sign(secret: str, body: bytes) -> str:
     return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
 
-def _serialize(webhook: models.SiemWebhook, events: list[models.QueryEvent], delivery_id: str) -> tuple[bytes, str]:
+def _serialize_events(webhook: models.SiemWebhook, events: list[SiemEvent], delivery_id: str) -> tuple[bytes, str]:
     if webhook.format == "cef":
         return "\n".join(_to_cef(e) for e in events).encode(), "text/plain"
     payload = {
-        "events": [jsonlib.loads(SiemEvent.model_validate(e).model_dump_json()) for e in events],
+        "events": [jsonlib.loads(e.model_dump_json()) for e in events],
         "delivery_id": delivery_id,
         "cursor": str(events[-1].seq),
     }
@@ -61,14 +61,17 @@ async def _post(webhook: models.SiemWebhook, body: bytes, content_type: str, cli
 
 async def deliver_test_event(webhook: models.SiemWebhook, client: httpx.AsyncClient) -> int:
     """One synthetic event, used by the Settings UI's "send test event"
-    button. Never touches the webhook's real delivery cursor."""
+    button. Never touches the webhook's real delivery cursor or the client
+    registry — deliberately not a real ClientEntry lookup."""
     now = datetime.now(timezone.utc)
-    fake = models.QueryEvent(
+    fake = SiemEvent(
         id="00000000-0000-0000-0000-000000000000",
         seq=0,
-        group_id="test",
+        occurred_at=now,
         tenant_id=webhook.tenant_id,
+        group_id="test",
         client_ip="203.0.113.1",
+        client_name="test-client",
         qname="siem-test-event.aegis.local.",
         qtype="A",
         decision="block",
@@ -78,10 +81,9 @@ async def deliver_test_event(webhook: models.SiemWebhook, client: httpx.AsyncCli
         response_code="NXDomain",
         cache_hit=False,
         latency_us=1234,
-        occurred_at=now,
     )
     delivery_id = str(uuid4())
-    body, content_type = _serialize(webhook, [fake], delivery_id)
+    body, content_type = _serialize_events(webhook, [fake], delivery_id)
     return await _post(webhook, body, content_type, client)
 
 
@@ -108,13 +110,14 @@ async def _process_webhook(db: Session, webhook: models.SiemWebhook, client: htt
     if webhook.filter_decision != "all":
         query = query.where(models.QueryEvent.decision == webhook.filter_decision)
     query = query.order_by(models.QueryEvent.seq.asc()).limit(webhook.batch_size)
-    events = list(db.execute(query).scalars().all())
-    if not events:
+    rows = list(db.execute(query).scalars().all())
+    if not rows:
         return
+    events = build_siem_events(db, rows)
 
     try:
         delivery_id = str(uuid4())
-        body, content_type = _serialize(webhook, events, delivery_id)
+        body, content_type = _serialize_events(webhook, events, delivery_id)
         await _post(webhook, body, content_type, client)
     except Exception as e:
         webhook.consecutive_failures += 1

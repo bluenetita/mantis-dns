@@ -8,6 +8,7 @@ import { PolicyPage } from "./pages/PolicyPage";
 import { FeedsPage } from "./pages/FeedsPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { AuditPage } from "./pages/AuditPage";
+import { ClientsPage } from "./pages/ClientsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
 export default function App() {
@@ -19,6 +20,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/tenants" replace />} />
           <Route path="/tenants" element={<TenantsPage />} />
           <Route path="/tenants/:tenantId" element={<GroupsPage />} />
+          <Route path="/tenants/:tenantId/clients" element={<ClientsPage />} />
           <Route path="/tenants/:tenantId/groups/:groupId" element={<PolicyPage />} />
           <Route path="/feeds" element={<FeedsPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />

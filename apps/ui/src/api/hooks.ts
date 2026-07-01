@@ -10,6 +10,7 @@ type FeedCreate = components["schemas"]["FeedCreate"];
 type FeedUpdate = components["schemas"]["FeedUpdate"];
 type SiemWebhookCreate = components["schemas"]["SiemWebhookCreate"];
 type SiemWebhookUpdate = components["schemas"]["SiemWebhookUpdate"];
+type ClientUpsert = components["schemas"]["ClientUpsert"];
 
 // --- Tenants ---
 
@@ -257,5 +258,48 @@ export function useTestSiemWebhook() {
   return useMutation({
     mutationFn: async (webhookId: string) =>
       unwrap(await apiClient.POST("/api/v1/siem/webhooks/{webhook_id}/test", { params: { path: { webhook_id: webhookId } } })),
+  });
+}
+
+// --- Client registry ---
+
+export function useClients(tenantId: string | undefined, unregisteredOnly = false) {
+  return useQuery({
+    queryKey: ["clients", tenantId, unregisteredOnly],
+    queryFn: async () =>
+      unwrap(
+        await apiClient.GET("/api/v1/tenants/{tenant_id}/clients", {
+          params: { path: { tenant_id: tenantId! }, query: { unregistered_only: unregisteredOnly } },
+        })
+      ),
+    enabled: !!tenantId,
+    refetchInterval: 15_000,
+  });
+}
+
+export function useRegisterClient(tenantId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ ip, body }: { ip: string; body: ClientUpsert }) =>
+      unwrap(
+        await apiClient.PUT("/api/v1/tenants/{tenant_id}/clients/{ip}", {
+          params: { path: { tenant_id: tenantId!, ip } },
+          body,
+        })
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["clients", tenantId] }),
+  });
+}
+
+export function useDeleteClient(tenantId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (ip: string) =>
+      unwrap(
+        await apiClient.DELETE("/api/v1/tenants/{tenant_id}/clients/{ip}", {
+          params: { path: { tenant_id: tenantId!, ip } },
+        })
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["clients", tenantId] }),
   });
 }

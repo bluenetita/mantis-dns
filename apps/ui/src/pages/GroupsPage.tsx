@@ -2,7 +2,7 @@ import { Button, Group, Stack, Table, Title, Card, Text, Loader, Center, TextInp
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
-import { IconPlus } from "@tabler/icons-react";
+import { IconPlus, IconUsers } from "@tabler/icons-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useCreateGroup, useGroups, useTenants } from "../api/hooks";
 import { useAuth } from "../auth/AuthContext";
@@ -79,11 +79,16 @@ export function GroupsPage() {
 
       <Group justify="space-between">
         <Title order={2}>Groups</Title>
-        {canWrite && (
-          <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
-            New group
+        <Group>
+          <Button variant="default" leftSection={<IconUsers size={16} />} onClick={() => navigate(`/tenants/${tenantId}/clients`)}>
+            Clients
           </Button>
-        )}
+          {canWrite && (
+            <Button leftSection={<IconPlus size={16} />} onClick={openCreateModal}>
+              New group
+            </Button>
+          )}
+        </Group>
       </Group>
 
       {groups?.length === 0 && (

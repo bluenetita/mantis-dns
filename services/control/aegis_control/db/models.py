@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import BigInteger, ForeignKey, Identity, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -145,6 +146,30 @@ class SiemWebhook(Base):
     last_error: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     consecutive_failures: Mapped[int] = mapped_column(default=0)
     next_retry_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
+class ClientEntry(Base):
+    """Client registry (design.md §20.6, Sprint 16) — the bridge between a
+    raw client IP in a QueryEvent and a meaningful SIEM alert. Rows are
+    auto-created (stub, hostname/owner null) by the query-event ingest path
+    the first time a given (tenant_id, ip) is seen; operators fill in the
+    rest via the registry API/UI."""
+
+    __tablename__ = "client_entries"
+    __table_args__ = (UniqueConstraint("tenant_id", "ip", name="uq_client_tenant_ip"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    group_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    ip: Mapped[str] = mapped_column(String(64), index=True)
+    hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    device_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    tags: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    last_seen: Mapped[datetime] = mapped_column(default=_now)
+    registered_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    registered_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
