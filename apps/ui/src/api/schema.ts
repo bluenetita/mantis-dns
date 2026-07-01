@@ -420,6 +420,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/siem/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Webhooks */
+        get: operations["list_webhooks_api_v1_siem_webhooks_get"];
+        put?: never;
+        /** Create Webhook */
+        post: operations["create_webhook_api_v1_siem_webhooks_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/siem/webhooks/{webhook_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Webhook */
+        delete: operations["delete_webhook_api_v1_siem_webhooks__webhook_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Webhook */
+        patch: operations["update_webhook_api_v1_siem_webhooks__webhook_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/siem/webhooks/{webhook_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Webhook
+         * @description Sends one synthetic event to the configured URL, signed the same way
+         *     real batches are, without touching the webhook's delivery cursor.
+         */
+        post: operations["test_webhook_api_v1_siem_webhooks__webhook_id__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -732,6 +789,95 @@ export interface components {
             /** Group Id */
             group_id: string;
         };
+        /** SiemWebhookCreate */
+        SiemWebhookCreate: {
+            /** Tenant Id */
+            tenant_id?: string | null;
+            /** Name */
+            name: string;
+            /** Url */
+            url: string;
+            /** Secret */
+            secret: string;
+            /**
+             * Format
+             * @default json
+             * @enum {string}
+             */
+            format: "json" | "cef";
+            /**
+             * Batch Size
+             * @default 200
+             */
+            batch_size: number;
+            /**
+             * Flush Interval S
+             * @default 30
+             */
+            flush_interval_s: number;
+            /**
+             * Filter Decision
+             * @default all
+             * @enum {string}
+             */
+            filter_decision: "all" | "block" | "allow";
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+        };
+        /** SiemWebhookOut */
+        SiemWebhookOut: {
+            /** Id */
+            id: string;
+            /** Tenant Id */
+            tenant_id: string | null;
+            /** Name */
+            name: string;
+            /** Url */
+            url: string;
+            /** Format */
+            format: string;
+            /** Batch Size */
+            batch_size: number;
+            /** Flush Interval S */
+            flush_interval_s: number;
+            /** Filter Decision */
+            filter_decision: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Last Delivered At */
+            last_delivered_at: string | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Consecutive Failures */
+            consecutive_failures: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** SiemWebhookUpdate */
+        SiemWebhookUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Url */
+            url?: string | null;
+            /** Secret */
+            secret?: string | null;
+            /** Format */
+            format?: ("json" | "cef") | null;
+            /** Batch Size */
+            batch_size?: number | null;
+            /** Flush Interval S */
+            flush_interval_s?: number | null;
+            /** Filter Decision */
+            filter_decision?: ("all" | "block" | "allow") | null;
+            /** Enabled */
+            enabled?: boolean | null;
+        };
         /** TenantCreate */
         TenantCreate: {
             /** Name */
@@ -748,6 +894,15 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** TestDeliveryResult */
+        TestDeliveryResult: {
+            /** Success */
+            success: boolean;
+            /** Status Code */
+            status_code: number | null;
+            /** Error */
+            error: string | null;
         };
         /** TimeseriesPoint */
         TimeseriesPoint: {
@@ -1676,6 +1831,154 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_webhooks_api_v1_siem_webhooks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiemWebhookOut"][];
+                };
+            };
+        };
+    };
+    create_webhook_api_v1_siem_webhooks_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SiemWebhookCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiemWebhookOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_webhook_api_v1_siem_webhooks__webhook_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                webhook_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_webhook_api_v1_siem_webhooks__webhook_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                webhook_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SiemWebhookUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiemWebhookOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_webhook_api_v1_siem_webhooks__webhook_id__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                webhook_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestDeliveryResult"];
                 };
             };
             /** @description Validation Error */

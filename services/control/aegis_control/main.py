@@ -11,12 +11,14 @@ from aegis_control.api.auth_routers import router as auth_router
 from aegis_control.api.feed_routers import router as feed_router
 from aegis_control.api.routers import router as api_router
 from aegis_control.api.siem_routers import router as siem_router
+from aegis_control.api.siem_webhook_routers import router as siem_webhook_router
 from aegis_control.api.telemetry_routers import router as telemetry_router
 from aegis_control.auth import hash_password
 from aegis_control.db.models import Base, Feed, User
 from aegis_control.db.session import SessionLocal, engine
 from aegis_control.feeds.seed import seed_catalog
 from aegis_control.scheduler import schedule_feed, scheduler
+from aegis_control.siem_delivery import run_webhook_delivery_cycle
 
 app = FastAPI(title="Aegis-DNS Control Plane", version="0.1.0")
 
@@ -36,6 +38,7 @@ app.include_router(telemetry_router, prefix="/api/v1")
 app.include_router(audit_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(siem_router, prefix="/api/v1")
+app.include_router(siem_webhook_router, prefix="/api/v1")
 
 
 @app.on_event("startup")
@@ -62,6 +65,14 @@ def on_startup() -> None:
             )
     finally:
         db.close()
+
+    scheduler.add_job(
+        run_webhook_delivery_cycle,
+        "interval",
+        seconds=10,
+        id="siem-webhook-delivery",
+        replace_existing=True,
+    )
     scheduler.start()
 
 
