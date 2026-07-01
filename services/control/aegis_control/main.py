@@ -10,6 +10,7 @@ from aegis_control.api.audit_routers import router as audit_router
 from aegis_control.api.auth_routers import router as auth_router
 from aegis_control.api.feed_routers import router as feed_router
 from aegis_control.api.routers import router as api_router
+from aegis_control.api.siem_routers import router as siem_router
 from aegis_control.api.telemetry_routers import router as telemetry_router
 from aegis_control.auth import hash_password
 from aegis_control.db.models import Base, Feed, User
@@ -34,6 +35,7 @@ app.include_router(feed_router, prefix="/api/v1")
 app.include_router(telemetry_router, prefix="/api/v1")
 app.include_router(audit_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
+app.include_router(siem_router, prefix="/api/v1")
 
 
 @app.on_event("startup")

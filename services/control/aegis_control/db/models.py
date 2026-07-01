@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
+from sqlalchemy import BigInteger, ForeignKey, Identity, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -95,14 +95,31 @@ class PolicyOverride(Base):
 class QueryEvent(Base):
     """Lightweight query log. Sprint 6: Postgres. design.md §6 calls for
     Kafka -> ClickHouse at scale; this is the local-disk-storage-equivalent
-    stepping stone, same pattern as bundle/feed storage."""
+    stepping stone, same pattern as bundle/feed storage.
+
+    Sprint 14 (design.md §20): enriched with client/decision-detail fields so
+    the SIEM export API can hand a consuming SIEM actionable data without
+    post-processing. `seq` is a monotonic identity column used purely as the
+    SIEM pull API's pagination cursor — `id` (UUID) stays the public/external
+    identity, `seq` is never exposed as anything but an opaque cursor string.
+    """
 
     __tablename__ = "query_events"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(always=True), unique=True, index=True)
     group_id: Mapped[str] = mapped_column(String(36), index=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     qname: Mapped[str] = mapped_column(String(255))
+    qtype: Mapped[str | None] = mapped_column(String(16), nullable=True)
     decision: Mapped[str] = mapped_column(String(20))  # "allow" | "block"
+    matched_rule: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    matched_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    matched_feed_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    response_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    cache_hit: Mapped[bool | None] = mapped_column(nullable=True)
+    latency_us: Mapped[int | None] = mapped_column(nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(default=_now, index=True)
 
 

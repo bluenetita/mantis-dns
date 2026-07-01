@@ -9,9 +9,9 @@ pub mod metrics_init;
 mod router;
 mod telemetry;
 
-pub use telemetry::TelemetryEmitter;
+pub use telemetry::{QueryEventInput, TelemetryEmitter};
 
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -117,16 +117,36 @@ pub enum Decision {
     Block,
 }
 
+/// Sprint 14 (design.md §20): `decide()` now returns *why*, not just the
+/// verdict, so telemetry can tell a SIEM which rule fired and which feed
+/// supplied it, not just "blocked".
+pub struct DecisionOutcome {
+    pub decision: Decision,
+    pub matched_rule: &'static str,
+    pub matched_category: Option<String>,
+    pub matched_feed_id: Option<String>,
+}
+
 /// Lookup order per design.md §18.4: deny-override beats categories beats
 /// default-allow; allow-override always wins over everything else.
-pub fn decide(bundle: &Bundle, qname: &str) -> Decision {
+pub fn decide(bundle: &Bundle, qname: &str) -> DecisionOutcome {
     let qname = normalize(qname);
 
     if bundle.allow_overrides.iter().any(|d| normalize(d) == qname) {
-        return Decision::Allow;
+        return DecisionOutcome {
+            decision: Decision::Allow,
+            matched_rule: "override_allow",
+            matched_category: None,
+            matched_feed_id: None,
+        };
     }
     if bundle.deny_overrides.iter().any(|d| normalize(d) == qname) {
-        return Decision::Block;
+        return DecisionOutcome {
+            decision: Decision::Block,
+            matched_rule: "override_deny",
+            matched_category: None,
+            matched_feed_id: None,
+        };
     }
     for category in &bundle.categories {
         if category.action != aegis_bundle::Action::Block as i32 {
@@ -134,11 +154,22 @@ pub fn decide(bundle: &Bundle, qname: &str) -> Decision {
         }
         if let Some(bf) = BloomFilter::from_category(category) {
             if bf.might_contain(&qname) {
-                return Decision::Block;
+                return DecisionOutcome {
+                    decision: Decision::Block,
+                    matched_rule: "category",
+                    matched_category: Some(category.category_id.clone()),
+                    matched_feed_id: (!category.source_feed_id.is_empty())
+                        .then(|| category.source_feed_id.clone()),
+                };
             }
         }
     }
-    Decision::Allow
+    DecisionOutcome {
+        decision: Decision::Allow,
+        matched_rule: "default",
+        matched_category: None,
+        matched_feed_id: None,
+    }
 }
 
 fn normalize(domain: &str) -> String {
@@ -229,6 +260,7 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
         let response = build_response(
             &query,
             bundle.as_deref(),
+            peer.ip(),
             &state.cache,
             state.forwarder.as_ref(),
             &state.telemetry,
@@ -254,12 +286,13 @@ pub use router::{refresh_routes, routing_refresh_loop, run_router_udp_server, te
 pub(crate) async fn build_response(
     query: &Message,
     bundle: Option<&Bundle>,
+    client_ip: IpAddr,
     cache: &DnsCache,
     forwarder: &dyn Forwarder,
     telemetry: &TelemetryEmitter,
 ) -> Message {
     let start = std::time::Instant::now();
-    let response = build_response_inner(query, bundle, cache, forwarder, telemetry).await;
+    let response = build_response_inner(query, bundle, client_ip, cache, forwarder, telemetry, start).await;
     metrics::histogram!("aegis_dns_response_seconds").record(start.elapsed().as_secs_f64());
     response
 }
@@ -267,9 +300,11 @@ pub(crate) async fn build_response(
 async fn build_response_inner(
     query: &Message,
     bundle: Option<&Bundle>,
+    client_ip: IpAddr,
     cache: &DnsCache,
     forwarder: &dyn Forwarder,
     telemetry: &TelemetryEmitter,
+    start: std::time::Instant,
 ) -> Message {
     let mut response = Message::new();
     response.set_id(query.id());
@@ -286,6 +321,7 @@ async fn build_response_inner(
         return response;
     };
     let qname = question.name().to_utf8();
+    let qtype = format!("{:?}", question.query_type());
 
     let Some(bundle) = bundle else {
         // No bundle loaded yet (or no tenant matched, in router mode).
@@ -296,18 +332,21 @@ async fn build_response_inner(
         return response;
     };
 
-    match decide(bundle, &qname) {
+    let outcome = decide(bundle, &qname);
+    let mut cache_hit: Option<bool> = None;
+
+    match outcome.decision {
         Decision::Block => {
             metrics::counter!("aegis_dns_queries_total", "decision" => "block").increment(1);
-            telemetry.emit(&bundle.group_id, &qname, "block");
             response.set_response_code(ResponseCode::NXDomain);
         }
         Decision::Allow => {
             metrics::counter!("aegis_dns_queries_total", "decision" => "allow").increment(1);
-            telemetry.emit(&bundle.group_id, &qname, "allow");
             if question.query_type() == RecordType::A {
-                resolve_a_record(&qname, question.name().clone(), cache, forwarder, &mut response)
-                    .await;
+                cache_hit = Some(
+                    resolve_a_record(&qname, question.name().clone(), cache, forwarder, &mut response)
+                        .await,
+                );
             } else {
                 // Only A records are resolved/cached/forwarded as of Sprint 4 —
                 // everything else gets an empty NOERROR (effectively NODATA).
@@ -315,23 +354,42 @@ async fn build_response_inner(
             }
         }
     }
+
+    telemetry.emit(QueryEventInput {
+        group_id: bundle.group_id.clone(),
+        client_ip: client_ip.to_string(),
+        qname,
+        qtype,
+        decision: match outcome.decision {
+            Decision::Block => "block",
+            Decision::Allow => "allow",
+        },
+        matched_rule: outcome.matched_rule,
+        matched_category: outcome.matched_category,
+        matched_feed_id: outcome.matched_feed_id,
+        response_code: format!("{:?}", response.response_code()),
+        cache_hit,
+        latency_us: start.elapsed().as_micros().min(u32::MAX as u128) as u32,
+    });
+
     response
 }
 
+/// Returns whether the answer came from cache (`true`) or upstream (`false`).
 async fn resolve_a_record(
     qname: &str,
     record_name: hickory_proto::rr::Name,
     cache: &DnsCache,
     forwarder: &dyn Forwarder,
     response: &mut Message,
-) {
+) -> bool {
     if let Some(ips) = cache.get(qname) {
         metrics::counter!("aegis_dns_cache_total", "result" => "hit").increment(1);
         response.set_response_code(ResponseCode::NoError);
         for ip in ips {
             response.add_answer(Record::from_rdata(record_name.clone(), 60, RData::A(A(ip))));
         }
-        return;
+        return true;
     }
     metrics::counter!("aegis_dns_cache_total", "result" => "miss").increment(1);
 
@@ -350,4 +408,5 @@ async fn resolve_a_record(
             response.set_response_code(ResponseCode::ServFail);
         }
     }
+    false
 }

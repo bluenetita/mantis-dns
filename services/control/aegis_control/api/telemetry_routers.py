@@ -18,6 +18,16 @@ class QueryEventIn(BaseModel):
     group_id: str
     qname: str
     decision: str
+    # Sprint 14 (design.md §20) enrichment — all optional so older filter
+    # node builds can still post the pre-enrichment shape without breaking.
+    client_ip: str | None = None
+    qtype: str | None = None
+    matched_rule: str | None = None
+    matched_category: str | None = None
+    matched_feed_id: str | None = None
+    response_code: str | None = None
+    cache_hit: bool | None = None
+    latency_us: int | None = None
 
 
 class QueryEventBatch(BaseModel):
@@ -60,11 +70,31 @@ class GroupBreakdown(BaseModel):
 @router.post("/query-events", status_code=202)
 def ingest_query_events(payload: QueryEventBatch, db: Session = Depends(get_db)) -> dict[str, int]:
     """Fire-and-forget sink for filter-node query telemetry. Best-effort by
-    design — the hot DNS path never blocks on this succeeding."""
+    design — the hot DNS path never blocks on this succeeding. Unauthenticated
+    like /routing-table and /public-key: this is filter-node-to-control-plane
+    traffic, not a user-facing endpoint."""
+    group_ids = {event.group_id for event in payload.events}
+    tenant_by_group: dict[str, str] = dict(
+        db.execute(
+            select(models.Group.id, models.Group.tenant_id).where(models.Group.id.in_(group_ids))
+        ).all()
+    ) if group_ids else {}
+
     for event in payload.events:
         db.add(
             models.QueryEvent(
-                group_id=event.group_id, qname=event.qname, decision=event.decision
+                group_id=event.group_id,
+                tenant_id=tenant_by_group.get(event.group_id),
+                qname=event.qname,
+                decision=event.decision,
+                client_ip=event.client_ip,
+                qtype=event.qtype,
+                matched_rule=event.matched_rule,
+                matched_category=event.matched_category,
+                matched_feed_id=event.matched_feed_id,
+                response_code=event.response_code,
+                cache_hit=event.cache_hit,
+                latency_us=event.latency_us,
             )
         )
     db.commit()

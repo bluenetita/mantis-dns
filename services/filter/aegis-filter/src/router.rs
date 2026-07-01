@@ -197,6 +197,7 @@ pub async fn run_router_udp_server(socket: UdpSocket, router: Arc<TenantRouter>)
         let response = build_response(
             &query,
             bundle.as_deref(),
+            peer.ip(),
             &router.cache,
             router.forwarder.as_ref(),
             &router.telemetry,

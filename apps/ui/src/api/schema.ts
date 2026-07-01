@@ -229,7 +229,9 @@ export interface paths {
         /**
          * Ingest Query Events
          * @description Fire-and-forget sink for filter-node query telemetry. Best-effort by
-         *     design — the hot DNS path never blocks on this succeeding.
+         *     design — the hot DNS path never blocks on this succeeding. Unauthenticated
+         *     like /routing-table and /public-key: this is filter-node-to-control-plane
+         *     traffic, not a user-facing endpoint.
          */
         post: operations["ingest_query_events_api_v1_query_events_post"];
         delete?: never;
@@ -396,6 +398,23 @@ export interface paths {
         post?: never;
         /** Delete User */
         delete: operations["delete_user_api_v1_users__user_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/siem/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Siem Events */
+        get: operations["list_siem_events_api_v1_siem_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -689,6 +708,22 @@ export interface components {
             qname: string;
             /** Decision */
             decision: string;
+            /** Client Ip */
+            client_ip?: string | null;
+            /** Qtype */
+            qtype?: string | null;
+            /** Matched Rule */
+            matched_rule?: string | null;
+            /** Matched Category */
+            matched_category?: string | null;
+            /** Matched Feed Id */
+            matched_feed_id?: string | null;
+            /** Response Code */
+            response_code?: string | null;
+            /** Cache Hit */
+            cache_hit?: boolean | null;
+            /** Latency Us */
+            latency_us?: number | null;
         };
         /** RoutingTableEntry */
         RoutingTableEntry: {
@@ -1604,6 +1639,44 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_siem_events_api_v1_siem_events_get: {
+        parameters: {
+            query?: {
+                after_id?: string | null;
+                limit?: number;
+                tenant_id?: string | null;
+                group_id?: string | null;
+                decision?: ("allow" | "block") | null;
+                since?: string | null;
+                until?: string | null;
+                format?: "json" | "cef";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
             };
             /** @description Validation Error */
             422: {
