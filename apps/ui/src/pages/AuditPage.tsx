@@ -1,5 +1,4 @@
-import { Alert, Badge, Card, Center, Group, Loader, Select, Stack, Table, Text, Title } from "@mantine/core";
-import { IconInfoCircle } from "@tabler/icons-react";
+import { Badge, Card, Center, Group, Loader, Select, Stack, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import { useAuditLog } from "../api/hooks";
 
@@ -34,12 +33,6 @@ export function AuditPage() {
           w={200}
         />
       </Group>
-
-      <Alert icon={<IconInfoCircle size={16} />} color="blue" variant="light">
-        Every entry currently shows actor "unauthenticated" — there's no auth yet (design.md §9, Sprint 8 backend).
-        The log itself is real and append-only from the moment this shipped; actor identity backfills once OIDC
-        lands.
-      </Alert>
 
       {isLoading && (
         <Center h={200}>
