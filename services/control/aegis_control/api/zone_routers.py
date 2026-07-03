@@ -18,6 +18,26 @@ _RECORD_TYPES = {"A", "AAAA", "CNAME", "MX", "TXT", "NS", "PTR", "SRV", "CAA"}
 _ZONE_TYPES = {"local", "forward", "passthrough"}
 
 
+def _validate_record_field(v: str, label: str) -> str:
+    """Shared name/data validation for RecordIn and RecordUpdate.
+
+    A leading '$' is rejected outright: BIND-family zone-file loaders treat
+    a '$' as the first character of a line as a control directive
+    ($INCLUDE/$GENERATE/etc). export_zone (below) places name/data as the
+    first two fields on their line, and this exported file is explicitly
+    meant to be handed to a real nameserver — so a record whose name or
+    data starts with '$' could smuggle a directive into that file. No
+    legitimate owner name or rdata value needs a leading '$', so this is
+    rejected at write time rather than escaped at export time.
+    """
+    v = v.strip()
+    if not v:
+        raise ValueError(f"{label} must not be empty")
+    if v.startswith("$"):
+        raise ValueError(f"{label} must not start with '$'")
+    return v
+
+
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
 class ZoneCreate(BaseModel):
@@ -97,24 +117,28 @@ class RecordIn(BaseModel):
     @field_validator("name")
     @classmethod
     def _rname(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("Record name must not be empty")
-        return v
+        return _validate_record_field(v, "Record name")
 
     @field_validator("data")
     @classmethod
     def _rdata(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("Record data must not be empty")
-        return v
+        return _validate_record_field(v, "Record data")
 
 
 class RecordUpdate(BaseModel):
     name: str | None = None
     record_type: str | None = None
     data: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _rname(cls, v: str | None) -> str | None:
+        return v if v is None else _validate_record_field(v, "Record name")
+
+    @field_validator("data")
+    @classmethod
+    def _rdata(cls, v: str | None) -> str | None:
+        return v if v is None else _validate_record_field(v, "Record data")
     ttl: int | None = None
     priority: int | None = None
     enabled: bool | None = None

@@ -83,6 +83,10 @@ class UserCreate(BaseModel):
     def _strong_password(cls, v: str) -> str:
         if len(v) < 12:
             raise ValueError("password must be at least 12 characters")
+        if len(v.encode()) > 72:
+            # bcrypt's hard limit — raises rather than truncating (see
+            # auth.hash_password); reject at input instead of a 500 later.
+            raise ValueError("password must be at most 72 bytes")
         return v
 
 

@@ -89,7 +89,14 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    return bcrypt.checkpw(password.encode(), password_hash.encode())
+    try:
+        return bcrypt.checkpw(password.encode(), password_hash.encode())
+    except ValueError:
+        # bcrypt raises rather than truncating for passwords >72 bytes
+        # (registration already rejects those — see auth_routers'
+        # _strong_password validator) — treat an over-length login
+        # attempt as simply wrong instead of crashing the request.
+        return False
 
 
 def create_access_token(user: models.User) -> str:
