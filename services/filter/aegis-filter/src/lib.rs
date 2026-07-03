@@ -1,8 +1,4 @@
 //! Aegis filter node: DNS frontend + policy engine.
-//!
-//! Sprint 4 scope: real cache + DoT upstream forwarding. Tenant resolution
-//! is still a single global bundle (per-listener/source-IP tenant mapping is
-//! Sprint 5, see design.md §7.3).
 
 mod cache;
 pub mod health_monitor;
@@ -12,7 +8,7 @@ pub mod upstream_bundle;
 
 pub use telemetry::{QueryEventInput, TelemetryEmitter};
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,44 +18,41 @@ use anyhow::{Context, Result};
 use cache::DnsCache;
 use ed25519_dalek::VerifyingKey;
 use hickory_proto::op::{Message, MessageType, ResponseCode};
-use hickory_proto::rr::rdata::A;
-use hickory_proto::rr::{RData, Record, RecordType};
+use hickory_proto::rr::{Name, Record, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::Resolver;
 use prost::Message as _;
-use tokio::net::UdpSocket;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, UdpSocket};
 use tracing::{debug, info, warn};
 
 pub type DotResolver = Resolver<TokioConnectionProvider>;
 
-/// Shared secret authenticating filter-node -> control-plane calls
-/// (`AEGIS_SERVICE_TOKEN`, sent as `X-Aegis-Service-Token`). Unset in dev by
-/// default — the control plane refuses to start with `AEGIS_ENV=production`
-/// unless both sides have it configured. Read fresh each call rather than
-/// cached: these are low-frequency poll/flush paths, not the DNS hot path.
-pub(crate) fn with_service_token(builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    match std::env::var("AEGIS_SERVICE_TOKEN") {
-        Ok(tok) if !tok.is_empty() => builder.header("X-Aegis-Service-Token", tok),
-        _ => builder,
-    }
-}
-
-/// Abstraction over upstream resolution so tests/CI don't depend on live
-/// network + port 853 egress (the real DoT path is exercised by the example
-/// client against a running Docker deployment instead — see README).
+/// Abstraction over upstream resolution. Returns the full answer-section record
+/// set for any qtype so the filter node forwards AAAA, MX, TXT, PTR, etc.
+/// exactly as received from the upstream resolver.
+///
+/// `categories` is the pre-computed set of policy-bundle category IDs that
+/// the qname matched (regardless of block/allow action). `UpstreamBundleForwarder`
+/// uses this to evaluate `"category"` upstream routes; other impls ignore it.
 #[async_trait::async_trait]
 pub trait Forwarder: Send + Sync {
-    async fn lookup_a(&self, qname: &str) -> Result<(Vec<Ipv4Addr>, u32)>;
+    async fn lookup(
+        &self,
+        qname: &str,
+        qtype: RecordType,
+        categories: &[String],
+    ) -> Result<Vec<Record>>;
 }
 
 pub struct DotForwarder(DotResolver);
 
 impl DotForwarder {
-    /// DNS-over-TLS to Cloudflare by default (design.md §9: upstream privacy
-    /// via DoT/DoH). Override target is a Sprint-4-follow-up config knob,
-    /// not yet wired to an env var.
+    /// DNS-over-TLS to Cloudflare (design.md §9). The UpstreamBundleForwarder
+    /// supersedes this in production once an upstream bundle is loaded; this
+    /// is the last-resort fallback when no bundle is present.
     pub fn new_default() -> Self {
         let resolver = Resolver::builder_with_config(
             ResolverConfig::cloudflare_tls(),
@@ -73,23 +66,10 @@ impl DotForwarder {
 
 #[async_trait::async_trait]
 impl Forwarder for DotForwarder {
-    async fn lookup_a(&self, qname: &str) -> Result<(Vec<Ipv4Addr>, u32)> {
-        let lookup = self.0.lookup_ip(qname).await?;
-        let ttl = lookup
-            .as_lookup()
-            .records()
-            .iter()
-            .map(|r| r.ttl())
-            .min()
-            .unwrap_or(60);
-        let ips: Vec<Ipv4Addr> = lookup
-            .iter()
-            .filter_map(|ip| match ip {
-                std::net::IpAddr::V4(v4) => Some(v4),
-                _ => None,
-            })
-            .collect();
-        Ok((ips, ttl))
+    async fn lookup(&self, qname: &str, qtype: RecordType, _categories: &[String]) -> Result<Vec<Record>> {
+        let name: Name = qname.parse().context("invalid qname")?;
+        let lookup = self.0.lookup(name, qtype).await?;
+        Ok(lookup.records().to_vec())
     }
 }
 
@@ -116,8 +96,6 @@ impl AppState {
         }
     }
 
-    /// Builder-style: attach a real telemetry emitter (defaults to a no-op
-    /// that silently drops events, used by tests and until main.rs opts in).
     pub fn with_telemetry(mut self, telemetry: TelemetryEmitter) -> Self {
         self.telemetry = telemetry;
         self
@@ -134,9 +112,6 @@ pub enum Decision {
     Block,
 }
 
-/// Sprint 14 (design.md §20): `decide()` now returns *why*, not just the
-/// verdict, so telemetry can tell a SIEM which rule fired and which feed
-/// supplied it, not just "blocked".
 pub struct DecisionOutcome {
     pub decision: Decision,
     pub matched_rule: &'static str,
@@ -144,8 +119,8 @@ pub struct DecisionOutcome {
     pub matched_feed_id: Option<String>,
 }
 
-/// Lookup order per design.md §18.4: deny-override beats categories beats
-/// default-allow; allow-override always wins over everything else.
+/// Lookup order per design.md §18.4: allow-override beats everything;
+/// deny-override beats categories; categories beat default-allow.
 pub fn decide(bundle: &Bundle, qname: &str) -> DecisionOutcome {
     let qname = normalize(qname);
 
@@ -189,11 +164,26 @@ pub fn decide(bundle: &Bundle, qname: &str) -> DecisionOutcome {
     }
 }
 
+/// Returns IDs of every category whose bloom filter matches `qname`, regardless
+/// of the category's block/allow action. Used by the upstream router to select
+/// a pool based on content type (e.g. route "cdn" traffic to a low-latency pool).
+fn matched_categories(bundle: &Bundle, qname: &str) -> Vec<String> {
+    let normalized = normalize(qname);
+    bundle
+        .categories
+        .iter()
+        .filter_map(|cat| {
+            BloomFilter::from_category(cat)
+                .filter(|bf| bf.might_contain(&normalized))
+                .map(|_| cat.category_id.clone())
+        })
+        .collect()
+}
+
 fn normalize(domain: &str) -> String {
     domain.trim_end_matches('.').to_ascii_lowercase()
 }
 
-/// Fetches the control plane's verification key once at startup.
 pub async fn fetch_public_key(control_url: &str) -> Result<VerifyingKey> {
     let client = reqwest::Client::new();
     let bytes = with_service_token(client.get(format!("{control_url}/api/v1/public-key")))
@@ -209,22 +199,13 @@ pub async fn fetch_public_key(control_url: &str) -> Result<VerifyingKey> {
     Ok(VerifyingKey::from_bytes(&arr)?)
 }
 
-/// Fetches the latest compiled bundle for a group and publishes it into
-/// `store` if newer than what's currently loaded. Safe to call repeatedly
-/// (e.g. on a poll loop). Shared by the single-tenant `AppState` path and the
-/// multi-tenant `TenantRouter` path (router.rs), one per routed group.
 pub async fn fetch_and_publish_bundle(
     store: &BundleStore,
     public_key: &VerifyingKey,
     control_url: &str,
     group_id: &str,
 ) -> Result<()> {
-    let client = reqwest::Client::new();
-    let resp = with_service_token(
-        client.get(format!("{control_url}/api/v1/groups/{group_id}/bundle")),
-    )
-    .send()
-    .await?;
+    let resp = reqwest::get(format!("{control_url}/api/v1/groups/{group_id}/bundle")).await?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         debug!("no bundle compiled yet for group {group_id}");
         return Ok(());
@@ -242,7 +223,6 @@ pub async fn fetch_and_publish_bundle(
     Ok(())
 }
 
-/// Single-tenant convenience wrapper around [`fetch_and_publish_bundle`].
 pub async fn refresh_bundle(state: &AppState, control_url: &str, group_id: &str) -> Result<()> {
     fetch_and_publish_bundle(&state.store, &state.public_key, control_url, group_id).await
 }
@@ -262,12 +242,11 @@ pub async fn bundle_refresh_loop(
     }
 }
 
-/// Binds a UDP DNS listener and serves requests against `state` until the
-/// socket errors out. Single global bundle for Sprint 3 — no per-tenant
-/// listener routing yet.
+// ── UDP server ─────────────────────────────────────────────────────────────────
+
 pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<()> {
     let local_addr = socket.local_addr()?;
-    info!("aegis-filter DNS listener bound on {local_addr}");
+    info!("aegis-filter UDP DNS listener bound on {local_addr}");
     let mut buf = [0u8; 4096];
 
     loop {
@@ -275,7 +254,7 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
         let query = match Message::from_bytes(&buf[..len]) {
             Ok(m) => m,
             Err(e) => {
-                debug!("dropping unparseable packet from {peer}: {e}");
+                debug!("dropping unparseable UDP packet from {peer}: {e}");
                 continue;
             }
         };
@@ -293,25 +272,119 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
         match response.to_bytes() {
             Ok(bytes) => {
                 if let Err(e) = socket.send_to(&bytes, peer).await {
-                    warn!("send_to {peer} failed: {e}");
+                    warn!("UDP send_to {peer} failed: {e}");
                 }
             }
-            Err(e) => warn!("failed to encode response for {peer}: {e}"),
+            Err(e) => warn!("failed to encode UDP response for {peer}: {e}"),
         }
     }
 }
 
+// ── TCP server ─────────────────────────────────────────────────────────────────
+
+/// Maximum concurrent TCP DNS connections. Excess connections are accepted
+/// then immediately closed so clients get a clean FIN rather than a timeout.
+pub(crate) const MAX_TCP_CONNECTIONS: usize = 500;
+
+/// DNS-over-TCP server (RFC 1035 §4.2.2). Spawns one task per accepted
+/// connection; each connection may carry multiple pipelined queries.
+pub async fn run_tcp_server(listener: TcpListener, state: Arc<AppState>) -> Result<()> {
+    let local_addr = listener.local_addr()?;
+    info!("aegis-filter TCP DNS listener bound on {local_addr}");
+    let sem = Arc::new(tokio::sync::Semaphore::new(MAX_TCP_CONNECTIONS));
+
+    loop {
+        let (stream, peer) = listener.accept().await?;
+        let permit = match sem.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                debug!("TCP DNS connection limit ({MAX_TCP_CONNECTIONS}) reached, dropping {peer}");
+                continue; // drop stream → FIN sent to client
+            }
+        };
+        let state = state.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            if let Err(e) = handle_tcp_connection(stream, peer.ip(), &state).await {
+                debug!("TCP DNS connection from {peer} ended: {e}");
+            }
+        });
+    }
+}
+
+async fn handle_tcp_connection(
+    mut stream: tokio::net::TcpStream,
+    peer_ip: IpAddr,
+    state: &AppState,
+) -> Result<()> {
+    loop {
+        let msg_len = match stream.read_u16().await {
+            Ok(n) => n as usize,
+            // Clean close from the client.
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e.into()),
+        };
+        if msg_len == 0 {
+            break;
+        }
+
+        let mut buf = vec![0u8; msg_len];
+        stream.read_exact(&mut buf).await?;
+
+        let query = match Message::from_bytes(&buf) {
+            Ok(m) => m,
+            Err(e) => {
+                debug!("unparseable TCP DNS message from {peer_ip}: {e}");
+                break;
+            }
+        };
+
+        let bundle = state.store.current();
+        let response = build_response(
+            &query,
+            bundle.as_deref(),
+            peer_ip,
+            &state.cache,
+            state.forwarder.as_ref(),
+            &state.telemetry,
+        )
+        .await;
+
+        match response.to_bytes() {
+            Ok(bytes) => {
+                stream.write_u16(bytes.len() as u16).await?;
+                stream.write_all(&bytes).await?;
+            }
+            Err(e) => {
+                warn!("failed to encode TCP DNS response: {e}");
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
 pub use health_monitor::{run_health_monitor, HealthStore};
-pub use router::{refresh_routes, routing_refresh_loop, run_router_udp_server, test_support, TenantRouter};
+pub use router::{
+    refresh_routes, routing_refresh_loop, run_router_tcp_server, run_router_udp_server,
+    test_support, TenantRouter,
+};
 pub use upstream_bundle::{
     fetch_upstream_bundle, upstream_bundle_refresh_loop, UpstreamBundle, UpstreamBundleForwarder,
     UpstreamBundleStore,
 };
 
-/// Core decision + response logic, parameterized over the resolved bundle so
-/// both the single-tenant `AppState` path and the multi-tenant `TenantRouter`
-/// path (see router.rs) share it instead of duplicating the response-building
-/// rules.
+/// Adds the AEGIS_SERVICE_TOKEN bearer header to outbound M2M requests.
+pub fn with_service_token(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    if let Ok(tok) = std::env::var("AEGIS_SERVICE_TOKEN") {
+        rb.bearer_auth(tok)
+    } else {
+        rb
+    }
+}
+
+// ── Core decision + response ───────────────────────────────────────────────────
+
 pub(crate) async fn build_response(
     query: &Message,
     bundle: Option<&Bundle>,
@@ -336,17 +409,17 @@ pub(crate) async fn build_response(
         return response;
     };
     let qname = question.name().to_utf8();
-    let qtype = format!("{:?}", question.query_type());
+    let qtype = question.query_type();
+    let qtype_str = format!("{qtype:?}");
 
     let Some(bundle) = bundle else {
-        // No bundle loaded yet (or no tenant matched, in router mode).
-        // Fail-open by default at this stage (dev-friendly); per-tenant
-        // FailurePolicy enforcement lands in Sprint 9 HA hardening.
         response.set_response_code(ResponseCode::ServFail);
         return response;
     };
 
     let outcome = decide(bundle, &qname);
+    // All category IDs the qname matches (any action), used for upstream routing.
+    let categories = matched_categories(bundle, &qname);
     let mut cache_hit: Option<bool> = None;
 
     match outcome.decision {
@@ -354,16 +427,9 @@ pub(crate) async fn build_response(
             response.set_response_code(ResponseCode::NXDomain);
         }
         Decision::Allow => {
-            if question.query_type() == RecordType::A {
-                cache_hit = Some(
-                    resolve_a_record(&qname, question.name().clone(), cache, forwarder, &mut response)
-                        .await,
-                );
-            } else {
-                // Only A records are resolved/cached/forwarded as of Sprint 4 —
-                // everything else gets an empty NOERROR (effectively NODATA).
-                response.set_response_code(ResponseCode::NoError);
-            }
+            cache_hit = Some(
+                resolve_records(&qname, qtype, &categories, cache, forwarder, &mut response).await,
+            );
         }
     }
 
@@ -371,7 +437,7 @@ pub(crate) async fn build_response(
         group_id: bundle.group_id.clone(),
         client_ip: client_ip.to_string(),
         qname,
-        qtype,
+        qtype: qtype_str,
         decision: match outcome.decision {
             Decision::Block => "block",
             Decision::Allow => "allow",
@@ -387,33 +453,55 @@ pub(crate) async fn build_response(
     response
 }
 
-/// Returns whether the answer came from cache (`true`) or upstream (`false`).
-async fn resolve_a_record(
+/// Resolves any qtype through the cache then forwarder. Returns `true` on
+/// cache hit. Propagates NXDOMAIN vs NODATA correctly.
+async fn resolve_records(
     qname: &str,
-    record_name: hickory_proto::rr::Name,
+    qtype: RecordType,
+    categories: &[String],
     cache: &DnsCache,
     forwarder: &dyn Forwarder,
     response: &mut Message,
 ) -> bool {
-    if let Some(ips) = cache.get(qname) {
+    let qtype_u16 = u16::from(qtype);
+
+    if let Some(records) = cache.get(qname, qtype_u16) {
         response.set_response_code(ResponseCode::NoError);
-        for ip in ips {
-            response.add_answer(Record::from_rdata(record_name.clone(), 60, RData::A(A(ip))));
+        for rec in records {
+            response.add_answer(rec);
         }
         return true;
     }
-    match forwarder.lookup_a(qname).await {
-        Ok((ips, ttl)) => {
-            cache.put(qname.to_string(), ips.clone(), Duration::from_secs(ttl as u64));
 
+    match forwarder.lookup(qname, qtype, categories).await {
+        Ok(records) => {
+            let ttl = records.iter().map(|r| r.ttl()).min().unwrap_or(60);
+            cache.put(
+                qname.to_string(),
+                qtype_u16,
+                records.clone(),
+                Duration::from_secs(u64::from(ttl)),
+            );
             response.set_response_code(ResponseCode::NoError);
-            for ip in ips {
-                response.add_answer(Record::from_rdata(record_name.clone(), ttl, RData::A(A(ip))));
+            for rec in records {
+                response.add_answer(rec);
             }
         }
         Err(e) => {
-            debug!("upstream resolution failed for {qname}: {e}");
-            response.set_response_code(ResponseCode::ServFail);
+            // hickory surfaces both NXDOMAIN and NODATA as NoRecordsFound;
+            // the embedded response_code field distinguishes them.
+            let err_str = format!("{e:?}");
+            if err_str.contains("NoRecordsFound") {
+                if err_str.contains("NXDomain") {
+                    response.set_response_code(ResponseCode::NXDomain);
+                } else {
+                    // NODATA: name exists, no records of this type.
+                    response.set_response_code(ResponseCode::NoError);
+                }
+            } else {
+                debug!("upstream resolution failed for {qname} ({qtype:?}): {e}");
+                response.set_response_code(ResponseCode::ServFail);
+            }
         }
     }
     false

@@ -234,7 +234,14 @@ async fn probe_member_loop(
 
         health_store.update(&pool_id, &member.resolver_id, snap.clone());
 
-        tokio::time::sleep(probe_interval).await;
+        // Back off when unhealthy to avoid hammering a dead resolver.
+        // Capped at 5× the configured interval or 5 minutes, whichever is smaller.
+        let sleep_for = if snap.healthy {
+            probe_interval
+        } else {
+            (probe_interval * 5).min(Duration::from_secs(300))
+        };
+        tokio::time::sleep(sleep_for).await;
     }
 }
 

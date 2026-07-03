@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use aegis_filter::{
     bundle_refresh_loop, fetch_public_key, fetch_upstream_bundle, refresh_bundle,
-    run_health_monitor, run_router_udp_server, run_udp_server, upstream_bundle_refresh_loop,
-    AppState, HealthStore, TelemetryEmitter, TenantRouter, UpstreamBundleForwarder,
-    UpstreamBundleStore,
+    run_health_monitor, run_router_tcp_server, run_router_udp_server, run_tcp_server,
+    run_udp_server, upstream_bundle_refresh_loop, AppState, HealthStore, TelemetryEmitter,
+    TenantRouter, UpstreamBundleForwarder, UpstreamBundleStore,
 };
-use tokio::net::UdpSocket;
+use tokio::net::{TcpListener, UdpSocket};
 use tracing::{error, info, warn};
 
 #[tokio::main]
@@ -35,6 +35,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let socket = UdpSocket::bind(&bind_addr).await?;
+    let tcp_listener = TcpListener::bind(&bind_addr).await?;
 
     const CACHE_PURGE_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -96,6 +97,12 @@ async fn main() -> anyhow::Result<()> {
                 state_purge.purge_cache();
             }
         });
+        let state_tcp = state.clone();
+        tokio::spawn(async move {
+            if let Err(e) = run_tcp_server(tcp_listener, state_tcp).await {
+                error!("TCP DNS server exited: {e}");
+            }
+        });
         run_udp_server(socket, state).await?;
     } else {
         // Multi-tenant mode (design.md §7.3 option 2): tenant resolved by
@@ -119,6 +126,12 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 ticker.tick().await;
                 router_purge.purge_cache();
+            }
+        });
+        let router_tcp = router.clone();
+        tokio::spawn(async move {
+            if let Err(e) = run_router_tcp_server(tcp_listener, router_tcp).await {
+                error!("TCP DNS router exited: {e}");
             }
         });
         run_router_udp_server(socket, router).await?;

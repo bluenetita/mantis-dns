@@ -17,13 +17,14 @@
 
 use std::collections::HashMap;
 use std::env;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwapOption;
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
+use hickory_proto::rr::{Name, Record, RecordType};
 use hickory_proto::xfer::Protocol;
 use hickory_resolver::config::{NameServerConfig, ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::TokioConnectionProvider;
@@ -161,7 +162,7 @@ pub async fn fetch_upstream_bundle(
     let sig_bytes = hex::decode(&sig_hex).context("X-Aegis-Signature not valid hex")?;
     let sig = Signature::from_slice(&sig_bytes).context("invalid ed25519 signature length")?;
     public_key
-        .verify(&body, &sig)
+        .verify_strict(&body, &sig)
         .context("upstream bundle signature verification failed")?;
 
     let bundle: UpstreamBundle =
@@ -176,14 +177,20 @@ fn normalize(domain: &str) -> String {
     domain.trim_end_matches('.').to_ascii_lowercase()
 }
 
-/// Returns the pool_id of the best-matching route for `qname`.
-/// Routes must be pre-sorted by ascending priority (lower = higher precedence).
+/// Returns the pool_id of the best-matching route for `(qname, qtype)`.
+/// Routes are pre-sorted ascending by priority (lower value = higher precedence).
 ///
-/// `qtype` and `category` match types require richer context (record type,
-/// category membership from the policy bundle) and are deferred to a future
-/// sprint when the Forwarder trait carries that information.
-pub(crate) fn evaluate_routes<'a>(routes: &'a [RouteConfig], qname: &str) -> Option<&'a str> {
+/// `categories` is the set of policy-bundle category IDs the qname matched
+/// (computed by `matched_categories()` in lib.rs before calling the forwarder).
+pub(crate) fn evaluate_routes<'a>(
+    routes: &'a [RouteConfig],
+    qname: &str,
+    qtype: RecordType,
+    categories: &[String],
+) -> Option<&'a str> {
     let normalized = normalize(qname);
+    // hickory Debug output for RecordType is the canonical uppercase string ("A", "AAAA", …).
+    let qtype_str = format!("{qtype:?}").to_uppercase();
     for route in routes {
         let matched = match route.match_type.as_str() {
             "domain_exact" => route
@@ -198,6 +205,16 @@ pub(crate) fn evaluate_routes<'a>(routes: &'a [RouteConfig], qname: &str) -> Opt
                     let suf = normalize(v);
                     normalized == suf || normalized.ends_with(&format!(".{suf}"))
                 })
+                .unwrap_or(false),
+            "qtype" => route
+                .match_value
+                .as_deref()
+                .map(|v| v.to_uppercase() == qtype_str)
+                .unwrap_or(false),
+            "category" => route
+                .match_value
+                .as_deref()
+                .map(|v| categories.iter().any(|c| c == v))
                 .unwrap_or(false),
             "default" => true,
             _ => false,
@@ -290,9 +307,9 @@ impl UpstreamBundleForwarder {
         hit
     }
 
-    async fn lookup_via_fallback(&self, qname: &str) -> Result<(Vec<Ipv4Addr>, u32)> {
+    async fn lookup_via_fallback(&self, qname: &str, qtype: RecordType) -> Result<Vec<Record>> {
         match &self.fallback {
-            Some(r) => do_lookup(qname, r).await,
+            Some(r) => do_lookup(qname, qtype, r).await,
             None => bail!(
                 "no upstream resolver available (bundle not loaded, no fallback configured)"
             ),
@@ -302,22 +319,22 @@ impl UpstreamBundleForwarder {
 
 #[async_trait::async_trait]
 impl Forwarder for UpstreamBundleForwarder {
-    async fn lookup_a(&self, qname: &str) -> Result<(Vec<Ipv4Addr>, u32)> {
+    async fn lookup(&self, qname: &str, qtype: RecordType, categories: &[String]) -> Result<Vec<Record>> {
         let bundle = match self.store.current() {
             Some(b) => b,
-            None => return self.lookup_via_fallback(qname).await,
+            None => return self.lookup_via_fallback(qname, qtype).await,
         };
 
-        let pool_id = match evaluate_routes(&bundle.routes, qname) {
+        let pool_id = match evaluate_routes(&bundle.routes, qname, qtype, categories) {
             Some(id) => id.to_string(),
-            None => return self.lookup_via_fallback(qname).await,
+            None => return self.lookup_via_fallback(qname, qtype).await,
         };
 
         let pool = match bundle.pools.get(&pool_id) {
             Some(p) => p,
             None => {
                 warn!("upstream route pointed to unknown pool {pool_id}, using fallback");
-                return self.lookup_via_fallback(qname).await;
+                return self.lookup_via_fallback(qname, qtype).await;
             }
         };
 
@@ -325,16 +342,16 @@ impl Forwarder for UpstreamBundleForwarder {
         let resolver_id = match pick_member(pool, &healthy_ids) {
             Some(id) => id.to_string(),
             None => {
-                warn!("pool {pool_id} has no members, using fallback");
-                return self.lookup_via_fallback(qname).await;
+                warn!("pool {pool_id} has no healthy members, using fallback");
+                return self.lookup_via_fallback(qname, qtype).await;
             }
         };
 
         match self.get_resolver(&bundle, &resolver_id) {
-            Some(resolver) => do_lookup(qname, &resolver).await,
+            Some(resolver) => do_lookup(qname, qtype, &resolver).await,
             None => {
                 warn!("no resolver built for {resolver_id}, using fallback");
-                self.lookup_via_fallback(qname).await
+                self.lookup_via_fallback(qname, qtype).await
             }
         }
     }
@@ -342,24 +359,12 @@ impl Forwarder for UpstreamBundleForwarder {
 
 async fn do_lookup(
     qname: &str,
+    qtype: RecordType,
     resolver: &Resolver<TokioConnectionProvider>,
-) -> Result<(Vec<Ipv4Addr>, u32)> {
-    let lookup = resolver.lookup_ip(qname).await?;
-    let ttl = lookup
-        .as_lookup()
-        .records()
-        .iter()
-        .map(|r| r.ttl())
-        .min()
-        .unwrap_or(60);
-    let ips: Vec<Ipv4Addr> = lookup
-        .iter()
-        .filter_map(|ip| match ip {
-            IpAddr::V4(v4) => Some(v4),
-            _ => None,
-        })
-        .collect();
-    Ok((ips, ttl))
+) -> Result<Vec<Record>> {
+    let name: Name = qname.parse().context("invalid qname")?;
+    let lookup = resolver.lookup(name, qtype).await?;
+    Ok(lookup.records().to_vec())
 }
 
 // ── Builder helpers ────────────────────────────────────────────────────────────
@@ -480,5 +485,172 @@ pub async fn upstream_bundle_refresh_loop(
             Ok(bundle) => store.publish(bundle),
             Err(e) => warn!("upstream bundle refresh failed for tenant {tenant_id}: {e}"),
         }
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hickory_proto::rr::RecordType;
+
+    fn route(match_type: &str, match_value: Option<&str>, pool_id: &str, priority: i32) -> RouteConfig {
+        RouteConfig {
+            match_type: match_type.into(),
+            match_value: match_value.map(str::to_string),
+            pool_id: pool_id.into(),
+            priority,
+        }
+    }
+
+    fn cats(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    // ── domain_exact ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn domain_exact_matches_literally() {
+        let routes = [route("domain_exact", Some("example.com"), "p1", 0)];
+        assert_eq!(evaluate_routes(&routes, "example.com", RecordType::A, &[]), Some("p1"));
+    }
+
+    #[test]
+    fn domain_exact_case_insensitive() {
+        let routes = [route("domain_exact", Some("Example.COM"), "p1", 0)];
+        assert_eq!(evaluate_routes(&routes, "example.com", RecordType::A, &[]), Some("p1"));
+    }
+
+    #[test]
+    fn domain_exact_does_not_match_subdomain() {
+        let routes = [route("domain_exact", Some("example.com"), "p1", 0)];
+        assert!(evaluate_routes(&routes, "sub.example.com", RecordType::A, &[]).is_none());
+    }
+
+    #[test]
+    fn domain_exact_strips_trailing_dot() {
+        let routes = [route("domain_exact", Some("example.com"), "p1", 0)];
+        assert_eq!(evaluate_routes(&routes, "example.com.", RecordType::A, &[]), Some("p1"));
+    }
+
+    // ── domain_suffix ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn domain_suffix_matches_subdomain() {
+        let routes = [route("domain_suffix", Some("example.com"), "p1", 0)];
+        assert_eq!(evaluate_routes(&routes, "sub.example.com", RecordType::A, &[]), Some("p1"));
+    }
+
+    #[test]
+    fn domain_suffix_matches_exact_name_too() {
+        let routes = [route("domain_suffix", Some("example.com"), "p1", 0)];
+        assert_eq!(evaluate_routes(&routes, "example.com", RecordType::A, &[]), Some("p1"));
+    }
+
+    #[test]
+    fn domain_suffix_does_not_match_unrelated() {
+        let routes = [route("domain_suffix", Some("example.com"), "p1", 0)];
+        assert!(evaluate_routes(&routes, "notexample.com", RecordType::A, &[]).is_none());
+    }
+
+    // ── qtype ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn qtype_matches_correct_type() {
+        let routes = [route("qtype", Some("AAAA"), "ipv6-pool", 0)];
+        assert_eq!(evaluate_routes(&routes, "any.example", RecordType::AAAA, &[]), Some("ipv6-pool"));
+    }
+
+    #[test]
+    fn qtype_does_not_match_wrong_type() {
+        let routes = [route("qtype", Some("AAAA"), "ipv6-pool", 0)];
+        assert!(evaluate_routes(&routes, "any.example", RecordType::A, &[]).is_none());
+    }
+
+    #[test]
+    fn qtype_match_value_case_insensitive() {
+        let routes = [route("qtype", Some("mx"), "mail-pool", 0)];
+        assert_eq!(evaluate_routes(&routes, "any.example", RecordType::MX, &[]), Some("mail-pool"));
+    }
+
+    // ── category ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn category_matches_when_domain_in_category() {
+        let routes = [route("category", Some("cdn"), "fast-pool", 0)];
+        assert_eq!(
+            evaluate_routes(&routes, "static.example", RecordType::A, &cats(&["cdn"])),
+            Some("fast-pool")
+        );
+    }
+
+    #[test]
+    fn category_no_match_when_domain_not_in_category() {
+        let routes = [route("category", Some("cdn"), "fast-pool", 0)];
+        assert!(
+            evaluate_routes(&routes, "static.example", RecordType::A, &cats(&["malware"])).is_none()
+        );
+    }
+
+    #[test]
+    fn category_matches_any_of_multiple_categories() {
+        let routes = [route("category", Some("streaming"), "media-pool", 0)];
+        assert_eq!(
+            evaluate_routes(&routes, "v.example", RecordType::A, &cats(&["cdn", "streaming"])),
+            Some("media-pool")
+        );
+    }
+
+    #[test]
+    fn category_no_match_with_empty_categories() {
+        let routes = [route("category", Some("cdn"), "fast-pool", 0)];
+        assert!(evaluate_routes(&routes, "x.example", RecordType::A, &[]).is_none());
+    }
+
+    // ── default ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn default_matches_always() {
+        let routes = [route("default", None, "catch-all", 0)];
+        assert_eq!(evaluate_routes(&routes, "anything.example", RecordType::TXT, &[]), Some("catch-all"));
+    }
+
+    #[test]
+    fn no_routes_returns_none() {
+        assert!(evaluate_routes(&[], "x.example", RecordType::A, &[]).is_none());
+    }
+
+    // ── priority ordering ─────────────────────────────────────────────────────
+
+    #[test]
+    fn first_matching_route_wins() {
+        // Routes are pre-sorted by the control plane; we just take the first match.
+        let routes = [
+            route("domain_exact", Some("example.com"), "specific", 0),
+            route("default", None, "catch-all", 1),
+        ];
+        assert_eq!(evaluate_routes(&routes, "example.com", RecordType::A, &[]), Some("specific"));
+    }
+
+    #[test]
+    fn default_used_when_specific_route_misses() {
+        let routes = [
+            route("domain_exact", Some("other.com"), "specific", 0),
+            route("default", None, "catch-all", 1),
+        ];
+        assert_eq!(evaluate_routes(&routes, "example.com", RecordType::A, &[]), Some("catch-all"));
+    }
+
+    #[test]
+    fn category_route_beats_default() {
+        let routes = [
+            route("category", Some("cdn"), "fast-pool", 0),
+            route("default", None, "default-pool", 1),
+        ];
+        assert_eq!(
+            evaluate_routes(&routes, "static.example", RecordType::A, &cats(&["cdn"])),
+            Some("fast-pool")
+        );
     }
 }

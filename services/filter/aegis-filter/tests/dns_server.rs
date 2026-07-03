@@ -9,20 +9,29 @@ use aegis_bundle::{Bundle, CategorySet};
 use aegis_filter::{run_udp_server, AppState, Forwarder};
 use ed25519_dalek::{Signer, SigningKey};
 use hickory_proto::op::{Message, MessageType, OpCode, Query, ResponseCode};
-use hickory_proto::rr::{Name, RecordType};
+use hickory_proto::rr::{rdata::A, Name, RData, Record, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use prost::Message as _;
 use std::net::Ipv4Addr;
 use tokio::net::UdpSocket;
 
 /// Deterministic stand-in for real upstream resolution — no network/port 853
-/// dependency in tests. Always "resolves" to a fixed test-net IP.
+/// dependency in tests. Always "resolves" to a fixed test-net IP for A queries.
 struct MockForwarder;
 
 #[async_trait::async_trait]
 impl Forwarder for MockForwarder {
-    async fn lookup_a(&self, _qname: &str) -> anyhow::Result<(Vec<Ipv4Addr>, u32)> {
-        Ok((vec![Ipv4Addr::new(198, 51, 100, 1)], 60))
+    async fn lookup(&self, qname: &str, qtype: RecordType, _categories: &[String]) -> anyhow::Result<Vec<Record>> {
+        if qtype == RecordType::A {
+            let name: Name = qname.parse().unwrap_or_else(|_| "example.com.".parse().unwrap());
+            Ok(vec![Record::from_rdata(
+                name,
+                60,
+                RData::A(A(Ipv4Addr::new(198, 51, 100, 1))),
+            )])
+        } else {
+            Ok(vec![])
+        }
     }
 }
 

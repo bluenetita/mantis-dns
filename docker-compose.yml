@@ -38,6 +38,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-aegis}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aegis}
       - POSTGRES_DB=${POSTGRES_DB:-aegis}
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
@@ -62,12 +63,19 @@ services:
       dockerfile: services/filter/Dockerfile
     ports:
       - "1053:1053/udp"
+      - "1053:1053/tcp"
     environment:
       - RUST_LOG=info
       - CONTROL_URL=http://control:8000
       - GROUP_ID=${GROUP_ID:-}
       - DNS_BIND_ADDR=0.0.0.0:1053
       - AEGIS_SERVICE_TOKEN=${AEGIS_SERVICE_TOKEN:-}
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
     depends_on:
       - control
 
@@ -90,6 +98,7 @@ services:
       - AEGIS_INTERNAL_TOKEN=${AEGIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
       - KEA_ROLE=primary
       - KEA_PEER_URL=http://kea-secondary:8080/
+    restart: unless-stopped
     volumes:
       - kea-primary-run:/run/kea
     depends_on:

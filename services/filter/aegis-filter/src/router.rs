@@ -17,7 +17,8 @@ use hickory_proto::op::Message;
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use ipnet::IpNet;
 use serde::Deserialize;
-use tokio::net::UdpSocket;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, UdpSocket};
 use tracing::{debug, info, warn};
 
 use crate::{build_response, cache::DnsCache, fetch_and_publish_bundle, Forwarder, TelemetryEmitter};
@@ -183,6 +184,85 @@ pub mod test_support {
             store,
         });
         router.routes.store(Arc::new(routes));
+    }
+}
+
+/// TCP counterpart to `run_router_udp_server` (RFC 1035 §4.2.2).
+pub async fn run_router_tcp_server(listener: TcpListener, router: Arc<TenantRouter>) -> Result<()> {
+    let local_addr = listener.local_addr()?;
+    info!("aegis-filter multi-tenant TCP DNS listener bound on {local_addr}");
+    let sem = Arc::new(tokio::sync::Semaphore::new(crate::MAX_TCP_CONNECTIONS));
+
+    loop {
+        let (mut stream, peer) = listener.accept().await?;
+        let permit = match sem.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                debug!("TCP DNS connection limit reached, dropping {peer}");
+                continue;
+            }
+        };
+        let router = router.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            loop {
+                let msg_len = match stream.read_u16().await {
+                    Ok(n) => n as usize,
+                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                    Err(e) => {
+                        debug!("TCP read error from {peer}: {e}");
+                        break;
+                    }
+                };
+                if msg_len == 0 {
+                    break;
+                }
+
+                let mut buf = vec![0u8; msg_len];
+                if let Err(e) = stream.read_exact(&mut buf).await {
+                    debug!("TCP read_exact from {peer}: {e}");
+                    break;
+                }
+
+                let query = match Message::from_bytes(&buf) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        debug!("unparseable TCP DNS message from {peer}: {e}");
+                        break;
+                    }
+                };
+
+                let bundle_store = router.match_route(peer.ip());
+                if bundle_store.is_none() {
+                    debug!("no tenant route matched source IP {}", peer.ip());
+                }
+                let bundle = bundle_store.as_ref().and_then(|s| s.current());
+
+                let response = build_response(
+                    &query,
+                    bundle.as_deref(),
+                    peer.ip(),
+                    &router.cache,
+                    router.forwarder.as_ref(),
+                    &router.telemetry,
+                )
+                .await;
+
+                match response.to_bytes() {
+                    Ok(bytes) => {
+                        if stream.write_u16(bytes.len() as u16).await.is_err()
+                            || stream.write_all(&bytes).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("failed to encode TCP DNS response for {peer}: {e}");
+                        break;
+                    }
+                }
+            }
+        });
     }
 }
 
