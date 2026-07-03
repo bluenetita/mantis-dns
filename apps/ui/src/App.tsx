@@ -16,6 +16,7 @@ import { ZoneDetailPage } from "./pages/ZoneDetailPage";
 import { UsersPage } from "./pages/UsersPage";
 import { UpstreamPage } from "./pages/UpstreamPage";
 import { DhcpPage } from "./pages/DhcpPage";
+import { QueryLogPage } from "./pages/QueryLogPage";
 
 export default function App() {
   return (
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="/zones/:zoneId" element={<ZoneDetailPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
+          <Route path="/query-log" element={<QueryLogPage />} />
           <Route path="/audit" element={<AuditPage />} />
           <Route path="/upstream" element={<UpstreamPage />} />
           <Route path="/dhcp" element={<DhcpPage />} />

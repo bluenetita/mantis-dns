@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
@@ -100,6 +100,102 @@ class GroupBreakdown(BaseModel):
     total: int
     blocked: int
     block_ratio: float
+
+
+class QueryLogEntry(BaseModel):
+    id: str
+    occurred_at: datetime
+    group_id: str
+    group_name: Optional[str] = None
+    tenant_id: Optional[str] = None
+    client_ip: Optional[str] = None
+    client_name: Optional[str] = None
+    qname: str
+    qtype: Optional[str] = None
+    decision: str
+    matched_rule: Optional[str] = None
+    matched_category: Optional[str] = None
+    matched_feed_id: Optional[str] = None
+    response_code: Optional[str] = None
+    cache_hit: Optional[bool] = None
+    latency_us: Optional[int] = None
+
+
+@router.get("/query-log", response_model=list[QueryLogEntry])
+def query_log(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    decision: Optional[Literal["allow", "block"]] = None,
+    group_id: Optional[str] = None,
+    qname: Optional[str] = None,
+    hours: Optional[int] = Query(None, ge=1, le=8760),
+    db: Session = Depends(get_db),
+    _user: models.User = Depends(get_current_user),
+) -> list[QueryLogEntry]:
+    scope = user_tenant_filter(_user)
+    q = select(models.QueryEvent)
+    filters: list[Any] = []
+    if decision:
+        filters.append(models.QueryEvent.decision == decision)
+    if group_id:
+        filters.append(models.QueryEvent.group_id == group_id)
+    if qname:
+        filters.append(models.QueryEvent.qname.icontains(qname))
+    if hours:
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
+        filters.append(models.QueryEvent.occurred_at >= since)
+    if scope is not None:
+        filters.append(models.QueryEvent.tenant_id == scope)
+    if filters:
+        q = q.where(*filters)
+    q = q.order_by(models.QueryEvent.occurred_at.desc()).offset(offset).limit(limit)
+    qevents = list(db.execute(q).scalars().all())
+
+    if not qevents:
+        return []
+
+    group_ids = {qe.group_id for qe in qevents}
+    groups: dict[str, str] = {
+        g.id: g.name
+        for g in db.query(models.Group).filter(models.Group.id.in_(group_ids)).all()
+    }
+
+    pairs = {(qe.tenant_id, qe.client_ip) for qe in qevents if qe.tenant_id and qe.client_ip}
+    clients: dict[tuple[str, str], models.ClientEntry] = {}
+    if pairs:
+        tenant_ids = {p[0] for p in pairs}
+        ips = {p[1] for p in pairs}
+        for entry in (
+            db.query(models.ClientEntry)
+            .filter(models.ClientEntry.tenant_id.in_(tenant_ids), models.ClientEntry.ip.in_(ips))
+            .all()
+        ):
+            clients[(entry.tenant_id, entry.ip)] = entry
+
+    result = []
+    for qe in qevents:
+        c: models.ClientEntry | None = (
+            clients.get((qe.tenant_id, qe.client_ip)) if qe.tenant_id and qe.client_ip else None
+        )
+        result.append(QueryLogEntry(
+            id=qe.id,
+            occurred_at=qe.occurred_at,
+            group_id=qe.group_id,
+            group_name=groups.get(qe.group_id),
+            tenant_id=qe.tenant_id,
+            client_ip=qe.client_ip,
+            client_name=c.hostname if c else None,
+            qname=qe.qname,
+            qtype=qe.qtype,
+            decision=qe.decision,
+            matched_rule=qe.matched_rule,
+            matched_category=qe.matched_category,
+            matched_feed_id=qe.matched_feed_id,
+            response_code=qe.response_code,
+            cache_hit=qe.cache_hit,
+            latency_us=qe.latency_us,
+        ))
+    return result
 
 
 @router.post("/query-events", status_code=202)

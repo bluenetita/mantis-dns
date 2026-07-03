@@ -74,12 +74,12 @@ export function PolicyPage() {
 
   const [categoryToggles, setCategoryToggles] = useState<CategoryToggle[]>([]);
   const [overrides, setOverrides] = useState<Override[]>([]);
-  const [onLoadFailure, setOnLoadFailure] = useState("FAIL_OPEN");
+  const [onLoadFailure, setOnLoadFailure] = useState<"FAIL_OPEN" | "FAIL_CLOSED">("FAIL_OPEN");
 
   useEffect(() => {
-    setCategoryToggles(policy?.category_toggles ?? []);
-    setOverrides(policy?.overrides ?? []);
-    setOnLoadFailure(policy?.on_load_failure ?? "FAIL_OPEN");
+    setCategoryToggles((policy?.category_toggles ?? []) as CategoryToggle[]);
+    setOverrides((policy?.overrides ?? []) as Override[]);
+    setOnLoadFailure((policy?.on_load_failure ?? "FAIL_OPEN") as "FAIL_OPEN" | "FAIL_CLOSED");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [policy?.id]);
 

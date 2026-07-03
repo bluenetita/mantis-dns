@@ -248,16 +248,75 @@ export function useAnalyticsByGroup(hours = 24) {
 
 // --- Audit log ---
 
-export function useAuditLog(resourceType?: string) {
+export interface AuditLogEntry {
+  id: string;
+  occurred_at: string;
+  actor: string;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  detail: string;
+  tenant_id: string | null;
+}
+
+export const AUDIT_PAGE_SIZE = 50;
+
+export function useAuditLog(resourceType?: string, offset = 0) {
   return useQuery({
-    queryKey: ["audit-log", resourceType],
-    queryFn: async () =>
-      unwrap(
-        await apiClient.GET("/api/v1/audit-log", {
-          params: { query: resourceType ? { resource_type: resourceType } : {} },
-        })
-      ),
+    queryKey: ["audit-log", resourceType, offset],
+    queryFn: () =>
+      rawGet<AuditLogEntry[]>("/api/v1/audit-log", {
+        limit: AUDIT_PAGE_SIZE,
+        offset,
+        ...(resourceType ? { resource_type: resourceType } : {}),
+      }),
     refetchInterval: 15_000,
+  });
+}
+
+// --- Query log ---
+
+export interface QueryLogEntry {
+  id: string;
+  occurred_at: string;
+  group_id: string;
+  group_name: string | null;
+  tenant_id: string | null;
+  client_ip: string | null;
+  client_name: string | null;
+  qname: string;
+  qtype: string | null;
+  decision: string;
+  matched_rule: string | null;
+  matched_category: string | null;
+  matched_feed_id: string | null;
+  response_code: string | null;
+  cache_hit: boolean | null;
+  latency_us: number | null;
+}
+
+export const QUERY_LOG_PAGE_SIZE = 50;
+
+export function useQueryLog(params: {
+  offset?: number;
+  decision?: "allow" | "block" | "";
+  group_id?: string;
+  qname?: string;
+  hours?: number;
+}) {
+  const { offset = 0, decision, group_id, qname, hours } = params;
+  return useQuery({
+    queryKey: ["query-log", offset, decision, group_id, qname, hours],
+    queryFn: () =>
+      rawGet<QueryLogEntry[]>("/api/v1/query-log", {
+        limit: QUERY_LOG_PAGE_SIZE,
+        offset,
+        ...(decision ? { decision } : {}),
+        ...(group_id ? { group_id } : {}),
+        ...(qname ? { qname } : {}),
+        ...(hours ? { hours } : {}),
+      }),
+    refetchInterval: 30_000,
   });
 }
 

@@ -1,6 +1,7 @@
-import { Badge, Card, Center, Group, Loader, Select, Stack, Table, Text, Title } from "@mantine/core";
+import { Badge, Button, Card, Center, Group, Loader, Select, Stack, Table, Text, Title } from "@mantine/core";
 import { useState } from "react";
-import { useAuditLog } from "../api/hooks";
+import { useTranslation } from "react-i18next";
+import { AUDIT_PAGE_SIZE, useAuditLog } from "../api/hooks";
 
 const RESOURCE_TYPES = ["tenant", "group", "policy", "feed", "dns_zone", "dns_record", "user"];
 
@@ -17,18 +18,29 @@ function colorFor(action: string): string {
 }
 
 export function AuditPage() {
+  const { t } = useTranslation();
   const [resourceType, setResourceType] = useState<string | null>(null);
-  const { data, isLoading, error } = useAuditLog(resourceType ?? undefined);
+  const [offset, setOffset] = useState(0);
+  const { data, isLoading, error } = useAuditLog(resourceType ?? undefined, offset);
+
+  const page = Math.floor(offset / AUDIT_PAGE_SIZE) + 1;
+  const hasPrev = offset > 0;
+  const hasNext = (data?.length ?? 0) === AUDIT_PAGE_SIZE;
+
+  function handleResourceTypeChange(v: string | null) {
+    setResourceType(v);
+    setOffset(0);
+  }
 
   return (
     <Stack>
       <Group justify="space-between">
-        <Title order={2}>Audit log</Title>
+        <Title order={2}>{t("auditLog.title")}</Title>
         <Select
-          placeholder="All resource types"
+          placeholder={t("auditLog.filterPlaceholder")}
           data={RESOURCE_TYPES}
           value={resourceType}
-          onChange={setResourceType}
+          onChange={handleResourceTypeChange}
           clearable
           w={200}
         />
@@ -36,17 +48,22 @@ export function AuditPage() {
 
       {isLoading && (
         <Center h={200}>
-          <Loader />
+          <Loader role="status" aria-label={t("common.loading")} />
         </Center>
       )}
-      {error && <Text c="red">{String(error)}</Text>}
+      {error && <Text c="red" role="alert">{String(error)}</Text>}
 
-      {data && data.length === 0 && (
+      {data && data.length === 0 && offset === 0 && (
         <Card withBorder padding="xl">
           <Text ta="center" c="dimmed">
-            No audit entries yet. Every create/update/delete on tenants, groups, policies, and feeds gets logged
-            here.
+            {t("auditLog.emptyTitle")}
           </Text>
+        </Card>
+      )}
+
+      {data && data.length === 0 && offset > 0 && (
+        <Card withBorder padding="xl">
+          <Text ta="center" c="dimmed">{t("auditLog.noMoreEntries")}</Text>
         </Card>
       )}
 
@@ -54,11 +71,11 @@ export function AuditPage() {
         <Table>
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>Time</Table.Th>
-              <Table.Th>Actor</Table.Th>
-              <Table.Th>Action</Table.Th>
-              <Table.Th>Resource</Table.Th>
-              <Table.Th>Detail</Table.Th>
+              <Table.Th>{t("auditLog.columns.time")}</Table.Th>
+              <Table.Th>{t("auditLog.columns.actor")}</Table.Th>
+              <Table.Th>{t("auditLog.columns.action")}</Table.Th>
+              <Table.Th>{t("auditLog.columns.resource")}</Table.Th>
+              <Table.Th>{t("auditLog.columns.detail")}</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -82,6 +99,28 @@ export function AuditPage() {
           </Table.Tbody>
         </Table>
       )}
+
+      <Group justify="center" gap="sm">
+        <Button
+          variant="default"
+          size="xs"
+          disabled={!hasPrev || isLoading}
+          onClick={() => setOffset(Math.max(0, offset - AUDIT_PAGE_SIZE))}
+        >
+          {t("auditLog.pagination.previous")}
+        </Button>
+        <Text size="sm" c="dimmed">
+          {t("auditLog.pagination.page", { page })}
+        </Text>
+        <Button
+          variant="default"
+          size="xs"
+          disabled={!hasNext || isLoading}
+          onClick={() => setOffset(offset + AUDIT_PAGE_SIZE)}
+        >
+          {t("auditLog.pagination.next")}
+        </Button>
+      </Group>
     </Stack>
   );
 }

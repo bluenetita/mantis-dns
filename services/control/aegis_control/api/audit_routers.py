@@ -30,7 +30,8 @@ class AuditLogEntry(BaseModel):
 
 @router.get("/audit-log", response_model=list[AuditLogEntry])
 def list_audit_log(
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     resource_type: str | None = None,
     db: Session = Depends(get_db),
     user: models.User = Depends(require_role("admin", "operator")),
@@ -44,4 +45,4 @@ def list_audit_log(
         # entries (tenant_id IS NULL — feed/upstream-resolver management,
         # unscoped pushes) are admin-only.
         query = query.filter(models.AuditLog.tenant_id == scope)
-    return list(query.order_by(desc(models.AuditLog.occurred_at)).limit(limit).all())
+    return list(query.order_by(desc(models.AuditLog.occurred_at)).offset(offset).limit(limit).all())

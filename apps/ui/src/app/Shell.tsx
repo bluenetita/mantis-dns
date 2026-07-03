@@ -15,21 +15,24 @@ import {
   IconUsers,
   IconServer,
   IconNetwork,
+  IconList,
 } from "@tabler/icons-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { type Role, useAuth } from "../auth/AuthContext";
 
-const NAV_ITEMS: { to: string; label: string; icon: typeof IconRss; minRole?: Role }[] = [
-  { to: "/dashboard", label: "Dashboard", icon: IconLayoutDashboard },
-  { to: "/tenants", label: "Tenants & policies", icon: IconBuildingSkyscraper },
-  { to: "/feeds", label: "Feeds", icon: IconRss },
-  { to: "/zones", label: "DNS Zones", icon: IconWorld },
-  { to: "/analytics", label: "Analytics", icon: IconChartBar },
-  { to: "/audit", label: "Audit log", icon: IconHistory, minRole: "operator" },
-  { to: "/users", label: "Users", icon: IconUsers, minRole: "admin" },
-  { to: "/upstream", label: "DNS Upstream", icon: IconServer, minRole: "operator" },
-  { to: "/dhcp", label: "DHCP", icon: IconNetwork, minRole: "operator" },
-  { to: "/settings", label: "Settings", icon: IconSettings },
+const NAV_ITEMS: { to: string; labelKey: string; icon: typeof IconRss; minRole?: Role }[] = [
+  { to: "/dashboard", labelKey: "nav.dashboard", icon: IconLayoutDashboard },
+  { to: "/tenants", labelKey: "nav.tenants", icon: IconBuildingSkyscraper },
+  { to: "/feeds", labelKey: "nav.feeds", icon: IconRss },
+  { to: "/zones", labelKey: "nav.dnsZones", icon: IconWorld },
+  { to: "/analytics", labelKey: "nav.analytics", icon: IconChartBar },
+  { to: "/query-log", labelKey: "nav.queryLog", icon: IconList, minRole: "operator" },
+  { to: "/audit", labelKey: "nav.auditLog", icon: IconHistory, minRole: "operator" },
+  { to: "/users", labelKey: "nav.users", icon: IconUsers, minRole: "admin" },
+  { to: "/upstream", labelKey: "nav.dnsUpstream", icon: IconServer, minRole: "operator" },
+  { to: "/dhcp", labelKey: "nav.dhcp", icon: IconNetwork, minRole: "operator" },
+  { to: "/settings", labelKey: "nav.settings", icon: IconSettings },
 ];
 
 export function Shell() {
@@ -38,6 +41,7 @@ export function Shell() {
   const location = useLocation();
   const { user, logout, hasRole } = useAuth();
   const navigate = useNavigate();
+  const { t } = useTranslation();
 
   const visibleNavItems = NAV_ITEMS.filter((item) => !item.minRole || hasRole(item.minRole));
 
@@ -47,6 +51,39 @@ export function Shell() {
       navbar={{ width: 240, breakpoint: "sm", collapsed: { mobile: !opened } }}
       padding="md"
     >
+      {/* Skip link — keyboard users jump straight to main content */}
+      <a
+        href="#main-content"
+        style={{
+          position: "absolute",
+          left: "-9999px",
+          top: "auto",
+          width: "1px",
+          height: "1px",
+          overflow: "hidden",
+        }}
+        onFocus={(e) => {
+          e.currentTarget.style.left = "8px";
+          e.currentTarget.style.top = "8px";
+          e.currentTarget.style.width = "auto";
+          e.currentTarget.style.height = "auto";
+          e.currentTarget.style.overflow = "visible";
+          e.currentTarget.style.zIndex = "9999";
+          e.currentTarget.style.padding = "8px 16px";
+          e.currentTarget.style.background = "var(--mantine-color-blue-6)";
+          e.currentTarget.style.color = "#fff";
+          e.currentTarget.style.borderRadius = "4px";
+        }}
+        onBlur={(e) => {
+          e.currentTarget.style.left = "-9999px";
+          e.currentTarget.style.top = "auto";
+          e.currentTarget.style.width = "1px";
+          e.currentTarget.style.height = "1px";
+          e.currentTarget.style.overflow = "hidden";
+        }}
+      >
+        Skip to main content
+      </a>
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between">
           <Group>
@@ -58,7 +95,7 @@ export function Shell() {
             <ActionIcon
               variant="default"
               onClick={() => toggleColorScheme()}
-              aria-label="Toggle color scheme"
+              aria-label={t("common.toggleColorScheme")}
             >
               {colorScheme === "dark" ? <IconSun size={16} /> : <IconMoon size={16} />}
             </ActionIcon>
@@ -88,7 +125,7 @@ export function Shell() {
                       navigate("/login", { replace: true });
                     }}
                   >
-                    Sign out
+                    {t("common.signOut")}
                   </Menu.Item>
                 </Menu.Dropdown>
               </Menu>
@@ -103,14 +140,14 @@ export function Shell() {
             key={item.to}
             component={NavLink}
             to={item.to}
-            label={item.label}
+            label={t(item.labelKey)}
             leftSection={<item.icon size={18} aria-hidden="true" />}
             active={location.pathname.startsWith(item.to)}
           />
         ))}
       </AppShell.Navbar>
 
-      <AppShell.Main>
+      <AppShell.Main id="main-content">
         <Outlet />
       </AppShell.Main>
     </AppShell>

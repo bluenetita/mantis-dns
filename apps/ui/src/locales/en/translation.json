@@ -1,0 +1,71 @@
+{
+  "nav": {
+    "dashboard": "Dashboard",
+    "tenants": "Tenants & policies",
+    "feeds": "Feeds",
+    "dnsZones": "DNS Zones",
+    "analytics": "Analytics",
+    "queryLog": "Query log",
+    "auditLog": "Audit log",
+    "users": "Users",
+    "dnsUpstream": "DNS Upstream",
+    "dhcp": "DHCP",
+    "settings": "Settings"
+  },
+  "auditLog": {
+    "title": "Audit log",
+    "filterPlaceholder": "All resource types",
+    "emptyTitle": "No audit entries yet. Every create/update/delete on tenants, groups, policies, and feeds gets logged here.",
+    "noMoreEntries": "No more entries.",
+    "columns": {
+      "time": "Time",
+      "actor": "Actor",
+      "action": "Action",
+      "resource": "Resource",
+      "detail": "Detail"
+    },
+    "pagination": {
+      "previous": "Previous",
+      "next": "Next",
+      "page": "Page {{page}}"
+    }
+  },
+  "queryLog": {
+    "title": "Query log",
+    "searchPlaceholder": "Search domain…",
+    "searchLabel": "Search domain",
+    "empty": "No DNS events match the current filters.",
+    "decision": {
+      "all": "All",
+      "allowed": "Allowed",
+      "blocked": "Blocked"
+    },
+    "hours": {
+      "1h": "1h",
+      "6h": "6h",
+      "24h": "24h",
+      "7d": "7d",
+      "all": "All"
+    },
+    "columns": {
+      "time": "Time",
+      "client": "Client",
+      "group": "Group",
+      "domain": "Domain",
+      "type": "Type",
+      "decision": "Decision",
+      "category": "Category",
+      "latency": "Latency"
+    },
+    "pagination": {
+      "previous": "Previous",
+      "next": "Next",
+      "page": "Page {{page}}"
+    }
+  },
+  "common": {
+    "loading": "Loading…",
+    "toggleColorScheme": "Toggle color scheme",
+    "signOut": "Sign out"
+  }
+}
