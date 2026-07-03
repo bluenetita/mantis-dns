@@ -34,6 +34,18 @@ use tracing::{debug, info, warn};
 
 pub type DotResolver = Resolver<TokioConnectionProvider>;
 
+/// Shared secret authenticating filter-node -> control-plane calls
+/// (`AEGIS_SERVICE_TOKEN`, sent as `X-Aegis-Service-Token`). Unset in dev by
+/// default — the control plane refuses to start with `AEGIS_ENV=production`
+/// unless both sides have it configured. Read fresh each call rather than
+/// cached: these are low-frequency poll/flush paths, not the DNS hot path.
+pub(crate) fn with_service_token(builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    match std::env::var("AEGIS_SERVICE_TOKEN") {
+        Ok(tok) if !tok.is_empty() => builder.header("X-Aegis-Service-Token", tok),
+        _ => builder,
+    }
+}
+
 /// Abstraction over upstream resolution so tests/CI don't depend on live
 /// network + port 853 egress (the real DoT path is exercised by the example
 /// client against a running Docker deployment instead — see README).
@@ -183,7 +195,9 @@ fn normalize(domain: &str) -> String {
 
 /// Fetches the control plane's verification key once at startup.
 pub async fn fetch_public_key(control_url: &str) -> Result<VerifyingKey> {
-    let bytes = reqwest::get(format!("{control_url}/api/v1/public-key"))
+    let client = reqwest::Client::new();
+    let bytes = with_service_token(client.get(format!("{control_url}/api/v1/public-key")))
+        .send()
         .await?
         .error_for_status()?
         .bytes()
@@ -205,7 +219,12 @@ pub async fn fetch_and_publish_bundle(
     control_url: &str,
     group_id: &str,
 ) -> Result<()> {
-    let resp = reqwest::get(format!("{control_url}/api/v1/groups/{group_id}/bundle")).await?;
+    let client = reqwest::Client::new();
+    let resp = with_service_token(
+        client.get(format!("{control_url}/api/v1/groups/{group_id}/bundle")),
+    )
+    .send()
+    .await?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         debug!("no bundle compiled yet for group {group_id}");
         return Ok(());

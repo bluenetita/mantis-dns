@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from aegis_control.api import schemas
 from aegis_control.audit import write_audit_log
-from aegis_control.auth import check_tenant_access, get_current_user, get_group_or_403, require_role, user_tenant_filter
+from aegis_control.auth import check_tenant_access, get_current_user, get_group_or_403, require_role, require_service_token, user_tenant_filter
 from aegis_control.compiler.build_policy_bundle import compile_and_store
 from aegis_control.compiler.keys import KEY_ID, load_or_create_signing_key, public_key_bytes_for
 from aegis_control.config import BUNDLE_STORAGE_DIR, FEED_STORAGE_DIR
@@ -124,11 +124,13 @@ def set_group_subnet(
 
 
 @router.get("/routing-table", response_model=list[schemas.RoutingTableEntry])
-def get_routing_table(db: Session = Depends(get_db)) -> list[schemas.RoutingTableEntry]:
+def get_routing_table(
+    db: Session = Depends(get_db), _: None = Depends(require_service_token)
+) -> list[schemas.RoutingTableEntry]:
     """Source-IP -> tenant routing table for filter nodes (design.md §7.3
     option 2). Polled machine-to-machine by Rust filter nodes — no user JWT
-    involved, so this stays unauthenticated like /public-key and the bundle
-    GET endpoint. A service-to-service token is a later hardening item."""
+    involved, so this uses the shared AEGIS_SERVICE_TOKEN instead (see
+    require_service_token), like /public-key and the bundle GET endpoint."""
     groups = db.query(models.Group).filter(models.Group.vpn_subnet.is_not(None)).all()
     return [
         schemas.RoutingTableEntry(cidr=g.vpn_subnet, group_id=g.id)
@@ -198,9 +200,9 @@ def upsert_policy(
 
 
 @router.get("/public-key")
-def get_public_key() -> Response:
+def get_public_key(_: None = Depends(require_service_token)) -> Response:
     """Filter nodes fetch this once and pin it for bundle verification.
-    Machine-to-machine, unauthenticated like /routing-table."""
+    Machine-to-machine, guarded by AEGIS_SERVICE_TOKEN like /routing-table."""
     return Response(
         content=public_key_bytes_for(_signing_key),
         media_type="application/octet-stream",
@@ -236,10 +238,11 @@ def compile_bundle(
 
 
 @router.get("/groups/{group_id}/bundle")
-def get_latest_bundle(group_id: str, db: Session = Depends(get_db)) -> Response:
+def get_latest_bundle(
+    group_id: str, db: Session = Depends(get_db), _: None = Depends(require_service_token)
+) -> Response:
     """Fetched by filter nodes after they detect a new bundle_version.
-    Unauthenticated like /routing-table — machine-to-machine traffic.
-    A service-to-service token is a later hardening item (design.md §7.3)."""
+    Machine-to-machine traffic guarded by AEGIS_SERVICE_TOKEN like /routing-table."""
     # Validate group_id exists in DB — prevents probing for arbitrary file paths.
     if db.get(models.Group, group_id) is None:
         raise HTTPException(404, "group not found")

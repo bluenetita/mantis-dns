@@ -30,6 +30,7 @@ services:
       - KEA_CTRL_URL=http://kea:8080/
       - KEA6_CTRL_URL=http://kea:8080/
       - AEGIS_INTERNAL_TOKEN=${AEGIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
+      - AEGIS_SERVICE_TOKEN=${AEGIS_SERVICE_TOKEN:-}
       - AEGIS_FILTER_NODE_IP=${AEGIS_FILTER_NODE_IP:-}
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
@@ -65,6 +66,7 @@ services:
       - CONTROL_URL=http://control:8000
       - GROUP_ID=${GROUP_ID:-}
       - DNS_BIND_ADDR=0.0.0.0:1053
+      - AEGIS_SERVICE_TOKEN=${AEGIS_SERVICE_TOKEN:-}
     depends_on:
       - control
 

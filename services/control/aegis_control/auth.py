@@ -7,6 +7,7 @@ a real identity instead of "unauthenticated".
 
 from __future__ import annotations
 
+import hmac
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -14,7 +15,7 @@ from typing import Any
 
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException
+from fastapi import Depends, Header, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -29,6 +30,20 @@ _ACCESS_TOKEN_TTL = timedelta(hours=12)
 _ROLE_RANK = {"viewer": 0, "operator": 1, "admin": 2}
 
 _bearer = HTTPBearer(auto_error=False)
+
+# Shared secret authenticating filter-node -> control-plane machine calls
+# (/public-key, /routing-table, /groups/{id}/bundle GET, /upstream-bundle/{id},
+# /query-events). Empty by default: these endpoints predate auth and stay open
+# in dev unless AEGIS_SERVICE_TOKEN is set. Production startup (main.py)
+# refuses to boot with AEGIS_ENV=production unless it's configured.
+_SERVICE_TOKEN = os.environ.get("AEGIS_SERVICE_TOKEN", "")
+
+
+def require_service_token(x_aegis_service_token: str | None = Header(None)) -> None:
+    if not _SERVICE_TOKEN:
+        return
+    if not x_aegis_service_token or not hmac.compare_digest(x_aegis_service_token, _SERVICE_TOKEN):
+        raise HTTPException(403, "invalid or missing service token")
 
 
 def hash_password(password: str) -> str:

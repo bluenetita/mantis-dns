@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from aegis_control.auth import require_role
+from aegis_control.auth import check_tenant_access, require_role, user_tenant_filter
 from aegis_control.db import models
 from aegis_control.db.session import get_db
 
@@ -157,6 +157,11 @@ def list_siem_events(
     db: Session = Depends(get_db),
     _user: models.User = Depends(require_role("admin", "operator")),
 ) -> SiemEventsPage | PlainTextResponse:
+    if tenant_id:
+        check_tenant_access(_user, tenant_id)
+    scope = user_tenant_filter(_user)
+    effective_tenant_id = tenant_id or scope
+
     query = select(models.QueryEvent)
 
     if after_id is not None:
@@ -165,8 +170,8 @@ def list_siem_events(
         except ValueError as e:
             raise HTTPException(422, "after_id must be a cursor previously returned as next_cursor") from e
         query = query.where(models.QueryEvent.seq > after_seq)
-    if tenant_id:
-        query = query.where(models.QueryEvent.tenant_id == tenant_id)
+    if effective_tenant_id:
+        query = query.where(models.QueryEvent.tenant_id == effective_tenant_id)
     if group_id:
         query = query.where(models.QueryEvent.group_id == group_id)
     if decision:

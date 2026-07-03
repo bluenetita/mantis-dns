@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from aegis_control.auth import get_current_user, get_group_or_403, user_tenant_filter
+from aegis_control.auth import get_current_user, get_group_or_403, require_service_token, user_tenant_filter
 from aegis_control.db import models
 from aegis_control.db.session import get_db
 
@@ -103,11 +103,15 @@ class GroupBreakdown(BaseModel):
 
 
 @router.post("/query-events", status_code=202)
-def ingest_query_events(payload: QueryEventBatch, db: Session = Depends(get_db)) -> dict[str, int]:
+def ingest_query_events(
+    payload: QueryEventBatch,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_service_token),
+) -> dict[str, int]:
     """Fire-and-forget sink for filter-node query telemetry. Best-effort by
-    design — the hot DNS path never blocks on this succeeding. Unauthenticated
-    like /routing-table and /public-key: this is filter-node-to-control-plane
-    traffic, not a user-facing endpoint."""
+    design — the hot DNS path never blocks on this succeeding. Guarded by
+    AEGIS_SERVICE_TOKEN like /routing-table and /public-key: this is
+    filter-node-to-control-plane traffic, not a user-facing endpoint."""
     group_ids = {event.group_id for event in payload.events}
     tenant_by_group: dict[str, str] = (
         {str(r[0]): str(r[1]) for r in db.execute(

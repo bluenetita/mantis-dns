@@ -33,6 +33,7 @@ app = FastAPI(title="Aegis-DNS Control Plane", version="0.1.0")
 
 _JWT_DEV_SECRET = "dev-insecure-secret-change-me"
 _WEBHOOK_DEV_KEY_MATERIAL = "dev-insecure-webhook-key-change-me"
+_INTERNAL_TOKEN_DEV_DEFAULT = "dev-insecure-internal-token"
 
 
 def _check_production_secrets() -> None:
@@ -47,6 +48,11 @@ def _check_production_secrets() -> None:
         errors.append("AEGIS_JWT_SECRET is too short — minimum 32 characters required")
     if not os.environ.get("AEGIS_WEBHOOK_SECRET_KEY"):
         errors.append("AEGIS_WEBHOOK_SECRET_KEY is not set")
+    internal_token = os.environ.get("AEGIS_INTERNAL_TOKEN", _INTERNAL_TOKEN_DEV_DEFAULT)
+    if internal_token == _INTERNAL_TOKEN_DEV_DEFAULT:
+        errors.append("AEGIS_INTERNAL_TOKEN is the insecure dev default — set a strong random value")
+    if not os.environ.get("AEGIS_SERVICE_TOKEN"):
+        errors.append("AEGIS_SERVICE_TOKEN is not set — filter-node M2M endpoints would be unauthenticated")
     admin_password = os.environ.get("ADMIN_PASSWORD", "change-me-now")
     if admin_password == "change-me-now":
         errors.append("ADMIN_PASSWORD is the insecure dev default — set it before first boot")

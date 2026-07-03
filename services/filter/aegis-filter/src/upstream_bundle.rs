@@ -142,7 +142,11 @@ pub async fn fetch_upstream_bundle(
     public_key: &VerifyingKey,
 ) -> Result<UpstreamBundle> {
     let url = format!("{control_url}/api/v1/upstream-bundle/{tenant_id}");
-    let resp = reqwest::get(&url).await?.error_for_status()?;
+    let client = reqwest::Client::new();
+    let resp = crate::with_service_token(client.get(&url))
+        .send()
+        .await?
+        .error_for_status()?;
 
     let sig_hex = resp
         .headers()

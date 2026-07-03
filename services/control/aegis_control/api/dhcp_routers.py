@@ -227,6 +227,8 @@ def list_scopes(
     db: Session = Depends(get_db),
     user: Any = Depends(require_role("viewer")),
 ) -> list[DhcpScope]:
+    if tenant_id:
+        check_tenant_access(user, tenant_id)
     q = db.query(DhcpScope)
     tid = tenant_id or user_tenant_filter(user)
     if tid:
@@ -482,6 +484,8 @@ def list_leases(
     Filters by scope (via kea_subnet_id) and/or tenant (all scopes for that tenant).
     Falls back gracefully if the lease4 table doesn't exist yet (Kea not started).
     """
+    if tenant_id:
+        check_tenant_access(user, tenant_id)
     tid = tenant_id or user_tenant_filter(user)
 
     # Collect kea_subnet_ids in scope

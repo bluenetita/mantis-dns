@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, selectinload
 
 from aegis_control.audit import write_audit_log
-from aegis_control.auth import check_tenant_access, get_current_user, require_role
+from aegis_control.auth import check_tenant_access, get_current_user, require_role, require_service_token
 from aegis_control.compiler.keys import KEY_ID, load_or_create_signing_key
 from aegis_control.compiler.signing import public_key_raw_bytes
 from aegis_control.db import models
@@ -710,11 +710,13 @@ def upsert_tenant_policy(
 # ── Bundle endpoint (consumed by Rust filter node) ─────────────────────────────
 
 @router.get("/upstream-bundle/{tenant_id}")
-def get_upstream_bundle(tenant_id: str, db: Session = Depends(get_db)) -> Response:
+def get_upstream_bundle(
+    tenant_id: str, db: Session = Depends(get_db), _: None = Depends(require_service_token)
+) -> Response:
     """
     Compiles a signed upstream config bundle for the given tenant.
-    No auth — like /api/v1/groups/{id}/bundle, integrity is provided by the
-    ed25519 signature; network isolation secures delivery.
+    Guarded by AEGIS_SERVICE_TOKEN like /api/v1/groups/{id}/bundle; integrity
+    is additionally provided by the ed25519 signature.
 
     Response body: canonical JSON bundle payload (sort_keys, no whitespace).
     X-Aegis-Signature header: hex-encoded ed25519 signature over the body bytes.

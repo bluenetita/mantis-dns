@@ -109,11 +109,11 @@ async fn flush(client: &reqwest::Client, control_url: &str, batch: Vec<QueryEven
         .collect();
     let body = json!({ "events": events });
 
-    if let Err(e) = client
-        .post(format!("{control_url}/api/v1/query-events"))
-        .json(&body)
-        .send()
-        .await
+    if let Err(e) = crate::with_service_token(
+        client.post(format!("{control_url}/api/v1/query-events")).json(&body),
+    )
+    .send()
+    .await
     {
         warn!("telemetry flush failed (events dropped): {e}");
     }

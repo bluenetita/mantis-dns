@@ -167,6 +167,8 @@ def list_scopes6(
     db: Session = Depends(get_db),
     user: Any = Depends(require_role("viewer")),
 ) -> list[DhcpScope6]:
+    if tenant_id:
+        check_tenant_access(user, tenant_id)
     q = db.query(DhcpScope6)
     tid = tenant_id or user_tenant_filter(user)
     if tid:
@@ -324,6 +326,8 @@ def list_leases6(
     user: Any = Depends(require_role("viewer")),
 ) -> list[Lease6Out]:
     """Read active IPv6 leases from Kea's lease6 table."""
+    if tenant_id:
+        check_tenant_access(user, tenant_id)
     tid = tenant_id or user_tenant_filter(user)
 
     q = db.query(DhcpScope6)

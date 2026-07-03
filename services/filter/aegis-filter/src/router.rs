@@ -81,7 +81,9 @@ impl TenantRouter {
 }
 
 async fn fetch_routing_table(control_url: &str) -> Result<Vec<RoutingTableEntry>> {
-    let resp = reqwest::get(format!("{control_url}/api/v1/routing-table"))
+    let client = reqwest::Client::new();
+    let resp = crate::with_service_token(client.get(format!("{control_url}/api/v1/routing-table")))
+        .send()
         .await?
         .error_for_status()?;
     Ok(resp.json().await?)

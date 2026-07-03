@@ -6,6 +6,7 @@ Not exposed in the public API docs and never reaches user-facing clients.
 """
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 from datetime import datetime, timezone
@@ -25,7 +26,7 @@ _INTERNAL_TOKEN = os.getenv("AEGIS_INTERNAL_TOKEN", "dev-insecure-internal-token
 
 
 def _verify_internal(x_internal_token: str | None = Header(None)) -> None:
-    if not x_internal_token or x_internal_token != _INTERNAL_TOKEN:
+    if not x_internal_token or not hmac.compare_digest(x_internal_token, _INTERNAL_TOKEN):
         raise HTTPException(403, "invalid internal token")
 
 
