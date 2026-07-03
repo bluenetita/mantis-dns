@@ -17,6 +17,7 @@ dependencies = [
     "grpcio-tools>=1.67",
     "pyjwt>=2.9",
     "bcrypt>=4.2",
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]

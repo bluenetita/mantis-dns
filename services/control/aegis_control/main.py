@@ -2,7 +2,10 @@
 
 import logging
 import os
+from pathlib import Path
 
+from alembic import command as alembic_command
+from alembic.config import Config as AlembicConfig
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -20,10 +23,9 @@ from aegis_control.api.siem_routers import router as siem_router
 from aegis_control.api.siem_webhook_routers import router as siem_webhook_router
 from aegis_control.api.telemetry_routers import router as telemetry_router
 from aegis_control.auth import CsrfMiddleware, hash_password
-from sqlalchemy import text
 
-from aegis_control.db.models import Base, Feed, User
-from aegis_control.db.session import SessionLocal, engine
+from aegis_control.db.models import Feed, User
+from aegis_control.db.session import SessionLocal
 from aegis_control.feeds.seed import seed_catalog
 from aegis_control.scheduler import schedule_feed, scheduler
 from aegis_control.siem_delivery import run_webhook_delivery_cycle
@@ -62,6 +64,22 @@ def _check_production_secrets() -> None:
             + "; ".join(errors)
         )
 
+_SERVICE_ROOT = Path(__file__).resolve().parent.parent  # services/control/
+_ALEMBIC_INI = _SERVICE_ROOT / "alembic.ini"
+
+
+def _run_migrations() -> None:
+    """Applies all pending Alembic migrations (migrations/versions/).
+
+    This docker-compose deployment runs exactly one `control` replica, so
+    it's safe to migrate at process startup; a multi-replica deployment
+    should instead run `alembic upgrade head` as a separate pre-start step
+    to avoid concurrent instances racing on the same migration.
+    """
+    cfg = AlembicConfig(str(_ALEMBIC_INI))
+    cfg.set_main_option("script_location", str(_SERVICE_ROOT / "migrations"))
+    alembic_command.upgrade(cfg, "head")
+
 # CSRF check runs inside the CORS layer so its 403 responses still get CORS
 # headers attached (added first == innermost; see Starlette middleware order).
 app.add_middleware(CsrfMiddleware)
@@ -98,31 +116,7 @@ app.include_router(dhcp6_router, prefix="/api/v1")
 @app.on_event("startup")
 def on_startup() -> None:
     _check_production_secrets()
-    # create_all is fine for dev. Replace with Alembic migrations before Sprint 7.
-    Base.metadata.create_all(bind=engine)
-    # Additive column migrations: safe to run on every startup (IF NOT EXISTS).
-    with engine.connect() as _conn:
-        _conn.execute(text(
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(36)"
-        ))
-        # Sprint 20: additive columns on existing DHCP tables.
-        for stmt in (
-            "ALTER TABLE dhcp_scopes ADD COLUMN IF NOT EXISTS pxe_next_server VARCHAR(45)",
-            "ALTER TABLE dhcp_scopes ADD COLUMN IF NOT EXISTS pxe_boot_filename VARCHAR(255)",
-            "ALTER TABLE dhcp_relay_configs ADD COLUMN IF NOT EXISTS circuit_id_hex VARCHAR(255)",
-            "ALTER TABLE dhcp_relay_configs ADD COLUMN IF NOT EXISTS remote_id_hex VARCHAR(255)",
-        ):
-            _conn.execute(text(stmt))
-        # Tenant-scoping dns_zones/audit_log (previously global, a real
-        # cross-tenant visibility gap — see zone_routers/audit_routers).
-        # Pre-existing rows keep tenant_id=NULL: admin-only until reassigned.
-        _conn.execute(text("ALTER TABLE dns_zones ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(36)"))
-        _conn.execute(text("ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(36)"))
-        _conn.execute(text("ALTER TABLE dns_zones DROP CONSTRAINT IF EXISTS dns_zones_name_key"))
-        _conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS dns_zones_tenant_id_name_key ON dns_zones (tenant_id, name)"
-        ))
-        _conn.commit()
+    _run_migrations()
 
     db = SessionLocal()
     try:
