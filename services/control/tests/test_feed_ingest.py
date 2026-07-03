@@ -58,7 +58,10 @@ async def test_fetch_and_ingest_updates_and_stores(tmp_path):
     transport = httpx.MockTransport(handler)
     feed = Feed(id="test-feed", category_id="malware", url="https://example.test/feed", format="hostfile")
 
-    with patch("aegis_control.feeds.ingest.check_url_safe"):
+    with patch(
+        "aegis_control.feeds.ingest.resolve_pinned_url",
+        return_value=(feed.url, "example.test"),
+    ):
         async with httpx.AsyncClient(transport=transport) as client:
             result = await fetch_and_ingest(feed, tmp_path, client)
 
@@ -76,7 +79,10 @@ async def test_fetch_and_ingest_rejects_poisoned_feed(tmp_path):
     transport = httpx.MockTransport(handler)
     feed = Feed(id="test-feed", category_id="malware", url="https://example.test/feed", format="hostfile")
 
-    with patch("aegis_control.feeds.ingest.check_url_safe"):
+    with patch(
+        "aegis_control.feeds.ingest.resolve_pinned_url",
+        return_value=(feed.url, "example.test"),
+    ):
         async with httpx.AsyncClient(transport=transport) as client:
             result = await fetch_and_ingest(feed, tmp_path, client)
 
@@ -100,7 +106,10 @@ async def test_fetch_and_ingest_unchanged_on_304(tmp_path):
         last_domain_count=42,
     )
 
-    with patch("aegis_control.feeds.ingest.check_url_safe"):
+    with patch(
+        "aegis_control.feeds.ingest.resolve_pinned_url",
+        return_value=(feed.url, "example.test"),
+    ):
         async with httpx.AsyncClient(transport=transport) as client:
             result = await fetch_and_ingest(feed, tmp_path, client)
 

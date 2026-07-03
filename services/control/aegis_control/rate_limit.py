@@ -7,11 +7,21 @@ Replace with Redis-backed slowapi when horizontal scaling lands.
 
 from __future__ import annotations
 
+import os
 import time
 from collections import defaultdict
 from threading import Lock
 
 from fastapi import HTTPException, Request
+
+# X-Forwarded-For is attacker-controlled unless it's overwritten by a proxy
+# we trust — set this to the reverse proxy's IP(s) so the login rate limiter
+# keys on the real client IP rather than a header any client can rotate to
+# dodge the limit. Empty by default: no reverse proxy in the compose
+# deployment, so XFF is never trusted (falls back to the direct peer IP).
+_TRUSTED_PROXY_IPS = {
+    ip.strip() for ip in os.environ.get("AEGIS_TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
+}
 
 
 class _SlidingWindowLimiter:
@@ -37,11 +47,16 @@ _login_limiter = _SlidingWindowLimiter(max_requests=10, window_secs=60)
 
 
 def login_rate_limit(request: Request) -> None:
-    """FastAPI dependency — enforces 10 login attempts/minute per source IP."""
+    """FastAPI dependency — enforces 10 login attempts/minute per source IP.
+
+    X-Forwarded-For is only honored when the direct peer is a configured
+    trusted proxy (AEGIS_TRUSTED_PROXY_IPS); otherwise it's client-controlled
+    and would let an attacker rotate it to dodge the limit entirely.
+    """
+    direct_ip = request.client.host if request.client else "unknown"
     forwarded = request.headers.get("X-Forwarded-For")
-    ip = (
-        forwarded.split(",")[0].strip()
-        if forwarded
-        else (request.client.host if request.client else "unknown")
-    )
+    if forwarded and direct_ip in _TRUSTED_PROXY_IPS:
+        ip = forwarded.split(",")[0].strip()
+    else:
+        ip = direct_ip
     _login_limiter.check(ip)

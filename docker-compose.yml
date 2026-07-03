@@ -2,11 +2,12 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      - POSTGRES_USER=aegis
-      - POSTGRES_PASSWORD=aegis
-      - POSTGRES_DB=aegis
-    ports:
-      - "5432:5432"
+      - POSTGRES_USER=${POSTGRES_USER:-aegis}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aegis}
+      - POSTGRES_DB=${POSTGRES_DB:-aegis}
+    # No host port publish — only reached by other containers on the compose
+    # network (service name `postgres`). Use `docker compose exec postgres
+    # psql ...` for local inspection instead of exposing 5432 to the host.
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -25,7 +26,7 @@ services:
       - ./services/control:/app
     environment:
       - PYTHONUNBUFFERED=1
-      - DATABASE_URL=postgresql+psycopg://aegis:aegis@postgres:5432/aegis
+      - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis}@postgres:5432/${POSTGRES_DB:-aegis}
       - CORS_ALLOW_ORIGINS=http://localhost:5173,http://localhost:5174,http://localhost:59144
       - KEA_CTRL_URL=http://kea:8080/
       - KEA6_CTRL_URL=http://kea:8080/
@@ -34,9 +35,9 @@ services:
       - AEGIS_FILTER_NODE_IP=${AEGIS_FILTER_NODE_IP:-}
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_USER=aegis
-      - POSTGRES_PASSWORD=aegis
-      - POSTGRES_DB=aegis
+      - POSTGRES_USER=${POSTGRES_USER:-aegis}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aegis}
+      - POSTGRES_DB=${POSTGRES_DB:-aegis}
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,15 +76,16 @@ services:
       context: services/kea
       dockerfile: Dockerfile
     ports:
-      - "8080:8080"    # Kea Control Agent REST API
+      # Control Agent REST API (8080) is deliberately not published — it's
+      # only reached by the `control` container over the compose network.
       - "67:67/udp"    # DHCPv4
       - "547:547/udp"  # DHCPv6
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_USER=aegis
-      - POSTGRES_PASSWORD=aegis
-      - POSTGRES_DB=aegis
+      - POSTGRES_USER=${POSTGRES_USER:-aegis}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aegis}
+      - POSTGRES_DB=${POSTGRES_DB:-aegis}
       - AEGIS_CTRL_URL=http://control:8000
       - AEGIS_INTERNAL_TOKEN=${AEGIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
       - KEA_ROLE=primary
@@ -100,14 +102,14 @@ services:
     build:
       context: services/kea
       dockerfile: Dockerfile
-    ports:
-      - "8081:8080"    # Kea Control Agent REST API (secondary)
+    # Control Agent REST API (8080) is deliberately not published — same
+    # reasoning as the primary `kea` service above.
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_USER=aegis
-      - POSTGRES_PASSWORD=aegis
-      - POSTGRES_DB=aegis
+      - POSTGRES_USER=${POSTGRES_USER:-aegis}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aegis}
+      - POSTGRES_DB=${POSTGRES_DB:-aegis}
       - AEGIS_CTRL_URL=http://control:8000
       - AEGIS_INTERNAL_TOKEN=${AEGIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
       - KEA_ROLE=secondary

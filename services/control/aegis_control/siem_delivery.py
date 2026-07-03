@@ -24,7 +24,7 @@ from aegis_control.audit import write_audit_log
 from aegis_control.crypto import decrypt_secret
 from aegis_control.db import models
 from aegis_control.db.session import SessionLocal
-from aegis_control.ssrf_guard import check_url_safe
+from aegis_control.ssrf_guard import resolve_pinned_url
 
 BACKOFF_SECONDS = [5, 30, 120, 600, 3600]
 MAX_CONSECUTIVE_FAILURES = 6
@@ -46,16 +46,26 @@ def _serialize_events(webhook: models.SiemWebhook, events: list[SiemEvent], deli
 
 
 async def _post(webhook: models.SiemWebhook, body: bytes, content_type: str, client: httpx.AsyncClient, delivery_id: str) -> int:
-    check_url_safe(webhook.url)  # raises ValueError → caught by caller as delivery failure
+    # raises ValueError -> caught by caller as delivery failure. Fetch by
+    # pinned IP (not the hostname) so a DNS re-resolution at connect time
+    # can't redirect this request somewhere the guard didn't see.
+    pinned_url, original_host = resolve_pinned_url(webhook.url)
     secret = decrypt_secret(webhook.secret_encrypted)
     signature = _sign(secret, body)
     headers = {
+        "Host": original_host,
         "Content-Type": content_type,
         "X-Aegis-Signature": f"sha256={signature}",
         "X-Aegis-Delivery-Id": delivery_id,
         "X-Aegis-Timestamp": str(int(datetime.now(timezone.utc).timestamp() * 1000)),
     }
-    resp = await client.post(webhook.url, content=body, headers=headers, timeout=10.0)
+    resp = await client.post(
+        pinned_url,
+        content=body,
+        headers=headers,
+        timeout=10.0,
+        extensions={"sni_hostname": original_host},
+    )
     resp.raise_for_status()
     return resp.status_code
 

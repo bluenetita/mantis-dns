@@ -36,6 +36,7 @@ from aegis_control.compiler.keys import KEY_ID, load_or_create_signing_key
 from aegis_control.compiler.signing import public_key_raw_bytes
 from aegis_control.db import models
 from aegis_control.db.session import get_db
+from aegis_control.ssrf_guard import check_probe_target_safe
 
 router = APIRouter()
 
@@ -458,6 +459,10 @@ async def probe_resolver(
     _admin: models.User = Depends(require_role("admin")),
 ) -> ProbeResult:
     r = _get_resolver_or_404(db, resolver_id)
+    try:
+        check_probe_target_safe(r.address)
+    except ValueError as e:
+        raise HTTPException(422, f"resolver probe rejected: {e}") from e
     if r.protocol == "do53":
         return await _probe_do53(r.address, r.port, r.timeout_ms)
     if r.protocol == "dot":

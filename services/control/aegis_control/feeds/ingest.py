@@ -18,7 +18,7 @@ import httpx
 
 from aegis_control.db.models import Feed
 from aegis_control.feeds.parsers import PARSERS
-from aegis_control.ssrf_guard import check_url_safe
+from aegis_control.ssrf_guard import resolve_pinned_url
 
 # Domains that must never appear in a compiled category set. A feed proposing
 # to block one of these is treated as poisoned/broken and rejected outright.
@@ -80,13 +80,23 @@ async def fetch_and_ingest(
         return IngestResult(status="error", reason=f"unknown feed format '{feed.format}'")
 
     try:
-        check_url_safe(feed.url)
+        pinned_url, original_host = resolve_pinned_url(feed.url)
     except ValueError as e:
         return IngestResult(status="error", reason=f"SSRF guard rejected feed URL: {e}")
 
-    headers = {"If-None-Match": feed.last_etag} if feed.last_etag else {}
+    # Fetch by pinned IP (not the hostname) so a DNS re-resolution at connect
+    # time can't redirect this request somewhere the guard above didn't see.
+    headers = {"Host": original_host}
+    if feed.last_etag:
+        headers["If-None-Match"] = feed.last_etag
     try:
-        resp = await client.get(feed.url, headers=headers, timeout=30.0, follow_redirects=False)
+        resp = await client.get(
+            pinned_url,
+            headers=headers,
+            timeout=30.0,
+            follow_redirects=False,
+            extensions={"sni_hostname": original_host},
+        )
     except httpx.HTTPError as e:
         return IngestResult(status="error", reason=str(e))
 
