@@ -613,7 +613,7 @@ def create_route(
     db.flush()
     write_audit_log(db, "upstream_route.create", "upstream_route", route.id,
                     detail=f"tenant={tenant_id} match={route.match_type}:{route.match_value}",
-                    actor=admin.email)
+                    actor=admin.email, tenant_id=tenant_id)
     db.commit()
     db.refresh(route)
     return route
@@ -637,7 +637,7 @@ def update_route(
     for field, value in changes.items():
         setattr(route, field, value)
     write_audit_log(db, "upstream_route.update", "upstream_route", route.id,
-                    detail=str(changes), actor=admin.email)
+                    detail=str(changes), actor=admin.email, tenant_id=tenant_id)
     db.commit()
     db.refresh(route)
     return route
@@ -655,7 +655,7 @@ def delete_route(
     if route is None or route.tenant_id != tenant_id:
         raise HTTPException(404, "route not found")
     write_audit_log(db, "upstream_route.delete", "upstream_route", route.id,
-                    detail=f"tenant={tenant_id}", actor=admin.email)
+                    detail=f"tenant={tenant_id}", actor=admin.email, tenant_id=tenant_id)
     db.delete(route)
     db.commit()
 
@@ -706,7 +706,7 @@ def upsert_tenant_policy(
         for field, value in payload.model_dump().items():
             setattr(policy, field, value)
     write_audit_log(db, "upstream_policy.upsert", "upstream_tenant_policy", tenant_id,
-                    detail=str(payload.model_dump()), actor=admin.email)
+                    detail=str(payload.model_dump()), actor=admin.email, tenant_id=tenant_id)
     db.commit()
     db.refresh(policy)
     return policy

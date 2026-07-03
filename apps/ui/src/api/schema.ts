@@ -86,8 +86,8 @@ export interface paths {
          * Get Routing Table
          * @description Source-IP -> tenant routing table for filter nodes (design.md §7.3
          *     option 2). Polled machine-to-machine by Rust filter nodes — no user JWT
-         *     involved, so this stays unauthenticated like /public-key and the bundle
-         *     GET endpoint. A service-to-service token is a later hardening item.
+         *     involved, so this uses the shared AEGIS_SERVICE_TOKEN instead (see
+         *     require_service_token), like /public-key and the bundle GET endpoint.
          */
         get: operations["get_routing_table_api_v1_routing_table_get"];
         put?: never;
@@ -126,7 +126,7 @@ export interface paths {
         /**
          * Get Public Key
          * @description Filter nodes fetch this once and pin it for bundle verification.
-         *     Machine-to-machine, unauthenticated like /routing-table.
+         *     Machine-to-machine, guarded by AEGIS_SERVICE_TOKEN like /routing-table.
          */
         get: operations["get_public_key_api_v1_public_key_get"];
         put?: never;
@@ -144,7 +144,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Latest Bundle */
+        /**
+         * Get Latest Bundle
+         * @description Fetched by filter nodes after they detect a new bundle_version.
+         *     Machine-to-machine traffic guarded by AEGIS_SERVICE_TOKEN like /routing-table.
+         */
         get: operations["get_latest_bundle_api_v1_groups__group_id__bundle_get"];
         put?: never;
         /**
@@ -153,6 +157,28 @@ export interface paths {
          *     content-addressed on disk, bumps the version, and returns the bytes.
          */
         post: operations["compile_bundle_api_v1_groups__group_id__bundle_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/groups/{group_id}/policy/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Domain
+         * @description Simulates the filter's decision for a given domain against this group's
+         *     current saved policy (overrides + category toggles). Does NOT require a
+         *     compiled bundle — reads directly from DB + feed domain files.
+         */
+        post: operations["test_domain_api_v1_groups__group_id__policy_test_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -229,9 +255,9 @@ export interface paths {
         /**
          * Ingest Query Events
          * @description Fire-and-forget sink for filter-node query telemetry. Best-effort by
-         *     design — the hot DNS path never blocks on this succeeding. Unauthenticated
-         *     like /routing-table and /public-key: this is filter-node-to-control-plane
-         *     traffic, not a user-facing endpoint.
+         *     design — the hot DNS path never blocks on this succeeding. Guarded by
+         *     AEGIS_SERVICE_TOKEN like /routing-table and /public-key: this is
+         *     filter-node-to-control-plane traffic, not a user-facing endpoint.
          */
         post: operations["ingest_query_events_api_v1_query_events_post"];
         delete?: never;
@@ -395,6 +421,23 @@ export interface paths {
         put?: never;
         /** Login */
         post: operations["login_api_v1_auth_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Logout */
+        post: operations["logout_api_v1_auth_logout_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -657,6 +700,578 @@ export interface paths {
         patch: operations["update_record_api_v1_dns_zones__zone_id__records__record_id__patch"];
         trace?: never;
     };
+    "/api/v1/upstream/resolvers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Resolvers */
+        get: operations["list_resolvers_api_v1_upstream_resolvers_get"];
+        put?: never;
+        /** Create Resolver */
+        post: operations["create_resolver_api_v1_upstream_resolvers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/upstream/resolvers/{resolver_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Resolver */
+        delete: operations["delete_resolver_api_v1_upstream_resolvers__resolver_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Resolver */
+        patch: operations["update_resolver_api_v1_upstream_resolvers__resolver_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/upstream/resolvers/{resolver_id}/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Probe Resolver */
+        post: operations["probe_resolver_api_v1_upstream_resolvers__resolver_id__probe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/upstream/pools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Pools */
+        get: operations["list_pools_api_v1_upstream_pools_get"];
+        put?: never;
+        /** Create Pool */
+        post: operations["create_pool_api_v1_upstream_pools_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/upstream/pools/{pool_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Pool */
+        delete: operations["delete_pool_api_v1_upstream_pools__pool_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Pool */
+        patch: operations["update_pool_api_v1_upstream_pools__pool_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/upstream/pools/{pool_id}/members/{resolver_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Upsert Pool Member */
+        put: operations["upsert_pool_member_api_v1_upstream_pools__pool_id__members__resolver_id__put"];
+        post?: never;
+        /** Remove Pool Member */
+        delete: operations["remove_pool_member_api_v1_upstream_pools__pool_id__members__resolver_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tenants/{tenant_id}/upstream/routes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Routes */
+        get: operations["list_routes_api_v1_tenants__tenant_id__upstream_routes_get"];
+        put?: never;
+        /** Create Route */
+        post: operations["create_route_api_v1_tenants__tenant_id__upstream_routes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tenants/{tenant_id}/upstream/routes/{route_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Route */
+        delete: operations["delete_route_api_v1_tenants__tenant_id__upstream_routes__route_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Route */
+        patch: operations["update_route_api_v1_tenants__tenant_id__upstream_routes__route_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/tenants/{tenant_id}/upstream/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Tenant Policy */
+        get: operations["get_tenant_policy_api_v1_tenants__tenant_id__upstream_policy_get"];
+        /** Upsert Tenant Policy */
+        put: operations["upsert_tenant_policy_api_v1_tenants__tenant_id__upstream_policy_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/upstream-bundle/{tenant_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Upstream Bundle
+         * @description Compiles a signed upstream config bundle for the given tenant.
+         *     Guarded by AEGIS_SERVICE_TOKEN like /api/v1/groups/{id}/bundle; integrity
+         *     is additionally provided by the ed25519 signature.
+         *
+         *     Response body: canonical JSON bundle payload (sort_keys, no whitespace).
+         *     X-Aegis-Signature header: hex-encoded ed25519 signature over the body bytes.
+         *     X-Aegis-Bundle-Version: unix timestamp of compilation (for cache-busting).
+         */
+        get: operations["get_upstream_bundle_api_v1_upstream_bundle__tenant_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp/scopes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Scopes */
+        get: operations["list_scopes_api_v1_dhcp_scopes_get"];
+        put?: never;
+        /** Create Scope */
+        post: operations["create_scope_api_v1_dhcp_scopes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp/scopes/{scope_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Scope */
+        get: operations["get_scope_api_v1_dhcp_scopes__scope_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Scope */
+        delete: operations["delete_scope_api_v1_dhcp_scopes__scope_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Scope */
+        patch: operations["update_scope_api_v1_dhcp_scopes__scope_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/dhcp/scopes/{scope_id}/reservations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Reservations */
+        get: operations["list_reservations_api_v1_dhcp_scopes__scope_id__reservations_get"];
+        put?: never;
+        /** Create Reservation */
+        post: operations["create_reservation_api_v1_dhcp_scopes__scope_id__reservations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp/scopes/{scope_id}/reservations/{reservation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Reservation */
+        delete: operations["delete_reservation_api_v1_dhcp_scopes__scope_id__reservations__reservation_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Reservation */
+        patch: operations["update_reservation_api_v1_dhcp_scopes__scope_id__reservations__reservation_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/dhcp/scopes/{scope_id}/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Options */
+        get: operations["list_options_api_v1_dhcp_scopes__scope_id__options_get"];
+        put?: never;
+        /** Create Option */
+        post: operations["create_option_api_v1_dhcp_scopes__scope_id__options_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp/scopes/{scope_id}/options/{option_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Option */
+        delete: operations["delete_option_api_v1_dhcp_scopes__scope_id__options__option_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp/scopes/{scope_id}/relays": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Relays */
+        get: operations["list_relays_api_v1_dhcp_scopes__scope_id__relays_get"];
+        put?: never;
+        /** Create Relay */
+        post: operations["create_relay_api_v1_dhcp_scopes__scope_id__relays_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp/scopes/{scope_id}/relays/{relay_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Relay */
+        delete: operations["delete_relay_api_v1_dhcp_scopes__scope_id__relays__relay_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp/leases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Leases
+         * @description Read active leases from Kea's lease4 table.
+         *
+         *     Filters by scope (via kea_subnet_id) and/or tenant (all scopes for that tenant).
+         *     Falls back gracefully if the lease4 table doesn't exist yet (Kea not started).
+         */
+        get: operations["list_leases_api_v1_dhcp_leases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp/push": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Manual Push
+         * @description Re-push the full Kea DHCPv4 config from DB. Use after Kea restarts.
+         */
+        post: operations["manual_push_api_v1_dhcp_push_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Dhcp Stats
+         * @description Per-subnet utilisation stats computed from the lease4 table.
+         */
+        get: operations["dhcp_stats_api_v1_dhcp_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp/kea/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Kea Status
+         * @description Query Kea daemon status via Control Agent.
+         */
+        get: operations["kea_status_api_v1_dhcp_kea_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp/ha/{tenant_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Ha Config */
+        get: operations["get_ha_config_api_v1_dhcp_ha__tenant_id__get"];
+        /**
+         * Upsert Ha Config
+         * @description Create or replace the HA config for a tenant (idempotent PUT).
+         */
+        put: operations["upsert_ha_config_api_v1_dhcp_ha__tenant_id__put"];
+        post?: never;
+        /** Delete Ha Config */
+        delete: operations["delete_ha_config_api_v1_dhcp_ha__tenant_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/internal/dhcp-event": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dhcp Event
+         * @description Receives lease add/expire events from the Kea run_script hook.
+         *
+         *     For each event:
+         *     - Always upserts ClientEntry (client registry)
+         *     - If the scope has ddns_enabled + ddns_zone_id, creates/removes A record
+         */
+        post: operations["dhcp_event_api_v1_internal_dhcp_event_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp6/scopes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Scopes6 */
+        get: operations["list_scopes6_api_v1_dhcp6_scopes_get"];
+        put?: never;
+        /** Create Scope6 */
+        post: operations["create_scope6_api_v1_dhcp6_scopes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp6/scopes/{scope_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Scope6 */
+        get: operations["get_scope6_api_v1_dhcp6_scopes__scope_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Scope6 */
+        delete: operations["delete_scope6_api_v1_dhcp6_scopes__scope_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Scope6 */
+        patch: operations["update_scope6_api_v1_dhcp6_scopes__scope_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/dhcp6/scopes/{scope_id}/reservations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Reservations6 */
+        get: operations["list_reservations6_api_v1_dhcp6_scopes__scope_id__reservations_get"];
+        put?: never;
+        /** Create Reservation6 */
+        post: operations["create_reservation6_api_v1_dhcp6_scopes__scope_id__reservations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp6/scopes/{scope_id}/reservations/{reservation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Reservation6 */
+        delete: operations["delete_reservation6_api_v1_dhcp6_scopes__scope_id__reservations__reservation_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Reservation6 */
+        patch: operations["update_reservation6_api_v1_dhcp6_scopes__scope_id__reservations__reservation_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/dhcp6/leases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Leases6
+         * @description Read active IPv6 leases from Kea's lease6 table.
+         */
+        get: operations["list_leases6_api_v1_dhcp6_leases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp6/push": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Manual Push6
+         * @description Re-push the full Kea DHCPv6 config from DB.
+         */
+        post: operations["manual_push6_api_v1_dhcp6_push_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -726,6 +1341,8 @@ export interface components {
             resource_id: string;
             /** Detail */
             detail: string;
+            /** Tenant Id */
+            tenant_id?: string | null;
         };
         /** CategoryBreakdown */
         CategoryBreakdown: {
@@ -743,8 +1360,9 @@ export interface components {
             /**
              * Action
              * @default ACTION_BLOCK
+             * @enum {string}
              */
-            action: string;
+            action: "ACTION_BLOCK" | "ACTION_LOG_ONLY" | "ACTION_ALLOW";
         };
         /** CategoryToggleOut */
         CategoryToggleOut: {
@@ -794,6 +1412,25 @@ export interface components {
              * @default []
              */
             tags: string[];
+        };
+        /** DhcpEvent */
+        DhcpEvent: {
+            /** Event */
+            event: string;
+            /** Ip */
+            ip: string;
+            /** Hostname */
+            hostname: string;
+            /**
+             * Mac
+             * @default
+             */
+            mac: string;
+            /**
+             * Subnet Id
+             * @default 0
+             */
+            subnet_id: number;
         };
         /** FeedCreate */
         FeedCreate: {
@@ -923,6 +1560,105 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HaConfigIn */
+        HaConfigIn: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Mode
+             * @default hot-standby
+             */
+            mode: string;
+            /**
+             * This Server Name
+             * @default primary
+             */
+            this_server_name: string;
+            /**
+             * This Server Url
+             * @default http://kea-primary:8080/
+             */
+            this_server_url: string;
+            /**
+             * Peer Name
+             * @default secondary
+             */
+            peer_name: string;
+            /**
+             * Peer Url
+             * @default http://kea-secondary:8080/
+             */
+            peer_url: string;
+            /**
+             * Peer Role
+             * @default standby
+             */
+            peer_role: string;
+            /**
+             * Max Unacked Clients
+             * @default 10
+             */
+            max_unacked_clients: number | null;
+            /**
+             * Max Ack Delay Ms
+             * @default 10000
+             */
+            max_ack_delay_ms: number | null;
+            /**
+             * Heartbeat Delay Ms
+             * @default 10000
+             */
+            heartbeat_delay_ms: number | null;
+            /**
+             * Retry Wait Time Ms
+             * @default 5000
+             */
+            retry_wait_time_ms: number | null;
+        };
+        /** HaConfigOut */
+        HaConfigOut: {
+            /** Id */
+            id: string;
+            /** Tenant Id */
+            tenant_id: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Mode */
+            mode: string;
+            /** This Server Name */
+            this_server_name: string;
+            /** This Server Url */
+            this_server_url: string;
+            /** Peer Name */
+            peer_name: string;
+            /** Peer Url */
+            peer_url: string;
+            /** Peer Role */
+            peer_role: string;
+            /** Max Unacked Clients */
+            max_unacked_clients: number | null;
+            /** Max Ack Delay Ms */
+            max_ack_delay_ms: number | null;
+            /** Heartbeat Delay Ms */
+            heartbeat_delay_ms: number | null;
+            /** Retry Wait Time Ms */
+            retry_wait_time_ms: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Kea Push Error */
+            kea_push_error?: string | null;
+        };
         /** IngestOut */
         IngestOut: {
             /** Status */
@@ -931,6 +1667,38 @@ export interface components {
             domain_count: number;
             /** Reason */
             reason: string;
+        };
+        /** Lease6Out */
+        Lease6Out: {
+            /** Ip Address */
+            ip_address: string;
+            /** Duid */
+            duid: string | null;
+            /** Hostname */
+            hostname: string;
+            /** Subnet Id */
+            subnet_id: number;
+            /** Expire */
+            expire: string | null;
+            /** State */
+            state: number;
+            /** Lease Type */
+            lease_type: number;
+        };
+        /** LeaseOut */
+        LeaseOut: {
+            /** Ip Address */
+            ip_address: string;
+            /** Mac Address */
+            mac_address: string | null;
+            /** Hostname */
+            hostname: string;
+            /** Subnet Id */
+            subnet_id: number;
+            /** Expire */
+            expire: string | null;
+            /** State */
+            state: number;
         };
         /** LoginRequest */
         LoginRequest: {
@@ -941,21 +1709,53 @@ export interface components {
         };
         /** LoginResponse */
         LoginResponse: {
-            /** Access Token */
-            access_token: string;
-            /**
-             * Token Type
-             * @default bearer
-             */
-            token_type: string;
             user: components["schemas"]["UserOut"];
+            /** Csrf Token */
+            csrf_token: string;
+        };
+        /** OptionCreate */
+        OptionCreate: {
+            /** Option Code */
+            option_code: number;
+            /**
+             * Option Space
+             * @default dhcp4
+             */
+            option_space: string;
+            /** Value */
+            value: string;
+            /**
+             * Always Send
+             * @default false
+             */
+            always_send: boolean;
+        };
+        /** OptionOut */
+        OptionOut: {
+            /** Id */
+            id: string;
+            /** Scope Id */
+            scope_id: string | null;
+            /** Static Lease Id */
+            static_lease_id: string | null;
+            /** Option Code */
+            option_code: number;
+            /** Option Space */
+            option_space: string;
+            /** Value */
+            value: string;
+            /** Always Send */
+            always_send: boolean;
         };
         /** OverrideIn */
         OverrideIn: {
             /** Domain */
             domain: string;
-            /** Kind */
-            kind: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "allow" | "deny";
         };
         /** OverrideOut */
         OverrideOut: {
@@ -977,13 +1777,32 @@ export interface components {
             /** Overrides */
             overrides: components["schemas"]["OverrideOut"][];
         };
+        /** PolicyTestRequest */
+        PolicyTestRequest: {
+            /** Domain */
+            domain: string;
+        };
+        /** PolicyTestResult */
+        PolicyTestResult: {
+            /** Domain */
+            domain: string;
+            /** Decision */
+            decision: string;
+            /** Matched */
+            matched: string;
+            /** Matched Category */
+            matched_category?: string | null;
+            /** Matched Feed Id */
+            matched_feed_id?: string | null;
+        };
         /** PolicyUpsert */
         PolicyUpsert: {
             /**
              * On Load Failure
              * @default FAIL_OPEN
+             * @enum {string}
              */
-            on_load_failure: string;
+            on_load_failure: "FAIL_OPEN" | "FAIL_CLOSED";
             /**
              * Category Toggles
              * @default []
@@ -995,10 +1814,167 @@ export interface components {
              */
             overrides: components["schemas"]["OverrideIn"][];
         };
+        /** PoolCreate */
+        PoolCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Strategy
+             * @default round_robin
+             * @enum {string}
+             */
+            strategy: "round_robin" | "weighted_round_robin" | "failover" | "latency";
+            /**
+             * Health Check Interval S
+             * @default 30
+             */
+            health_check_interval_s: number;
+            /**
+             * Health Check Timeout Ms
+             * @default 2000
+             */
+            health_check_timeout_ms: number;
+            /**
+             * Health Check Query
+             * @default .
+             */
+            health_check_query: string;
+            /**
+             * Health Check Type
+             * @default soa
+             * @enum {string}
+             */
+            health_check_type: "soa" | "a" | "txt";
+            /**
+             * Unhealthy Threshold
+             * @default 3
+             */
+            unhealthy_threshold: number;
+            /**
+             * Healthy Threshold
+             * @default 2
+             */
+            healthy_threshold: number;
+            /**
+             * Min Healthy Members
+             * @default 1
+             */
+            min_healthy_members: number;
+            /** Fallback Pool Id */
+            fallback_pool_id?: string | null;
+            /**
+             * Members
+             * @default []
+             */
+            members: components["schemas"]["PoolMemberIn"][];
+        };
+        /** PoolMemberIn */
+        PoolMemberIn: {
+            /** Resolver Id */
+            resolver_id: string;
+            /**
+             * Weight
+             * @default 1
+             */
+            weight: number;
+            /**
+             * Priority
+             * @default 0
+             */
+            priority: number;
+        };
+        /** PoolMemberOut */
+        PoolMemberOut: {
+            /** Id */
+            id: string;
+            /** Pool Id */
+            pool_id: string;
+            /** Resolver Id */
+            resolver_id: string;
+            /** Weight */
+            weight: number;
+            /** Priority */
+            priority: number;
+        };
+        /** PoolOut */
+        PoolOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Strategy */
+            strategy: string;
+            /** Health Check Interval S */
+            health_check_interval_s: number;
+            /** Health Check Timeout Ms */
+            health_check_timeout_ms: number;
+            /** Health Check Query */
+            health_check_query: string;
+            /** Health Check Type */
+            health_check_type: string;
+            /** Unhealthy Threshold */
+            unhealthy_threshold: number;
+            /** Healthy Threshold */
+            healthy_threshold: number;
+            /** Min Healthy Members */
+            min_healthy_members: number;
+            /** Fallback Pool Id */
+            fallback_pool_id: string | null;
+            /** Members */
+            members: components["schemas"]["PoolMemberOut"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** PoolUpdate */
+        PoolUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Strategy */
+            strategy?: ("round_robin" | "weighted_round_robin" | "failover" | "latency") | null;
+            /** Health Check Interval S */
+            health_check_interval_s?: number | null;
+            /** Health Check Timeout Ms */
+            health_check_timeout_ms?: number | null;
+            /** Health Check Query */
+            health_check_query?: string | null;
+            /** Health Check Type */
+            health_check_type?: ("soa" | "a" | "txt") | null;
+            /** Unhealthy Threshold */
+            unhealthy_threshold?: number | null;
+            /** Healthy Threshold */
+            healthy_threshold?: number | null;
+            /** Min Healthy Members */
+            min_healthy_members?: number | null;
+            /** Fallback Pool Id */
+            fallback_pool_id?: string | null;
+        };
+        /** ProbeResult */
+        ProbeResult: {
+            /** Ok */
+            ok: boolean;
+            /** Latency Ms */
+            latency_ms: number | null;
+            /** Response Code */
+            response_code: string | null;
+            /** Dnssec Ad */
+            dnssec_ad: boolean;
+            /** Tls Subject */
+            tls_subject: string | null;
+            /** Error */
+            error: string | null;
+        };
         /** QueryEventBatch */
         QueryEventBatch: {
             /** Events */
-            events: components["schemas"]["QueryEventIn"][];
+            events?: components["schemas"]["QueryEventIn"][];
         };
         /** QueryEventIn */
         QueryEventIn: {
@@ -1113,6 +2089,414 @@ export interface components {
             /** Enabled */
             enabled?: boolean | null;
         };
+        /** RelayCreate */
+        RelayCreate: {
+            /** Relay Ip */
+            relay_ip: string;
+            /** Description */
+            description?: string | null;
+            /** Circuit Id Hex */
+            circuit_id_hex?: string | null;
+            /** Remote Id Hex */
+            remote_id_hex?: string | null;
+        };
+        /** RelayOut */
+        RelayOut: {
+            /** Id */
+            id: string;
+            /** Scope Id */
+            scope_id: string;
+            /** Relay Ip */
+            relay_ip: string;
+            /** Description */
+            description: string | null;
+            /** Circuit Id Hex */
+            circuit_id_hex: string | null;
+            /** Remote Id Hex */
+            remote_id_hex: string | null;
+        };
+        /** Reservation6Create */
+        Reservation6Create: {
+            /** Duid */
+            duid: string;
+            /** Ip Address */
+            ip_address: string;
+            /** Hostname */
+            hostname?: string | null;
+            /** Description */
+            description?: string | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+        };
+        /** Reservation6Out */
+        Reservation6Out: {
+            /** Id */
+            id: string;
+            /** Scope Id */
+            scope_id: string;
+            /** Tenant Id */
+            tenant_id: string;
+            /** Duid */
+            duid: string;
+            /** Ip Address */
+            ip_address: string;
+            /** Hostname */
+            hostname: string | null;
+            /** Description */
+            description: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Kea Push Error */
+            kea_push_error?: string | null;
+        };
+        /** Reservation6Update */
+        Reservation6Update: {
+            /** Duid */
+            duid?: string | null;
+            /** Ip Address */
+            ip_address?: string | null;
+            /** Hostname */
+            hostname?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
+        };
+        /** ReservationCreate */
+        ReservationCreate: {
+            /** Mac Address */
+            mac_address: string;
+            /** Ip Address */
+            ip_address: string;
+            /** Hostname */
+            hostname?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Client Id */
+            client_id?: string | null;
+            /** Next Server */
+            next_server?: string | null;
+            /** Boot Filename */
+            boot_filename?: string | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+        };
+        /** ReservationOut */
+        ReservationOut: {
+            /** Id */
+            id: string;
+            /** Scope Id */
+            scope_id: string;
+            /** Tenant Id */
+            tenant_id: string;
+            /** Mac Address */
+            mac_address: string;
+            /** Ip Address */
+            ip_address: string;
+            /** Hostname */
+            hostname: string | null;
+            /** Description */
+            description: string | null;
+            /** Client Id */
+            client_id: string | null;
+            /** Next Server */
+            next_server: string | null;
+            /** Boot Filename */
+            boot_filename: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Kea Push Error */
+            kea_push_error?: string | null;
+        };
+        /** ReservationUpdate */
+        ReservationUpdate: {
+            /** Mac Address */
+            mac_address?: string | null;
+            /** Ip Address */
+            ip_address?: string | null;
+            /** Hostname */
+            hostname?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Client Id */
+            client_id?: string | null;
+            /** Next Server */
+            next_server?: string | null;
+            /** Boot Filename */
+            boot_filename?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
+        };
+        /** ResolverCreate */
+        ResolverCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Protocol
+             * @enum {string}
+             */
+            protocol: "dot" | "doh" | "do53";
+            /** Address */
+            address: string;
+            /**
+             * Port
+             * @default 853
+             */
+            port: number;
+            /** Tls Hostname */
+            tls_hostname?: string | null;
+            /**
+             * Tls Pin Sha256
+             * @default []
+             */
+            tls_pin_sha256: string[];
+            /**
+             * Doh Path
+             * @default /dns-query
+             */
+            doh_path: string;
+            /**
+             * Doh Method
+             * @default post
+             * @enum {string}
+             */
+            doh_method: "get" | "post";
+            /**
+             * Dnssec Validation
+             * @default opportunistic
+             * @enum {string}
+             */
+            dnssec_validation: "strict" | "opportunistic" | "disabled";
+            /**
+             * Qname Minimization
+             * @default true
+             */
+            qname_minimization: boolean;
+            /**
+             * Edns Client Subnet
+             * @default false
+             */
+            edns_client_subnet: boolean;
+            /**
+             * Timeout Ms
+             * @default 5000
+             */
+            timeout_ms: number;
+            /**
+             * Max Retries
+             * @default 2
+             */
+            max_retries: number;
+            /**
+             * Connect Timeout Ms
+             * @default 3000
+             */
+            connect_timeout_ms: number;
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+        };
+        /** ResolverOut */
+        ResolverOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Protocol */
+            protocol: string;
+            /** Address */
+            address: string;
+            /** Port */
+            port: number;
+            /** Tls Hostname */
+            tls_hostname: string | null;
+            /** Tls Pin Sha256 */
+            tls_pin_sha256: string[];
+            /** Doh Path */
+            doh_path: string;
+            /** Doh Method */
+            doh_method: string;
+            /** Dnssec Validation */
+            dnssec_validation: string;
+            /** Qname Minimization */
+            qname_minimization: boolean;
+            /** Edns Client Subnet */
+            edns_client_subnet: boolean;
+            /** Timeout Ms */
+            timeout_ms: number;
+            /** Max Retries */
+            max_retries: number;
+            /** Connect Timeout Ms */
+            connect_timeout_ms: number;
+            /** Tags */
+            tags: string[];
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ResolverUpdate */
+        ResolverUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Protocol */
+            protocol?: ("dot" | "doh" | "do53") | null;
+            /** Address */
+            address?: string | null;
+            /** Port */
+            port?: number | null;
+            /** Tls Hostname */
+            tls_hostname?: string | null;
+            /** Tls Pin Sha256 */
+            tls_pin_sha256?: string[] | null;
+            /** Doh Path */
+            doh_path?: string | null;
+            /** Doh Method */
+            doh_method?: ("get" | "post") | null;
+            /** Dnssec Validation */
+            dnssec_validation?: ("strict" | "opportunistic" | "disabled") | null;
+            /** Qname Minimization */
+            qname_minimization?: boolean | null;
+            /** Edns Client Subnet */
+            edns_client_subnet?: boolean | null;
+            /** Timeout Ms */
+            timeout_ms?: number | null;
+            /** Max Retries */
+            max_retries?: number | null;
+            /** Connect Timeout Ms */
+            connect_timeout_ms?: number | null;
+            /** Tags */
+            tags?: string[] | null;
+            /** Enabled */
+            enabled?: boolean | null;
+        };
+        /** RouteCreate */
+        RouteCreate: {
+            /** Name */
+            name: string;
+            /** Group Id */
+            group_id?: string | null;
+            /**
+             * Match Type
+             * @enum {string}
+             */
+            match_type: "domain_suffix" | "domain_exact" | "qtype" | "category" | "default";
+            /** Match Value */
+            match_value?: string | null;
+            /** Pool Id */
+            pool_id: string;
+            /** Nxdomain Ttl Override */
+            nxdomain_ttl_override?: number | null;
+            /** Require Dnssec */
+            require_dnssec?: boolean | null;
+            /**
+             * Priority
+             * @default 100
+             */
+            priority: number;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+        };
+        /** RouteOut */
+        RouteOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Tenant Id */
+            tenant_id: string | null;
+            /** Group Id */
+            group_id: string | null;
+            /** Match Type */
+            match_type: string;
+            /** Match Value */
+            match_value: string | null;
+            /** Pool Id */
+            pool_id: string;
+            /** Nxdomain Ttl Override */
+            nxdomain_ttl_override: number | null;
+            /** Require Dnssec */
+            require_dnssec: boolean | null;
+            /** Priority */
+            priority: number;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** RouteUpdate */
+        RouteUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Group Id */
+            group_id?: string | null;
+            /** Match Type */
+            match_type?: ("domain_suffix" | "domain_exact" | "qtype" | "category" | "default") | null;
+            /** Match Value */
+            match_value?: string | null;
+            /** Pool Id */
+            pool_id?: string | null;
+            /** Nxdomain Ttl Override */
+            nxdomain_ttl_override?: number | null;
+            /** Require Dnssec */
+            require_dnssec?: boolean | null;
+            /** Priority */
+            priority?: number | null;
+            /** Enabled */
+            enabled?: boolean | null;
+        };
         /** RoutingTableEntry */
         RoutingTableEntry: {
             /** Cidr */
@@ -1120,61 +2504,333 @@ export interface components {
             /** Group Id */
             group_id: string;
         };
-        /** SiemEvent */
-        SiemEvent: {
-            /** Id */
-            id: string;
-            /** Seq */
-            seq: number;
-            /**
-             * Occurred At
-             * Format: date-time
-             */
-            occurred_at: string;
+        /** Scope6Create */
+        Scope6Create: {
             /** Tenant Id */
-            tenant_id: string | null;
-            /** Group Id */
-            group_id: string;
-            /** Client Ip */
-            client_ip: string | null;
-            /** Client Name */
-            client_name?: string | null;
-            /** Owner */
-            owner?: string | null;
-            /** Device Type */
-            device_type?: string | null;
+            tenant_id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Subnet */
+            subnet: string;
+            /** Pool Start */
+            pool_start: string;
+            /** Pool End */
+            pool_end: string;
+            /** Pd Prefix */
+            pd_prefix?: string | null;
+            /** Pd Prefix Len */
+            pd_prefix_len?: number | null;
             /**
-             * Tags
+             * Dns Servers
              * @default []
              */
-            tags: string[];
-            /** Qname */
-            qname: string;
-            /** Qtype */
-            qtype: string | null;
-            /** Decision */
-            decision: string;
-            /** Matched Rule */
-            matched_rule: string | null;
-            /** Matched Category */
-            matched_category: string | null;
-            /** Matched Feed Id */
-            matched_feed_id: string | null;
-            /** Response Code */
-            response_code: string | null;
-            /** Cache Hit */
-            cache_hit: boolean | null;
-            /** Latency Us */
-            latency_us: number | null;
+            dns_servers: string[];
+            /** Domain Name */
+            domain_name?: string | null;
+            /** Interface */
+            interface?: string | null;
+            /**
+             * Preferred Lifetime S
+             * @default 3000
+             */
+            preferred_lifetime_s: number;
+            /**
+             * Valid Lifetime S
+             * @default 4000
+             */
+            valid_lifetime_s: number;
+            /** Renew Time S */
+            renew_time_s?: number | null;
+            /** Rebind Time S */
+            rebind_time_s?: number | null;
+            /**
+             * Ddns Enabled
+             * @default false
+             */
+            ddns_enabled: boolean;
+            /** Ddns Zone Id */
+            ddns_zone_id?: string | null;
+            /**
+             * Ddns Ttl S
+             * @default 300
+             */
+            ddns_ttl_s: number;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
         };
-        /** SiemEventsPage */
-        SiemEventsPage: {
-            /** Events */
-            events: components["schemas"]["SiemEvent"][];
-            /** Next Cursor */
-            next_cursor: string | null;
-            /** Total In Window */
-            total_in_window: number;
+        /** Scope6Out */
+        Scope6Out: {
+            /** Id */
+            id: string;
+            /** Tenant Id */
+            tenant_id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            /** Subnet */
+            subnet: string;
+            /** Pool Start */
+            pool_start: string;
+            /** Pool End */
+            pool_end: string;
+            /** Pd Prefix */
+            pd_prefix: string | null;
+            /** Pd Prefix Len */
+            pd_prefix_len: number | null;
+            /** Dns Servers */
+            dns_servers: string[];
+            /** Domain Name */
+            domain_name: string | null;
+            /** Interface */
+            interface: string | null;
+            /** Preferred Lifetime S */
+            preferred_lifetime_s: number;
+            /** Valid Lifetime S */
+            valid_lifetime_s: number;
+            /** Renew Time S */
+            renew_time_s: number | null;
+            /** Rebind Time S */
+            rebind_time_s: number | null;
+            /** Ddns Enabled */
+            ddns_enabled: boolean;
+            /** Ddns Zone Id */
+            ddns_zone_id: string | null;
+            /** Ddns Ttl S */
+            ddns_ttl_s: number;
+            /** Kea Subnet Id */
+            kea_subnet_id: number | null;
+            /** Last Pushed At */
+            last_pushed_at: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Kea Push Error */
+            kea_push_error?: string | null;
+        };
+        /** Scope6Update */
+        Scope6Update: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Pool Start */
+            pool_start?: string | null;
+            /** Pool End */
+            pool_end?: string | null;
+            /** Pd Prefix */
+            pd_prefix?: string | null;
+            /** Pd Prefix Len */
+            pd_prefix_len?: number | null;
+            /** Dns Servers */
+            dns_servers?: string[] | null;
+            /** Domain Name */
+            domain_name?: string | null;
+            /** Interface */
+            interface?: string | null;
+            /** Preferred Lifetime S */
+            preferred_lifetime_s?: number | null;
+            /** Valid Lifetime S */
+            valid_lifetime_s?: number | null;
+            /** Renew Time S */
+            renew_time_s?: number | null;
+            /** Rebind Time S */
+            rebind_time_s?: number | null;
+            /** Ddns Enabled */
+            ddns_enabled?: boolean | null;
+            /** Ddns Zone Id */
+            ddns_zone_id?: string | null;
+            /** Ddns Ttl S */
+            ddns_ttl_s?: number | null;
+            /** Enabled */
+            enabled?: boolean | null;
+        };
+        /** ScopeCreate */
+        ScopeCreate: {
+            /** Tenant Id */
+            tenant_id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Subnet */
+            subnet: string;
+            /** Range Start */
+            range_start: string;
+            /** Range End */
+            range_end: string;
+            /** Router Ip */
+            router_ip?: string | null;
+            /**
+             * Dns Servers
+             * @default []
+             */
+            dns_servers: string[];
+            /** Ntp Server */
+            ntp_server?: string | null;
+            /** Domain Name */
+            domain_name?: string | null;
+            /** Interface */
+            interface?: string | null;
+            /** Vlan Id */
+            vlan_id?: number | null;
+            /**
+             * Lease Time S
+             * @default 86400
+             */
+            lease_time_s: number;
+            /**
+             * Max Lease Time S
+             * @default 604800
+             */
+            max_lease_time_s: number;
+            /** Renew Time S */
+            renew_time_s?: number | null;
+            /** Rebind Time S */
+            rebind_time_s?: number | null;
+            /**
+             * Ddns Enabled
+             * @default false
+             */
+            ddns_enabled: boolean;
+            /** Ddns Zone Id */
+            ddns_zone_id?: string | null;
+            /**
+             * Ddns Ttl S
+             * @default 300
+             */
+            ddns_ttl_s: number;
+            /** Pxe Next Server */
+            pxe_next_server?: string | null;
+            /** Pxe Boot Filename */
+            pxe_boot_filename?: string | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+        };
+        /** ScopeOut */
+        ScopeOut: {
+            /** Id */
+            id: string;
+            /** Tenant Id */
+            tenant_id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            /** Subnet */
+            subnet: string;
+            /** Range Start */
+            range_start: string;
+            /** Range End */
+            range_end: string;
+            /** Router Ip */
+            router_ip: string | null;
+            /** Dns Servers */
+            dns_servers: string[];
+            /** Ntp Server */
+            ntp_server: string | null;
+            /** Domain Name */
+            domain_name: string | null;
+            /** Interface */
+            interface: string | null;
+            /** Vlan Id */
+            vlan_id: number | null;
+            /** Lease Time S */
+            lease_time_s: number;
+            /** Max Lease Time S */
+            max_lease_time_s: number;
+            /** Renew Time S */
+            renew_time_s: number | null;
+            /** Rebind Time S */
+            rebind_time_s: number | null;
+            /** Ddns Enabled */
+            ddns_enabled: boolean;
+            /** Ddns Zone Id */
+            ddns_zone_id: string | null;
+            /** Ddns Ttl S */
+            ddns_ttl_s: number;
+            /** Pxe Next Server */
+            pxe_next_server: string | null;
+            /** Pxe Boot Filename */
+            pxe_boot_filename: string | null;
+            /** Kea Subnet Id */
+            kea_subnet_id: number | null;
+            /** Last Pushed At */
+            last_pushed_at: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Kea Push Error */
+            kea_push_error?: string | null;
+        };
+        /** ScopeUpdate */
+        ScopeUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Range Start */
+            range_start?: string | null;
+            /** Range End */
+            range_end?: string | null;
+            /** Router Ip */
+            router_ip?: string | null;
+            /** Dns Servers */
+            dns_servers?: string[] | null;
+            /** Ntp Server */
+            ntp_server?: string | null;
+            /** Domain Name */
+            domain_name?: string | null;
+            /** Interface */
+            interface?: string | null;
+            /** Vlan Id */
+            vlan_id?: number | null;
+            /** Lease Time S */
+            lease_time_s?: number | null;
+            /** Max Lease Time S */
+            max_lease_time_s?: number | null;
+            /** Renew Time S */
+            renew_time_s?: number | null;
+            /** Rebind Time S */
+            rebind_time_s?: number | null;
+            /** Ddns Enabled */
+            ddns_enabled?: boolean | null;
+            /** Ddns Zone Id */
+            ddns_zone_id?: string | null;
+            /** Ddns Ttl S */
+            ddns_ttl_s?: number | null;
+            /** Pxe Next Server */
+            pxe_next_server?: string | null;
+            /** Pxe Boot Filename */
+            pxe_boot_filename?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
         };
         /** SiemWebhookCreate */
         SiemWebhookCreate: {
@@ -1265,6 +2921,23 @@ export interface components {
             /** Enabled */
             enabled?: boolean | null;
         };
+        /** SubnetStatOut */
+        SubnetStatOut: {
+            /** Scope Id */
+            scope_id: string;
+            /** Scope Name */
+            scope_name: string;
+            /** Subnet */
+            subnet: string;
+            /** Kea Subnet Id */
+            kea_subnet_id: number;
+            /** Total Addresses */
+            total_addresses: number;
+            /** Assigned Addresses */
+            assigned_addresses: number;
+            /** Declined Addresses */
+            declined_addresses: number;
+        };
         /** TenantCreate */
         TenantCreate: {
             /** Name */
@@ -1281,6 +2954,65 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** TenantPolicyIn */
+        TenantPolicyIn: {
+            /**
+             * Require Encrypted
+             * @default false
+             */
+            require_encrypted: boolean;
+            /**
+             * Dnssec Validation
+             * @default opportunistic
+             * @enum {string}
+             */
+            dnssec_validation: "strict" | "opportunistic" | "disabled";
+            /**
+             * Qname Minimization
+             * @default true
+             */
+            qname_minimization: boolean;
+            /**
+             * Blocked Response Type
+             * @default nxdomain
+             * @enum {string}
+             */
+            blocked_response_type: "nxdomain" | "refused" | "zero_ip";
+            /**
+             * Min Ttl S
+             * @default 0
+             */
+            min_ttl_s: number;
+            /**
+             * Max Ttl S
+             * @default 86400
+             */
+            max_ttl_s: number;
+            /**
+             * Negative Ttl S
+             * @default 300
+             */
+            negative_ttl_s: number;
+        };
+        /** TenantPolicyOut */
+        TenantPolicyOut: {
+            /** Tenant Id */
+            tenant_id: string;
+            /** Require Encrypted */
+            require_encrypted: boolean;
+            /** Dnssec Validation */
+            dnssec_validation: string;
+            /** Qname Minimization */
+            qname_minimization: boolean;
+            /** Blocked Response Type */
+            blocked_response_type: string;
+            /** Min Ttl S */
+            min_ttl_s: number;
+            /** Max Ttl S */
+            max_ttl_s: number;
+            /** Negative Ttl S */
+            negative_ttl_s: number;
         };
         /** TestDeliveryResult */
         TestDeliveryResult: {
@@ -1342,6 +3074,8 @@ export interface components {
              * @default viewer
              */
             role: string;
+            /** Tenant Id */
+            tenant_id?: string | null;
         };
         /** UserOut */
         UserOut: {
@@ -1351,11 +3085,15 @@ export interface components {
             email: string;
             /** Role */
             role: string;
+            /** Tenant Id */
+            tenant_id?: string | null;
         };
         /** UserUpdate */
         UserUpdate: {
             /** Role */
             role: string;
+            /** Tenant Id */
+            tenant_id?: string | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -1372,6 +3110,8 @@ export interface components {
         };
         /** ZoneCreate */
         ZoneCreate: {
+            /** Tenant Id */
+            tenant_id: string;
             /** Name */
             name: string;
             /** Zone Type */
@@ -1398,6 +3138,8 @@ export interface components {
         ZoneOut: {
             /** Id */
             id: string;
+            /** Tenant Id */
+            tenant_id: string | null;
             /** Name */
             name: string;
             /** Zone Type */
@@ -1664,7 +3406,9 @@ export interface operations {
     get_routing_table_api_v1_routing_table_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-aegis-service-token"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1677,6 +3421,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RoutingTableEntry"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1750,7 +3503,9 @@ export interface operations {
     get_public_key_api_v1_public_key_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-aegis-service-token"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1765,12 +3520,23 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     get_latest_bundle_api_v1_groups__group_id__bundle_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-aegis-service-token"?: string | null;
+            };
             path: {
                 group_id: string;
             };
@@ -1816,6 +3582,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_domain_api_v1_groups__group_id__policy_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyTestResult"];
                 };
             };
             /** @description Validation Error */
@@ -1980,7 +3781,9 @@ export interface operations {
     ingest_query_events_api_v1_query_events_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "x-aegis-service-token"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2109,7 +3912,9 @@ export interface operations {
     };
     analytics_by_group_api_v1_analytics_by_group_get: {
         parameters: {
-            query?: never;
+            query?: {
+                hours?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2123,6 +3928,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GroupBreakdown"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -2195,7 +4009,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
-                decision?: string | null;
+                decision?: ("allow" | "block") | null;
             };
             header?: never;
             path?: never;
@@ -2285,6 +4099,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    logout_api_v1_auth_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -2449,7 +4281,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SiemEventsPage"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -3017,6 +4849,1622 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_resolvers_api_v1_upstream_resolvers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolverOut"][];
+                };
+            };
+        };
+    };
+    create_resolver_api_v1_upstream_resolvers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolverCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolverOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_resolver_api_v1_upstream_resolvers__resolver_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                resolver_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_resolver_api_v1_upstream_resolvers__resolver_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                resolver_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolverUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolverOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    probe_resolver_api_v1_upstream_resolvers__resolver_id__probe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                resolver_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProbeResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_pools_api_v1_upstream_pools_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolOut"][];
+                };
+            };
+        };
+    };
+    create_pool_api_v1_upstream_pools_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PoolCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_pool_api_v1_upstream_pools__pool_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pool_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_pool_api_v1_upstream_pools__pool_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pool_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PoolUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upsert_pool_member_api_v1_upstream_pools__pool_id__members__resolver_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pool_id: string;
+                resolver_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PoolMemberIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PoolMemberOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_pool_member_api_v1_upstream_pools__pool_id__members__resolver_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pool_id: string;
+                resolver_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_routes_api_v1_tenants__tenant_id__upstream_routes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RouteOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_route_api_v1_tenants__tenant_id__upstream_routes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RouteCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RouteOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_route_api_v1_tenants__tenant_id__upstream_routes__route_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_id: string;
+                route_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_route_api_v1_tenants__tenant_id__upstream_routes__route_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_id: string;
+                route_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RouteUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RouteOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tenant_policy_api_v1_tenants__tenant_id__upstream_policy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantPolicyOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upsert_tenant_policy_api_v1_tenants__tenant_id__upstream_policy_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TenantPolicyIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantPolicyOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_upstream_bundle_api_v1_upstream_bundle__tenant_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-aegis-service-token"?: string | null;
+            };
+            path: {
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_scopes_api_v1_dhcp_scopes_get: {
+        parameters: {
+            query?: {
+                tenant_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScopeOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_scope_api_v1_dhcp_scopes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScopeCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScopeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_scope_api_v1_dhcp_scopes__scope_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScopeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_scope_api_v1_dhcp_scopes__scope_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_scope_api_v1_dhcp_scopes__scope_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScopeUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScopeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_reservations_api_v1_dhcp_scopes__scope_id__reservations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReservationOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_reservation_api_v1_dhcp_scopes__scope_id__reservations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReservationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReservationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_reservation_api_v1_dhcp_scopes__scope_id__reservations__reservation_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+                reservation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_reservation_api_v1_dhcp_scopes__scope_id__reservations__reservation_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+                reservation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReservationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReservationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_options_api_v1_dhcp_scopes__scope_id__options_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_option_api_v1_dhcp_scopes__scope_id__options_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_option_api_v1_dhcp_scopes__scope_id__options__option_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+                option_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_relays_api_v1_dhcp_scopes__scope_id__relays_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RelayOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_relay_api_v1_dhcp_scopes__scope_id__relays_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RelayCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RelayOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_relay_api_v1_dhcp_scopes__scope_id__relays__relay_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+                relay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_leases_api_v1_dhcp_leases_get: {
+        parameters: {
+            query?: {
+                scope_id?: string | null;
+                tenant_id?: string | null;
+                state?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaseOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    manual_push_api_v1_dhcp_push_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    dhcp_stats_api_v1_dhcp_stats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubnetStatOut"][];
+                };
+            };
+        };
+    };
+    kea_status_api_v1_dhcp_kea_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    get_ha_config_api_v1_dhcp_ha__tenant_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HaConfigOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upsert_ha_config_api_v1_dhcp_ha__tenant_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HaConfigIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HaConfigOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_ha_config_api_v1_dhcp_ha__tenant_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dhcp_event_api_v1_internal_dhcp_event_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-internal-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DhcpEvent"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_scopes6_api_v1_dhcp6_scopes_get: {
+        parameters: {
+            query?: {
+                tenant_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Scope6Out"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_scope6_api_v1_dhcp6_scopes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Scope6Create"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Scope6Out"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_scope6_api_v1_dhcp6_scopes__scope_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Scope6Out"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_scope6_api_v1_dhcp6_scopes__scope_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_scope6_api_v1_dhcp6_scopes__scope_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Scope6Update"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Scope6Out"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_reservations6_api_v1_dhcp6_scopes__scope_id__reservations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Reservation6Out"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_reservation6_api_v1_dhcp6_scopes__scope_id__reservations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Reservation6Create"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Reservation6Out"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_reservation6_api_v1_dhcp6_scopes__scope_id__reservations__reservation_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+                reservation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_reservation6_api_v1_dhcp6_scopes__scope_id__reservations__reservation_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scope_id: string;
+                reservation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Reservation6Update"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Reservation6Out"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_leases6_api_v1_dhcp6_leases_get: {
+        parameters: {
+            query?: {
+                scope_id?: string | null;
+                tenant_id?: string | null;
+                state?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lease6Out"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    manual_push6_api_v1_dhcp6_push_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };

@@ -186,6 +186,11 @@ class AuditLog(Base):
     resource_type: Mapped[str] = mapped_column(String(64))  # "tenant" | "group" | "policy" | "feed"
     resource_id: Mapped[str] = mapped_column(String(64))
     detail: Mapped[str] = mapped_column(String(2000), default="")
+    # None = a genuinely global action (feed/upstream-resolver management, an
+    # unscoped admin push, etc.) — visible only to admins. Populated wherever
+    # the mutated resource has a tenant, so a tenant-scoped operator/viewer
+    # sees their own tenant's history (see list_audit_log's user_tenant_filter).
+    tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
 
 class User(Base):
@@ -208,9 +213,14 @@ class DnsZone(Base):
     """Local/forward/passthrough DNS zone definitions (design §DNS-Zones)."""
 
     __tablename__ = "dns_zones"
+    __table_args__ = (UniqueConstraint("tenant_id", "name"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    name: Mapped[str] = mapped_column(String(255), unique=True)
+    # Nullable at the DB level only for pre-migration rows (see main.py's
+    # additive ALTER TABLE) — every new zone requires one; a null-tenant zone
+    # is only visible/manageable by admins (see zone_routers._get_zone_or_403).
+    tenant_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(255))
     zone_type: Mapped[str] = mapped_column(String(20))  # "local" | "forward" | "passthrough"
     description: Mapped[str] = mapped_column(String(500), default="")
     enabled: Mapped[bool] = mapped_column(default=True)

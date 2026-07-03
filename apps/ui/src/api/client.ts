@@ -2,141 +2,98 @@ import createClient, { type Middleware } from "openapi-fetch";
 import type { paths } from "./schema";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-const TOKEN_KEY = "aegis_token";
 
-export const apiClient = createClient<paths>({ baseUrl: API_BASE });
+function readCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+/** Double-submit CSRF token: set (non-httpOnly) by /auth/login alongside the
+ * httpOnly session cookie the browser now carries automatically. Every
+ * mutating request must echo it back as a header so the server can confirm
+ * the request originated from JS running on our own origin. */
+function csrfHeaders(): Record<string, string> {
+  const csrf = readCookie("aegis_csrf");
+  return csrf ? { "X-Aegis-CSRF-Token": csrf } : {};
+}
+
+function handleUnauthorized(status: number): void {
+  if (status === 401 && !window.location.pathname.startsWith("/login")) {
+    window.location.assign("/login");
+  }
+}
+
+export const apiClient = createClient<paths>({ baseUrl: API_BASE, credentials: "include" });
 
 const authMiddleware: Middleware = {
   onRequest({ request }) {
-    const token = localStorage.getItem(TOKEN_KEY);
-    if (token) request.headers.set("Authorization", `Bearer ${token}`);
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      for (const [key, value] of Object.entries(csrfHeaders())) {
+        request.headers.set(key, value);
+      }
+    }
     return request;
   },
   onResponse({ response }) {
-    if (response.status === 401 && !window.location.pathname.startsWith("/login")) {
-      localStorage.removeItem(TOKEN_KEY);
-      window.location.assign("/login");
-    }
+    handleUnauthorized(response.status);
     return response;
   },
 };
 
 apiClient.use(authMiddleware);
 
+async function rawRequest<T>(method: string, url: string, body?: unknown): Promise<T> {
+  const isMutating = method !== "GET" && method !== "HEAD";
+  const res = await fetch(url, {
+    method,
+    credentials: "include",
+    headers: {
+      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(isMutating ? csrfHeaders() : {}),
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  handleUnauthorized(res.status);
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${text}`);
+  }
+  if (res.status === 204) return undefined as T;
+  return res.json() as Promise<T>;
+}
+
 /** Typed fetch for endpoints not yet in the OpenAPI schema (new/extended routes). */
 export async function rawGet<T>(
   path: string,
   params?: Record<string, string | number | boolean | undefined>,
 ): Promise<T> {
-  const token = localStorage.getItem("aegis_token");
   const url = new URL(`${API_BASE}${path}`);
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined) url.searchParams.set(k, String(v));
     }
   }
-  const res = await fetch(url.toString(), {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (res.status === 401 && !window.location.pathname.startsWith("/login")) {
-    localStorage.removeItem("aegis_token");
-    window.location.assign("/login");
-    throw new Error("Unauthorized");
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(`${res.status}: ${text}`);
-  }
-  return res.json() as Promise<T>;
+  return rawRequest<T>("GET", url.toString());
 }
 
 /** Typed POST for endpoints not yet in the OpenAPI schema. */
 export async function rawPost<T>(path: string, body: unknown): Promise<T> {
-  const token = localStorage.getItem("aegis_token");
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(body),
-  });
-  if (res.status === 401 && !window.location.pathname.startsWith("/login")) {
-    localStorage.removeItem("aegis_token");
-    window.location.assign("/login");
-    throw new Error("Unauthorized");
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(`${res.status}: ${text}`);
-  }
-  return res.json() as Promise<T>;
+  return rawRequest<T>("POST", `${API_BASE}${path}`, body);
 }
 
 /** PATCH for endpoints not yet in the OpenAPI schema. */
 export async function rawPatch<T>(path: string, body: unknown): Promise<T> {
-  const token = localStorage.getItem(TOKEN_KEY);
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(body),
-  });
-  if (res.status === 401 && !window.location.pathname.startsWith("/login")) {
-    localStorage.removeItem(TOKEN_KEY);
-    window.location.assign("/login");
-    throw new Error("Unauthorized");
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(`${res.status}: ${text}`);
-  }
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  return rawRequest<T>("PATCH", `${API_BASE}${path}`, body);
 }
 
 /** PUT for endpoints not yet in the OpenAPI schema. */
 export async function rawPut<T>(path: string, body: unknown): Promise<T> {
-  const token = localStorage.getItem(TOKEN_KEY);
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(body),
-  });
-  if (res.status === 401 && !window.location.pathname.startsWith("/login")) {
-    localStorage.removeItem(TOKEN_KEY);
-    window.location.assign("/login");
-    throw new Error("Unauthorized");
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(`${res.status}: ${text}`);
-  }
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  return rawRequest<T>("PUT", `${API_BASE}${path}`, body);
 }
 
 /** DELETE for endpoints not yet in the OpenAPI schema. */
 export async function rawDelete(path: string): Promise<void> {
-  const token = localStorage.getItem(TOKEN_KEY);
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "DELETE",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (res.status === 401 && !window.location.pathname.startsWith("/login")) {
-    localStorage.removeItem(TOKEN_KEY);
-    window.location.assign("/login");
-    throw new Error("Unauthorized");
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(`${res.status}: ${text}`);
-  }
+  await rawRequest<void>("DELETE", `${API_BASE}${path}`);
 }
 
 /** Throws with a readable message on non-2xx instead of returning `{error}`. */

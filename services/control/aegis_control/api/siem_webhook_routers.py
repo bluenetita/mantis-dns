@@ -102,7 +102,7 @@ def create_webhook(
     )
     db.add(webhook)
     db.flush()
-    write_audit_log(db, "siem_webhook.create", "siem_webhook", webhook.id, detail=f"name={webhook.name} url={webhook.url}", actor=admin.email)
+    write_audit_log(db, "siem_webhook.create", "siem_webhook", webhook.id, detail=f"name={webhook.name} url={webhook.url}", actor=admin.email, tenant_id=webhook.tenant_id)
     db.commit()
     db.refresh(webhook)
     return webhook
@@ -145,7 +145,7 @@ def update_webhook(
         webhook.consecutive_failures = 0
         webhook.next_retry_at = None
 
-    write_audit_log(db, "siem_webhook.update", "siem_webhook", webhook.id, detail=str(changes), actor=admin.email)
+    write_audit_log(db, "siem_webhook.update", "siem_webhook", webhook.id, detail=str(changes), actor=admin.email, tenant_id=webhook.tenant_id)
     db.commit()
     db.refresh(webhook)
     return webhook
@@ -162,7 +162,7 @@ def delete_webhook(
         raise HTTPException(404, "webhook not found")
     if webhook.tenant_id is not None:
         check_tenant_access(admin, webhook.tenant_id)
-    write_audit_log(db, "siem_webhook.delete", "siem_webhook", webhook.id, detail=f"name={webhook.name}", actor=admin.email)
+    write_audit_log(db, "siem_webhook.delete", "siem_webhook", webhook.id, detail=f"name={webhook.name}", actor=admin.email, tenant_id=webhook.tenant_id)
     db.delete(webhook)
     db.commit()
 
@@ -184,14 +184,14 @@ async def test_webhook(
     async with httpx.AsyncClient() as client:
         try:
             status_code = await deliver_test_event(webhook, client)
-            write_audit_log(db, "siem_webhook.test", "siem_webhook", webhook.id, detail=f"status={status_code}", actor=admin.email)
+            write_audit_log(db, "siem_webhook.test", "siem_webhook", webhook.id, detail=f"status={status_code}", actor=admin.email, tenant_id=webhook.tenant_id)
             db.commit()
             return TestDeliveryResult(success=True, status_code=status_code, error=None)
         except httpx.HTTPStatusError as e:
-            write_audit_log(db, "siem_webhook.test", "siem_webhook", webhook.id, detail=f"failed status={e.response.status_code}", actor=admin.email)
+            write_audit_log(db, "siem_webhook.test", "siem_webhook", webhook.id, detail=f"failed status={e.response.status_code}", actor=admin.email, tenant_id=webhook.tenant_id)
             db.commit()
             return TestDeliveryResult(success=False, status_code=e.response.status_code, error=str(e))
         except Exception as e:
-            write_audit_log(db, "siem_webhook.test", "siem_webhook", webhook.id, detail=f"failed: {e}", actor=admin.email)
+            write_audit_log(db, "siem_webhook.test", "siem_webhook", webhook.id, detail=f"failed: {e}", actor=admin.email, tenant_id=webhook.tenant_id)
             db.commit()
             return TestDeliveryResult(success=False, status_code=None, error=str(e))

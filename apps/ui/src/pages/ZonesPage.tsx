@@ -34,6 +34,7 @@ import { useNavigate } from "react-router-dom";
 import {
   useCreateZone,
   useDeleteZone,
+  useTenants,
   useUpdateZone,
   useZones,
 } from "../api/hooks";
@@ -81,8 +82,11 @@ const ZONE_TYPE_OPTIONS = [
 
 function AddZoneModal({ opened, onClose }: { opened: boolean; onClose: () => void }) {
   const createZone = useCreateZone();
+  const { data: tenants = [] } = useTenants();
+  const tenantOptions = tenants.map((t) => ({ value: t.id, label: t.name }));
   const form = useForm({
     initialValues: {
+      tenant_id: "",
       name: "",
       zone_type: "local",
       description: "",
@@ -91,6 +95,7 @@ function AddZoneModal({ opened, onClose }: { opened: boolean; onClose: () => voi
       forwarder: "",
     },
     validate: {
+      tenant_id: (v) => (!v ? "Tenant is required" : null),
       name: (v) => (v.trim().length < 1 ? "Zone name is required" : null),
       zone_type: (v) => (!v ? "Zone type is required" : null),
       forwarder: (v, values) =>
@@ -122,6 +127,13 @@ function AddZoneModal({ opened, onClose }: { opened: boolean; onClose: () => voi
         )}
       >
         <Stack>
+          <Select
+            label="Tenant"
+            data={tenantOptions}
+            required
+            searchable
+            {...form.getInputProps("tenant_id")}
+          />
           <SimpleGrid cols={2}>
             <TextInput
               label="Zone name"
@@ -241,6 +253,8 @@ function EditZoneModal({ zone, onClose }: { zone: Zone | null; onClose: () => vo
 
 export function ZonesPage() {
   const { data: zones = [], isLoading } = useZones();
+  const { data: tenants = [] } = useTenants();
+  const tenantName = (id: string | null) => tenants.find((t) => t.id === id)?.name ?? "—";
   const deleteZone = useDeleteZone();
   const navigate = useNavigate();
   const [addOpened, { open: openAdd, close: closeAdd }] = useDisclosure(false);
@@ -350,6 +364,7 @@ export function ZonesPage() {
         <Table.Thead>
           <Table.Tr>
             <Table.Th>Zone</Table.Th>
+            <Table.Th w={140}>Tenant</Table.Th>
             <Table.Th w={120}>Type</Table.Th>
             <Table.Th w={110}>Status</Table.Th>
             <Table.Th w={90} style={{ textAlign: "right" }}>Records</Table.Th>
@@ -361,7 +376,7 @@ export function ZonesPage() {
         <Table.Tbody>
           {visible.length === 0 && (
             <Table.Tr>
-              <Table.Td colSpan={7}>
+              <Table.Td colSpan={8}>
                 <Text c="dimmed" ta="center" py="md">No zones match the current filters</Text>
               </Table.Td>
             </Table.Tr>
@@ -391,6 +406,11 @@ export function ZonesPage() {
                     </Group>
                     {z.description && <Text size="xs" c="dimmed">{z.description}</Text>}
                   </Stack>
+                </Table.Td>
+
+                {/* Tenant */}
+                <Table.Td>
+                  <Text size="sm">{tenantName(z.tenant_id)}</Text>
                 </Table.Td>
 
                 {/* Type */}

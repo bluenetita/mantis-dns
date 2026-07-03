@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import hmac
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from typing import Any
 
 import bcrypt
 import jwt
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -30,6 +31,43 @@ _ACCESS_TOKEN_TTL = timedelta(hours=12)
 _ROLE_RANK = {"viewer": 0, "operator": 1, "admin": 2}
 
 _bearer = HTTPBearer(auto_error=False)
+
+# Session lives in an httpOnly cookie (JS/XSS can't read it) instead of
+# localStorage. SESSION_COOKIE_NAME carries the JWT; CSRF_COOKIE_NAME carries
+# a companion, JS-readable random token the frontend must echo back as
+# CSRF_HEADER_NAME on every mutating request (double-submit pattern — see
+# CsrfMiddleware). SameSite=lax is enough here: the UI and API share the same
+# registrable "site" (same host or same parent domain) even across
+# ports/subdomains, so it's still attached on the app's own cross-origin
+# fetches but never on a genuinely cross-site request.
+SESSION_COOKIE_NAME = "aegis_session"
+CSRF_COOKIE_NAME = "aegis_csrf"
+CSRF_HEADER_NAME = "x-aegis-csrf-token"
+
+
+def _cookies_secure() -> bool:
+    return os.environ.get("AEGIS_ENV", "").lower() == "production"
+
+
+def generate_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def set_auth_cookies(response: Response, access_token: str, csrf_token: str) -> None:
+    max_age = int(_ACCESS_TOKEN_TTL.total_seconds())
+    response.set_cookie(
+        SESSION_COOKIE_NAME, access_token, max_age=max_age, httponly=True,
+        samesite="lax", secure=_cookies_secure(), path="/",
+    )
+    response.set_cookie(
+        CSRF_COOKIE_NAME, csrf_token, max_age=max_age, httponly=False,
+        samesite="lax", secure=_cookies_secure(), path="/",
+    )
+
+
+def clear_auth_cookies(response: Response) -> None:
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    response.delete_cookie(CSRF_COOKIE_NAME, path="/")
 
 # Shared secret authenticating filter-node -> control-plane machine calls
 # (/public-key, /routing-table, /groups/{id}/bundle GET, /upstream-bundle/{id},
@@ -68,13 +106,17 @@ def create_access_token(user: models.User) -> str:
 
 
 def get_current_user(
+    request: Request,
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
     db: Session = Depends(get_db),
 ) -> models.User:
-    if creds is None:
-        raise HTTPException(401, "missing bearer token")
+    # Prefer an explicit Bearer token (scripts/API clients); fall back to the
+    # httpOnly session cookie the browser UI relies on.
+    token = creds.credentials if creds is not None else request.cookies.get(SESSION_COOKIE_NAME)
+    if token is None:
+        raise HTTPException(401, "missing bearer token or session cookie")
     try:
-        payload = jwt.decode(creds.credentials, _JWT_SECRET, algorithms=[_JWT_ALGORITHM])
+        payload = jwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALGORITHM])
     except jwt.PyJWTError as e:
         raise HTTPException(401, "invalid token") from e
 
@@ -117,3 +159,47 @@ def require_role(*roles: str) -> Any:
         return user
 
     return _check
+
+
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+# /auth/login is exempt: there's no CSRF cookie to double-submit yet before a
+# session exists. Every other mutating route is covered automatically —
+# machine-to-machine callers (service token, internal token) never carry the
+# session cookie, so the check below is a no-op for them regardless.
+_CSRF_EXEMPT_PATHS = {"/api/v1/auth/login"}
+
+
+class CsrfMiddleware:
+    """Double-submit-cookie CSRF check, enforced only when a request is
+    actually authenticated via the httpOnly session cookie (no Authorization
+    header). Bearer-token callers aren't exposed to browser-driven CSRF in
+    the first place, so they're left alone."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive=receive)
+        needs_check = (
+            request.method not in _SAFE_METHODS
+            and request.url.path not in _CSRF_EXEMPT_PATHS
+            and "authorization" not in request.headers
+            and SESSION_COOKIE_NAME in request.cookies
+        )
+        if needs_check:
+            cookie_csrf = request.cookies.get(CSRF_COOKIE_NAME)
+            header_csrf = request.headers.get(CSRF_HEADER_NAME)
+            if not cookie_csrf or not header_csrf or not hmac.compare_digest(cookie_csrf, header_csrf):
+                response = Response(
+                    content='{"detail":"missing or invalid CSRF token"}',
+                    status_code=403,
+                    media_type="application/json",
+                )
+                await response(scope, receive, send)
+                return
+
+        await self.app(scope, receive, send)

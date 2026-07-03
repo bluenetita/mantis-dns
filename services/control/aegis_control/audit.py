@@ -21,6 +21,7 @@ def write_audit_log(
     resource_id: str,
     detail: str = "",
     actor: str = "unauthenticated",
+    tenant_id: str | None = None,
 ) -> None:
     db.add(
         AuditLog(
@@ -29,5 +30,6 @@ def write_audit_log(
             resource_type=resource_type,
             resource_id=resource_id,
             detail=detail,
+            tenant_id=tenant_id,
         )
     )

@@ -12,56 +12,40 @@ export interface AuthUser {
 
 const ROLE_RANK: Record<Role, number> = { viewer: 0, operator: 1, admin: 2 };
 
-const TOKEN_KEY = "aegis_token";
-
 interface AuthContextValue {
   user: AuthUser | null;
-  token: string | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   hasRole: (...roles: Role[]) => boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY));
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!token) {
-      setUser(null);
-      setLoading(false);
-      return;
-    }
+    // The session lives in an httpOnly cookie the browser attaches on its
+    // own — just ask who we are; a 401 means there's no valid session.
     apiClient
       .GET("/api/v1/auth/me")
       .then((res) => {
-        if (res.error || !res.data) {
-          localStorage.removeItem(TOKEN_KEY);
-          setToken(null);
-          setUser(null);
-        } else {
-          setUser(res.data as AuthUser);
-        }
+        setUser(res.error || !res.data ? null : (res.data as AuthUser));
       })
       .finally(() => setLoading(false));
-  }, [token]);
+  }, []);
 
   const login = useCallback(async (email: string, password: string) => {
     const res = unwrap(
       await apiClient.POST("/api/v1/auth/login", { body: { email, password } })
     );
-    localStorage.setItem(TOKEN_KEY, res.access_token);
-    setToken(res.access_token);
     setUser(res.user as AuthUser);
   }, []);
 
-  const logout = useCallback(() => {
-    localStorage.removeItem(TOKEN_KEY);
-    setToken(null);
+  const logout = useCallback(async () => {
+    await apiClient.POST("/api/v1/auth/logout");
     setUser(null);
   }, []);
 
@@ -75,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, logout, hasRole }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, hasRole }}>
       {children}
     </AuthContext.Provider>
   );
@@ -85,12 +69,4 @@ export function useAuth() {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth must be used within AuthProvider");
   return ctx;
-}
-
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
-export function clearToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
 }

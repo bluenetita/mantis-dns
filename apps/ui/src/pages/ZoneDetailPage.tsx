@@ -227,10 +227,9 @@ function RecordsTab({ zone, canWrite }: { zone: Zone; canWrite: boolean }) {
   }
 
   async function handleExport() {
-    const token = localStorage.getItem("aegis_token");
     const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
     const res = await fetch(`${API_BASE}/api/v1/dns-zones/${zone.id}/export`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: "include",
     });
     if (!res.ok) {
       notifications.show({ message: `Export failed: ${res.status}`, color: "red" });

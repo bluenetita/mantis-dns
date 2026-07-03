@@ -187,7 +187,7 @@ async def create_scope6(
     db.add(scope)
     db.commit()
     db.refresh(scope)
-    write_audit_log(db, "dhcp6_scope.create", "dhcp_scope6", scope.id, actor=user.email)
+    write_audit_log(db, "dhcp6_scope.create", "dhcp_scope6", scope.id, actor=user.email, tenant_id=scope.tenant_id)
     err = await try_push6(db)
     out = Scope6Out.model_validate(scope)
     out.kea_push_error = err
@@ -218,7 +218,7 @@ async def update_scope6(
         setattr(scope, field, val)
     db.commit()
     db.refresh(scope)
-    write_audit_log(db, "dhcp6_scope.update", "dhcp_scope6", scope_id, actor=user.email)
+    write_audit_log(db, "dhcp6_scope.update", "dhcp_scope6", scope_id, actor=user.email, tenant_id=scope.tenant_id)
     err = await try_push6(db)
     out = Scope6Out.model_validate(scope)
     out.kea_push_error = err
@@ -235,7 +235,7 @@ async def delete_scope6(
     check_tenant_access(user, scope.tenant_id)
     db.delete(scope)
     db.commit()
-    write_audit_log(db, "dhcp6_scope.delete", "dhcp_scope6", scope_id, actor=user.email)
+    write_audit_log(db, "dhcp6_scope.delete", "dhcp_scope6", scope_id, actor=user.email, tenant_id=scope.tenant_id)
     await try_push6(db)
 
 
@@ -270,7 +270,7 @@ async def create_reservation6(
     db.add(r)
     db.commit()
     db.refresh(r)
-    write_audit_log(db, "dhcp6_reservation.create", "dhcp_static_lease6", r.id, actor=user.email)
+    write_audit_log(db, "dhcp6_reservation.create", "dhcp_static_lease6", r.id, actor=user.email, tenant_id=scope.tenant_id)
     err = await try_push6(db)
     out = Reservation6Out.model_validate(r)
     out.kea_push_error = err
@@ -292,7 +292,7 @@ async def update_reservation6(
         setattr(r, field, val)
     db.commit()
     db.refresh(r)
-    write_audit_log(db, "dhcp6_reservation.update", "dhcp_static_lease6", reservation_id, actor=user.email)
+    write_audit_log(db, "dhcp6_reservation.update", "dhcp_static_lease6", reservation_id, actor=user.email, tenant_id=scope.tenant_id)
     err = await try_push6(db)
     out = Reservation6Out.model_validate(r)
     out.kea_push_error = err
@@ -311,7 +311,7 @@ async def delete_reservation6(
     r = _get_reservation6_or_404(db, scope_id, reservation_id)
     db.delete(r)
     db.commit()
-    write_audit_log(db, "dhcp6_reservation.delete", "dhcp_static_lease6", reservation_id, actor=user.email)
+    write_audit_log(db, "dhcp6_reservation.delete", "dhcp_static_lease6", reservation_id, actor=user.email, tenant_id=scope.tenant_id)
     await try_push6(db)
 
 

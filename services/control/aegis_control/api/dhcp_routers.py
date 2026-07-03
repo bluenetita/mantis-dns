@@ -247,7 +247,7 @@ async def create_scope(
     db.add(scope)
     db.commit()
     db.refresh(scope)
-    write_audit_log(db, "dhcp_scope.create", "dhcp_scope", scope.id, actor=user.email)
+    write_audit_log(db, "dhcp_scope.create", "dhcp_scope", scope.id, actor=user.email, tenant_id=scope.tenant_id)
     err = await try_push(db)
     out = ScopeOut.model_validate(scope)
     out.kea_push_error = err
@@ -278,7 +278,7 @@ async def update_scope(
         setattr(scope, field, val)
     db.commit()
     db.refresh(scope)
-    write_audit_log(db, "dhcp_scope.update", "dhcp_scope", scope_id, actor=user.email)
+    write_audit_log(db, "dhcp_scope.update", "dhcp_scope", scope_id, actor=user.email, tenant_id=scope.tenant_id)
     err = await try_push(db)
     out = ScopeOut.model_validate(scope)
     out.kea_push_error = err
@@ -295,7 +295,7 @@ async def delete_scope(
     check_tenant_access(user, scope.tenant_id)
     db.delete(scope)
     db.commit()
-    write_audit_log(db, "dhcp_scope.delete", "dhcp_scope", scope_id, actor=user.email)
+    write_audit_log(db, "dhcp_scope.delete", "dhcp_scope", scope_id, actor=user.email, tenant_id=scope.tenant_id)
     await try_push(db)
 
 
@@ -330,7 +330,7 @@ async def create_reservation(
     db.add(sl)
     db.commit()
     db.refresh(sl)
-    write_audit_log(db, "dhcp_reservation.create", "dhcp_static_lease", sl.id, actor=user.email)
+    write_audit_log(db, "dhcp_reservation.create", "dhcp_static_lease", sl.id, actor=user.email, tenant_id=scope.tenant_id)
     err = await try_push(db)
     out = ReservationOut.model_validate(sl)
     out.kea_push_error = err
@@ -352,7 +352,7 @@ async def update_reservation(
         setattr(sl, field, val)
     db.commit()
     db.refresh(sl)
-    write_audit_log(db, "dhcp_reservation.update", "dhcp_static_lease", reservation_id, actor=user.email)
+    write_audit_log(db, "dhcp_reservation.update", "dhcp_static_lease", reservation_id, actor=user.email, tenant_id=scope.tenant_id)
     err = await try_push(db)
     out = ReservationOut.model_validate(sl)
     out.kea_push_error = err
@@ -371,7 +371,7 @@ async def delete_reservation(
     sl = _get_reservation_or_404(db, scope_id, reservation_id)
     db.delete(sl)
     db.commit()
-    write_audit_log(db, "dhcp_reservation.delete", "dhcp_static_lease", reservation_id, actor=user.email)
+    write_audit_log(db, "dhcp_reservation.delete", "dhcp_static_lease", reservation_id, actor=user.email, tenant_id=scope.tenant_id)
     await try_push(db)
 
 
@@ -696,7 +696,7 @@ async def upsert_ha_config(
             setattr(ha, field, val)
     db.commit()
     db.refresh(ha)
-    write_audit_log(db, "dhcp_ha.upsert", "dhcp_ha_config", ha.id, actor=user.email)
+    write_audit_log(db, "dhcp_ha.upsert", "dhcp_ha_config", ha.id, actor=user.email, tenant_id=tenant_id)
     err = await try_push(db)
     out = HaConfigOut.model_validate(ha)
     out.kea_push_error = err
@@ -715,5 +715,5 @@ async def delete_ha_config(
         raise HTTPException(404, "No HA config for this tenant")
     db.delete(ha)
     db.commit()
-    write_audit_log(db, "dhcp_ha.delete", "dhcp_ha_config", tenant_id, actor=user.email)
+    write_audit_log(db, "dhcp_ha.delete", "dhcp_ha_config", tenant_id, actor=user.email, tenant_id=tenant_id)
     await try_push(db)

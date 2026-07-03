@@ -3,16 +3,32 @@ from __future__ import annotations
 import re
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+import bcrypt
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.exc import IntegrityError
 from pydantic import AfterValidator, BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from aegis_control.audit import write_audit_log
-from aegis_control.auth import create_access_token, get_current_user, hash_password, require_role, verify_password, user_tenant_filter
+from aegis_control.auth import (
+    clear_auth_cookies,
+    create_access_token,
+    generate_csrf_token,
+    get_current_user,
+    hash_password,
+    require_role,
+    set_auth_cookies,
+    verify_password,
+    user_tenant_filter,
+)
 from aegis_control.db import models
 from aegis_control.db.session import get_db
 from aegis_control.rate_limit import login_rate_limit
+
+# Fixed dummy hash checked when the email doesn't exist, so login() does the
+# same bcrypt work either way — otherwise the fast-path/slow-path timing gap
+# is a user-enumeration oracle (does this email have an account or not).
+_DUMMY_PASSWORD_HASH = bcrypt.hashpw(b"dummy-password-for-timing", bcrypt.gensalt()).decode()
 
 router = APIRouter()
 
@@ -52,9 +68,8 @@ class UserOut(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
     user: UserOut
+    csrf_token: str
 
 
 class UserCreate(BaseModel):
@@ -74,13 +89,27 @@ class UserCreate(BaseModel):
 @router.post("/auth/login", response_model=LoginResponse)
 def login(
     payload: LoginRequest,
+    response: Response,
     db: Session = Depends(get_db),
     _: None = Depends(login_rate_limit),
 ) -> LoginResponse:
     user = db.query(models.User).filter(models.User.email == payload.email).one_or_none()
-    if user is None or not verify_password(payload.password, user.password_hash):
+    # Always check against a real bcrypt hash, even for an unknown email, so
+    # this takes the same time either way (see _DUMMY_PASSWORD_HASH above).
+    password_hash = user.password_hash if user is not None else _DUMMY_PASSWORD_HASH
+    password_ok = verify_password(payload.password, password_hash)
+    if user is None or not password_ok:
         raise HTTPException(401, "invalid email or password")
-    return LoginResponse(access_token=create_access_token(user), user=user)  # type: ignore[arg-type]
+
+    token = create_access_token(user)
+    csrf_token = generate_csrf_token()
+    set_auth_cookies(response, token, csrf_token)
+    return LoginResponse(user=user, csrf_token=csrf_token)  # type: ignore[arg-type]
+
+
+@router.post("/auth/logout", status_code=204)
+def logout(response: Response) -> None:
+    clear_auth_cookies(response)
 
 
 @router.get("/auth/me", response_model=UserOut)
@@ -113,7 +142,7 @@ def create_user(
     try:
         db.add(user)
         db.flush()
-        write_audit_log(db, "user.create", "user", user.id, detail=f"email={user.email} role={user.role} tenant_id={user.tenant_id}", actor=admin.email)
+        write_audit_log(db, "user.create", "user", user.id, detail=f"email={user.email} role={user.role} tenant_id={user.tenant_id}", actor=admin.email, tenant_id=user.tenant_id)
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -142,7 +171,7 @@ def update_user(
     old_role = user.role
     user.role = payload.role
     user.tenant_id = payload.tenant_id
-    write_audit_log(db, "user.update", "user", user.id, detail=f"role={old_role}->{user.role} tenant_id={user.tenant_id}", actor=admin.email)
+    write_audit_log(db, "user.update", "user", user.id, detail=f"role={old_role}->{user.role} tenant_id={user.tenant_id}", actor=admin.email, tenant_id=user.tenant_id)
     db.commit()
     db.refresh(user)
     return user
@@ -159,6 +188,6 @@ def delete_user(
         raise HTTPException(404, "user not found")
     if user.id == admin.id:
         raise HTTPException(400, "cannot delete your own account")
-    write_audit_log(db, "user.delete", "user", user.id, detail=f"email={user.email}", actor=admin.email)
+    write_audit_log(db, "user.delete", "user", user.id, detail=f"email={user.email}", actor=admin.email, tenant_id=user.tenant_id)
     db.delete(user)
     db.commit()

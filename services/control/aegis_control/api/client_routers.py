@@ -92,7 +92,7 @@ def register_client(
         client.registered_at = datetime.now(timezone.utc)
     client.registered_by = user.email
 
-    write_audit_log(db, "client.register", "client", client.id, detail=f"ip={ip} hostname={payload.hostname}", actor=user.email)
+    write_audit_log(db, "client.register", "client", client.id, detail=f"ip={ip} hostname={payload.hostname}", actor=user.email, tenant_id=tenant_id)
     db.commit()
     db.refresh(client)
     return client
@@ -117,6 +117,6 @@ def delete_client(
     )
     if client is None:
         raise HTTPException(404, "client not found")
-    write_audit_log(db, "client.delete", "client", client.id, detail=f"ip={ip}", actor=user.email)
+    write_audit_log(db, "client.delete", "client", client.id, detail=f"ip={ip}", actor=user.email, tenant_id=tenant_id)
     db.delete(client)
     db.commit()

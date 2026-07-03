@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from aegis_control.auth import require_role
+from aegis_control.auth import require_role, user_tenant_filter
 from aegis_control.db import models
 from aegis_control.db.session import get_db
 
@@ -22,6 +22,7 @@ class AuditLogEntry(BaseModel):
     resource_type: str
     resource_id: str
     detail: str
+    tenant_id: str | None = None
 
     class Config:
         from_attributes = True
@@ -32,9 +33,15 @@ def list_audit_log(
     limit: int = Query(100, ge=1, le=1000),
     resource_type: str | None = None,
     db: Session = Depends(get_db),
-    _user: models.User = Depends(require_role("admin", "operator")),
+    user: models.User = Depends(require_role("admin", "operator")),
 ) -> list[models.AuditLog]:
+    scope = user_tenant_filter(user)
     query = db.query(models.AuditLog)
     if resource_type:
         query = query.filter(models.AuditLog.resource_type == resource_type)
+    if scope is not None:
+        # Tenant-scoped: only entries for their own tenant. Global/system
+        # entries (tenant_id IS NULL — feed/upstream-resolver management,
+        # unscoped pushes) are admin-only.
+        query = query.filter(models.AuditLog.tenant_id == scope)
     return list(query.order_by(desc(models.AuditLog.occurred_at)).limit(limit).all())

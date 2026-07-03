@@ -19,7 +19,7 @@ from aegis_control.api.routers import router as api_router
 from aegis_control.api.siem_routers import router as siem_router
 from aegis_control.api.siem_webhook_routers import router as siem_webhook_router
 from aegis_control.api.telemetry_routers import router as telemetry_router
-from aegis_control.auth import hash_password
+from aegis_control.auth import CsrfMiddleware, hash_password
 from sqlalchemy import text
 
 from aegis_control.db.models import Base, Feed, User
@@ -62,14 +62,22 @@ def _check_production_secrets() -> None:
             + "; ".join(errors)
         )
 
+# CSRF check runs inside the CORS layer so its 403 responses still get CORS
+# headers attached (added first == innermost; see Starlette middleware order).
+app.add_middleware(CsrfMiddleware)
+
 # Dev default: UI runs on a different origin/port (Vite on :5173, API on
 # :8000). Tighten to specific origins before any non-dev deployment.
+# allow_credentials is required for the httpOnly session cookie to be sent
+# on cross-origin fetches; it's only valid with an explicit origin list
+# (never "*"), which CORS_ALLOW_ORIGINS already enforces.
 _cors_origins = os.environ.get("CORS_ALLOW_ORIGINS", "http://localhost:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
+    allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-Aegis-CSRF-Token"],
 )
 
 app.include_router(api_router, prefix="/api/v1")
@@ -105,6 +113,15 @@ def on_startup() -> None:
             "ALTER TABLE dhcp_relay_configs ADD COLUMN IF NOT EXISTS remote_id_hex VARCHAR(255)",
         ):
             _conn.execute(text(stmt))
+        # Tenant-scoping dns_zones/audit_log (previously global, a real
+        # cross-tenant visibility gap — see zone_routers/audit_routers).
+        # Pre-existing rows keep tenant_id=NULL: admin-only until reassigned.
+        _conn.execute(text("ALTER TABLE dns_zones ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(36)"))
+        _conn.execute(text("ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(36)"))
+        _conn.execute(text("ALTER TABLE dns_zones DROP CONSTRAINT IF EXISTS dns_zones_name_key"))
+        _conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS dns_zones_tenant_id_name_key ON dns_zones (tenant_id, name)"
+        ))
         _conn.commit()
 
     db = SessionLocal()

@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
-from aegis_control.auth import get_current_user, require_role
+from aegis_control.audit import write_audit_log
+from aegis_control.auth import check_tenant_access, get_current_user, require_role, user_tenant_filter
 from aegis_control.db import models
 from aegis_control.db.session import get_db
 
@@ -20,6 +21,7 @@ _ZONE_TYPES = {"local", "forward", "passthrough"}
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
 class ZoneCreate(BaseModel):
+    tenant_id: str
     name: str
     zone_type: str
     description: str = ""
@@ -61,6 +63,7 @@ class ZoneUpdate(BaseModel):
 
 class ZoneOut(BaseModel):
     id: str
+    tenant_id: str | None
     name: str
     zone_type: str
     description: str
@@ -137,16 +140,23 @@ class RecordOut(BaseModel):
 
 def _zone_out(z: models.DnsZone) -> ZoneOut:
     return ZoneOut(
-        id=z.id, name=z.name, zone_type=z.zone_type, description=z.description,
+        id=z.id, tenant_id=z.tenant_id, name=z.name, zone_type=z.zone_type, description=z.description,
         enabled=z.enabled, ttl_default=z.ttl_default, forwarder=z.forwarder,
         record_count=len(z.records), created_at=z.created_at, updated_at=z.updated_at,
     )
 
 
-def _get_zone_or_404(zone_id: str, db: Session) -> models.DnsZone:
+def _get_zone_or_403(zone_id: str, db: Session, user: models.User) -> models.DnsZone:
     z = db.query(models.DnsZone).filter_by(id=zone_id).first()
     if not z:
         raise HTTPException(404, "Zone not found")
+    if z.tenant_id is None:
+        # Pre-migration/legacy zone with no tenant assigned yet — admin-only
+        # until reassigned (see main.py's additive tenant_id migration).
+        if user.role != "admin":
+            raise HTTPException(403, "access denied — this zone has no tenant assigned")
+    else:
+        check_tenant_access(user, z.tenant_id)
     return z
 
 
@@ -155,9 +165,13 @@ def _get_zone_or_404(zone_id: str, db: Session) -> models.DnsZone:
 @router.get("/dns-zones", response_model=list[ZoneOut])
 def list_zones(
     db: Session = Depends(get_db),
-    _: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user),
 ) -> list[ZoneOut]:
-    zones = db.query(models.DnsZone).order_by(models.DnsZone.name).all()
+    scope = user_tenant_filter(user)
+    query = db.query(models.DnsZone)
+    if scope is not None:
+        query = query.filter(models.DnsZone.tenant_id == scope)
+    zones = query.order_by(models.DnsZone.name).all()
     return [_zone_out(z) for z in zones]
 
 
@@ -165,10 +179,13 @@ def list_zones(
 def create_zone(
     body: ZoneCreate,
     db: Session = Depends(get_db),
-    _: models.User = Depends(require_role("operator")),
+    user: models.User = Depends(require_role("operator")),
 ) -> ZoneOut:
-    if db.query(models.DnsZone).filter_by(name=body.name).first():
-        raise HTTPException(409, f"Zone {body.name!r} already exists")
+    check_tenant_access(user, body.tenant_id)
+    if db.get(models.Tenant, body.tenant_id) is None:
+        raise HTTPException(404, "tenant not found")
+    if db.query(models.DnsZone).filter_by(tenant_id=body.tenant_id, name=body.name).first():
+        raise HTTPException(409, f"Zone {body.name!r} already exists for this tenant")
     if body.zone_type == "forward" and not body.forwarder:
         raise HTTPException(422, "forward zones require a forwarder IP address")
     if body.forwarder:
@@ -178,6 +195,9 @@ def create_zone(
             raise HTTPException(422, f"invalid forwarder IP address: {body.forwarder!r}")
     z = models.DnsZone(**body.model_dump())
     db.add(z)
+    db.flush()
+    write_audit_log(db, "dns_zone.create", "dns_zone", z.id, detail=f"name={z.name} type={z.zone_type}",
+                     actor=user.email, tenant_id=z.tenant_id)
     db.commit()
     db.refresh(z)
     return _zone_out(z)
@@ -187,9 +207,9 @@ def create_zone(
 def get_zone(
     zone_id: str,
     db: Session = Depends(get_db),
-    _: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user),
 ) -> ZoneOut:
-    return _zone_out(_get_zone_or_404(zone_id, db))
+    return _zone_out(_get_zone_or_403(zone_id, db, user))
 
 
 @router.patch("/dns-zones/{zone_id}", response_model=ZoneOut)
@@ -197,10 +217,11 @@ def update_zone(
     zone_id: str,
     body: ZoneUpdate,
     db: Session = Depends(get_db),
-    _: models.User = Depends(require_role("operator")),
+    user: models.User = Depends(require_role("operator")),
 ) -> ZoneOut:
-    z = _get_zone_or_404(zone_id, db)
-    for k, v in body.model_dump(exclude_unset=True).items():
+    z = _get_zone_or_403(zone_id, db, user)
+    changes = body.model_dump(exclude_unset=True)
+    for k, v in changes.items():
         setattr(z, k, v)
     if z.zone_type == "forward" and not z.forwarder:
         raise HTTPException(422, "forward zones require a forwarder IP address")
@@ -209,6 +230,8 @@ def update_zone(
             ipaddress.ip_address(z.forwarder)
         except ValueError:
             raise HTTPException(422, f"invalid forwarder IP address: {z.forwarder!r}")
+    write_audit_log(db, "dns_zone.update", "dns_zone", z.id, detail=str(changes),
+                     actor=user.email, tenant_id=z.tenant_id)
     db.commit()
     db.refresh(z)
     return _zone_out(z)
@@ -218,9 +241,11 @@ def update_zone(
 def delete_zone(
     zone_id: str,
     db: Session = Depends(get_db),
-    _: models.User = Depends(require_role("operator")),
+    user: models.User = Depends(require_role("operator")),
 ) -> None:
-    z = _get_zone_or_404(zone_id, db)
+    z = _get_zone_or_403(zone_id, db, user)
+    write_audit_log(db, "dns_zone.delete", "dns_zone", z.id, detail=f"name={z.name}",
+                     actor=user.email, tenant_id=z.tenant_id)
     db.delete(z)
     db.commit()
 
@@ -229,9 +254,9 @@ def delete_zone(
 def export_zone(
     zone_id: str,
     db: Session = Depends(get_db),
-    _: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user),
 ) -> Response:
-    z = _get_zone_or_404(zone_id, db)
+    z = _get_zone_or_403(zone_id, db, user)
     serial = date.today().strftime("%Y%m%d") + "01"
     lines = [
         f"; Zone file for {z.name} — exported by Aegis-DNS",
@@ -269,9 +294,9 @@ def export_zone(
 def list_records(
     zone_id: str,
     db: Session = Depends(get_db),
-    _: models.User = Depends(get_current_user),
+    user: models.User = Depends(get_current_user),
 ) -> list[models.DnsRecord]:
-    _get_zone_or_404(zone_id, db)
+    _get_zone_or_403(zone_id, db, user)
     return (
         db.query(models.DnsRecord)
         .filter_by(zone_id=zone_id)
@@ -285,9 +310,9 @@ def create_record(
     zone_id: str,
     body: RecordIn,
     db: Session = Depends(get_db),
-    _: models.User = Depends(require_role("operator")),
+    user: models.User = Depends(require_role("operator")),
 ) -> RecordOut:
-    _get_zone_or_404(zone_id, db)
+    _get_zone_or_403(zone_id, db, user)
     rec = models.DnsRecord(zone_id=zone_id, **body.model_dump())
     db.add(rec)
     db.commit()
@@ -301,8 +326,9 @@ def update_record(
     record_id: str,
     body: RecordUpdate,
     db: Session = Depends(get_db),
-    _: models.User = Depends(require_role("operator")),
+    user: models.User = Depends(require_role("operator")),
 ) -> RecordOut:
+    _get_zone_or_403(zone_id, db, user)
     rec = db.query(models.DnsRecord).filter_by(id=record_id, zone_id=zone_id).first()
     if not rec:
         raise HTTPException(404, "Record not found")
@@ -318,8 +344,9 @@ def delete_record(
     zone_id: str,
     record_id: str,
     db: Session = Depends(get_db),
-    _: models.User = Depends(require_role("operator")),
+    user: models.User = Depends(require_role("operator")),
 ) -> None:
+    _get_zone_or_403(zone_id, db, user)
     rec = db.query(models.DnsRecord).filter_by(id=record_id, zone_id=zone_id).first()
     if not rec:
         raise HTTPException(404, "Record not found")

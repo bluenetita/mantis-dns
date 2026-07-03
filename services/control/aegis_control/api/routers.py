@@ -31,7 +31,7 @@ def create_tenant(
     tenant = models.Tenant(name=payload.name)
     db.add(tenant)
     db.flush()
-    write_audit_log(db, "tenant.create", "tenant", tenant.id, detail=f"name={tenant.name}", actor=user.email)
+    write_audit_log(db, "tenant.create", "tenant", tenant.id, detail=f"name={tenant.name}", actor=user.email, tenant_id=tenant.id)
     db.commit()
     db.refresh(tenant)
     return tenant
@@ -65,7 +65,7 @@ def delete_tenant(
     tenant = db.get(models.Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(404, "tenant not found")
-    write_audit_log(db, "tenant.delete", "tenant", tenant.id, detail=f"name={tenant.name}", actor=user.email)
+    write_audit_log(db, "tenant.delete", "tenant", tenant.id, detail=f"name={tenant.name}", actor=user.email, tenant_id=tenant.id)
     db.delete(tenant)
     db.commit()
 
@@ -92,7 +92,7 @@ def create_group(
     group = models.Group(tenant_id=tenant_id, name=payload.name, vpn_subnet=vpn_subnet)
     db.add(group)
     db.flush()
-    write_audit_log(db, "group.create", "group", group.id, detail=f"name={group.name} tenant_id={tenant_id}", actor=user.email)
+    write_audit_log(db, "group.create", "group", group.id, detail=f"name={group.name} tenant_id={tenant_id}", actor=user.email, tenant_id=tenant_id)
     db.commit()
     db.refresh(group)
     return group
@@ -117,7 +117,7 @@ def set_group_subnet(
 ) -> models.Group:
     group = get_group_or_403(db, group_id, user)
     group.vpn_subnet = _validate_cidr(payload.vpn_subnet)
-    write_audit_log(db, "group.subnet_update", "group", group.id, detail=f"vpn_subnet={group.vpn_subnet}", actor=user.email)
+    write_audit_log(db, "group.subnet_update", "group", group.id, detail=f"vpn_subnet={group.vpn_subnet}", actor=user.email, tenant_id=group.tenant_id)
     db.commit()
     db.refresh(group)
     return group
@@ -157,7 +157,7 @@ def upsert_policy(
     db: Session = Depends(get_db),
     user: models.User = Depends(require_role("admin", "operator")),
 ) -> models.Policy:
-    get_group_or_403(db, group_id, user)
+    group = get_group_or_403(db, group_id, user)
 
     policy = db.query(models.Policy).filter(models.Policy.group_id == group_id).one_or_none()
     if policy is None:
@@ -193,6 +193,7 @@ def upsert_policy(
         policy.id,
         detail=f"group_id={group_id} categories={len(payload.category_toggles)} overrides={len(payload.overrides)}",
         actor=user.email,
+        tenant_id=group.tenant_id,
     )
     db.commit()
     db.refresh(policy)
@@ -218,7 +219,7 @@ def compile_bundle(
 ) -> Response:
     """Compiles the group's current policy into a signed bundle, stores it
     content-addressed on disk, bumps the version, and returns the bytes."""
-    get_group_or_403(db, group_id, user)
+    group = get_group_or_403(db, group_id, user)
     policy = db.query(models.Policy).filter(models.Policy.group_id == group_id).one_or_none()
     if policy is None:
         raise HTTPException(404, "policy not found for group")
@@ -228,7 +229,7 @@ def compile_bundle(
         policy, next_version, _signing_key, KEY_ID, BUNDLE_STORAGE_DIR, db
     )
     policy.bundle_version = next_version
-    write_audit_log(db, "bundle.compile", "policy", policy.id, detail=f"version={next_version}", actor=user.email)
+    write_audit_log(db, "bundle.compile", "policy", policy.id, detail=f"version={next_version}", actor=user.email, tenant_id=group.tenant_id)
     db.commit()
     try:
         content = bundle_path.read_bytes()
