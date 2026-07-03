@@ -1,24 +1,86 @@
-import { AreaChart } from "@mantine/charts";
-import { Badge, Card, Center, Group, Loader, Progress, SimpleGrid, Stack, Table, Text, Title } from "@mantine/core";
+import { AreaChart, DonutChart } from "@mantine/charts";
+import {
+  ActionIcon,
+  Badge,
+  Button,
+  Card,
+  Center,
+  Grid,
+  Group,
+  Loader,
+  Progress,
+  SimpleGrid,
+  Stack,
+  Table,
+  Text,
+  Title,
+  Tooltip,
+} from "@mantine/core";
+import { IconRefresh } from "@tabler/icons-react";
+import { useState } from "react";
 import { useAnalyticsByGroup, useAnalyticsSummary, useAnalyticsTimeseries } from "../api/hooks";
 
-function MetricCard({ label, value }: { label: string; value: string | number }) {
+// ─── Time range options ───────────────────────────────────────────────────────
+
+const TIME_RANGES = [
+  { label: "1h",  hours: 1 },
+  { label: "6h",  hours: 6 },
+  { label: "24h", hours: 24 },
+  { label: "7d",  hours: 168 },
+  { label: "30d", hours: 720 },
+] as const;
+
+// ─── KPI card ─────────────────────────────────────────────────────────────────
+
+function KpiCard({
+  label,
+  value,
+  sub,
+  accent = "blue",
+  bar,
+}: {
+  label: string;
+  value: string | number;
+  sub?: string;
+  accent?: string;
+  bar?: number;
+}) {
   return (
     <Card withBorder padding="md">
-      <Text size="xs" c="dimmed" tt="uppercase">
-        {label}
-      </Text>
-      <Text size="xl" fw={500}>
-        {value}
-      </Text>
+      <Stack gap={6}>
+        <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: "0.05em" }}>
+          {label}
+        </Text>
+        <Text size="xl" fw={700} lh={1}>
+          {value}
+        </Text>
+        {bar !== undefined && (
+          <Progress value={bar} color={accent} size="xs" radius="xs" />
+        )}
+        {sub && (
+          <Text size="xs" c="dimmed">
+            {sub}
+          </Text>
+        )}
+      </Stack>
     </Card>
   );
 }
 
+// ─── Main page ────────────────────────────────────────────────────────────────
+
 export function AnalyticsPage() {
-  const { data, isLoading, error } = useAnalyticsSummary();
-  const { data: timeseries } = useAnalyticsTimeseries(24);
-  const { data: byGroup } = useAnalyticsByGroup();
+  const [hours, setHours] = useState<number>(24);
+
+  const { data, isLoading, error, refetch: refetchSummary } = useAnalyticsSummary(hours);
+  const { data: timeseries, refetch: refetchTs } = useAnalyticsTimeseries(hours);
+  const { data: byGroup, refetch: refetchGroup } = useAnalyticsByGroup(hours);
+
+  function refresh() {
+    refetchSummary();
+    refetchTs();
+    refetchGroup();
+  }
 
   if (isLoading)
     return (
@@ -26,133 +88,275 @@ export function AnalyticsPage() {
         <Loader />
       </Center>
     );
-  if (error || !data) return <Text c="red">{String(error)}</Text>;
+  if (error || !data) return <Text c="red">{error ? String(error) : "No data available"}</Text>;
+
+  // ── Derived values ──────────────────────────────────────────────────────────
+
+  const blockPct = data.block_ratio * 100;
+
+  const qpm =
+    timeseries && timeseries.length > 0 && hours > 0
+      ? ((data.total_queries / (hours * 60)) ).toFixed(2)
+      : "—";
 
   const chartData = (timeseries ?? []).map((p) => ({
-    time: new Date(p.bucket).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    time: new Date(p.bucket).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
     Allowed: p.allowed,
     Blocked: p.blocked,
   }));
 
+  const hasChart = chartData.some((p) => p.Allowed > 0 || p.Blocked > 0);
+
+  const donutData = [
+    { name: "Allowed", value: data.allowed_queries, color: "teal.6" },
+    { name: "Blocked", value: data.blocked_queries, color: "red.6" },
+  ].filter((d) => d.value > 0);
+
+  const totalBlocked = data.blocked_queries;
+  const topDomains = [...(data.top_blocked_domains ?? [])]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+  const sortedGroups = [...(byGroup ?? [])].sort((a, b) => b.total - a.total);
+
   return (
-    <Stack>
-      <Group justify="space-between">
-        <Title order={2}>Analytics</Title>
-        <Text size="xs" c="dimmed">
-          Refreshes every 15s
-        </Text>
+    <Stack gap="lg">
+      {/* ── Header ── */}
+      <Group justify="space-between" align="center">
+        <Stack gap={2}>
+          <Title order={2}>Analytics</Title>
+          <Text c="dimmed" size="sm">
+            DNS query telemetry across all tenants and groups
+          </Text>
+        </Stack>
+        <Group gap="xs">
+          <Button.Group>
+            {TIME_RANGES.map((r) => (
+              <Button
+                key={r.hours}
+                size="xs"
+                variant={hours === r.hours ? "filled" : "default"}
+                onClick={() => setHours(r.hours)}
+              >
+                {r.label}
+              </Button>
+            ))}
+          </Button.Group>
+          <Tooltip label="Refresh now">
+            <ActionIcon variant="default" onClick={refresh} aria-label="Refresh">
+              <IconRefresh size={16} />
+            </ActionIcon>
+          </Tooltip>
+          <Text size="xs" c="dimmed">Auto-refresh 15s</Text>
+        </Group>
       </Group>
 
-      <SimpleGrid cols={{ base: 2, sm: 3, md: 6 }}>
-        <MetricCard label="Total queries" value={data.total_queries.toLocaleString()} />
-        <MetricCard label="Blocked" value={data.blocked_queries.toLocaleString()} />
-        <MetricCard label="Allowed" value={data.allowed_queries.toLocaleString()} />
-        <MetricCard label="Block ratio" value={`${(data.block_ratio * 100).toFixed(1)}%`} />
-        <MetricCard label="Tenants" value={data.tenant_count} />
-        <MetricCard label="Groups" value={data.group_count} />
+      {/* ── KPI row ── */}
+      <SimpleGrid cols={{ base: 2, sm: 4 }}>
+        <KpiCard
+          label="Total queries"
+          value={data.total_queries.toLocaleString()}
+          sub={`${data.tenant_count} tenant${data.tenant_count !== 1 ? "s" : ""} · ${data.group_count} group${data.group_count !== 1 ? "s" : ""}`}
+        />
+        <KpiCard
+          label="Blocked"
+          value={data.blocked_queries.toLocaleString()}
+          sub={`${data.allowed_queries.toLocaleString()} allowed`}
+          accent="red"
+        />
+        <KpiCard
+          label="Block rate"
+          value={`${blockPct.toFixed(1)}%`}
+          bar={blockPct}
+          accent={blockPct > 50 ? "red" : blockPct > 20 ? "orange" : "teal"}
+          sub={blockPct > 30 ? "Elevated — review policies" : "Within normal range"}
+        />
+        <KpiCard
+          label="Queries / min"
+          value={qpm}
+          sub={`over last ${TIME_RANGES.find((r) => r.hours === hours)?.label ?? `${hours}h`}`}
+        />
       </SimpleGrid>
 
-      <Card withBorder>
-        <Title order={4} mb="sm">
-          Query volume — last 24h
-        </Title>
-        {chartData.every((p) => p.Allowed === 0 && p.Blocked === 0) ? (
-          <Text c="dimmed" size="sm">
-            No query telemetry in the last 24 hours.
-          </Text>
+      {/* ── Chart row ── */}
+      <Grid>
+        <Grid.Col span={{ base: 12, md: 8 }}>
+          <Card withBorder padding="md" h="100%">
+            <Group justify="space-between" mb="sm">
+              <Title order={4}>
+                Query volume —{" "}
+                {TIME_RANGES.find((r) => r.hours === hours)?.label ?? `${hours}h`}
+              </Title>
+              <Group gap={6}>
+                <Badge size="xs" color="teal" variant="dot">Allowed</Badge>
+                <Badge size="xs" color="red" variant="dot">Blocked</Badge>
+              </Group>
+            </Group>
+            {!hasChart ? (
+              <Center h={220}>
+                <Text c="dimmed" size="sm">No query telemetry in this time window.</Text>
+              </Center>
+            ) : (
+              <AreaChart
+                h={220}
+                data={chartData}
+                dataKey="time"
+                series={[
+                  { name: "Allowed", color: "teal.6" },
+                  { name: "Blocked", color: "red.6" },
+                ]}
+                type="stacked"
+                curveType="monotone"
+                withDots={false}
+                withLegend={false}
+                tickLine="y"
+                gridAxis="y"
+              />
+            )}
+          </Card>
+        </Grid.Col>
+
+        <Grid.Col span={{ base: 12, md: 4 }}>
+          <Card withBorder padding="md" h="100%">
+            <Title order={4} mb="sm">Decision breakdown</Title>
+            {donutData.length === 0 ? (
+              <Center h={220}>
+                <Text c="dimmed" size="sm">No data yet.</Text>
+              </Center>
+            ) : (
+              <Center>
+                <DonutChart
+                  data={donutData}
+                  size={180}
+                  thickness={28}
+                  tooltipDataSource="segment"
+                  withLabelsLine
+                  withLabels
+                />
+              </Center>
+            )}
+            {donutData.length > 0 && (
+              <Stack gap={4} mt="md">
+                {donutData.map((d) => (
+                  <Group key={d.name} justify="space-between">
+                    <Group gap={6}>
+                      <Badge size="xs" color={d.color.split(".")[0]} variant="filled">{d.name}</Badge>
+                    </Group>
+                    <Text size="sm" fw={500}>{d.value.toLocaleString()}</Text>
+                  </Group>
+                ))}
+              </Stack>
+            )}
+          </Card>
+        </Grid.Col>
+      </Grid>
+
+      {/* ── Top blocked domains ── */}
+      <Card withBorder padding="md">
+        <Title order={4} mb="sm">Top blocked domains</Title>
+        {topDomains.length === 0 ? (
+          <Text c="dimmed" size="sm">No blocked queries recorded yet.</Text>
         ) : (
-          <AreaChart
-            h={260}
-            data={chartData}
-            dataKey="time"
-            series={[
-              { name: "Allowed", color: "green.6" },
-              { name: "Blocked", color: "red.6" },
-            ]}
-            type="stacked"
-            curveType="step"
-            withLegend
-            tickLine="y"
-          />
+          <Table highlightOnHover>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th w={40}>#</Table.Th>
+                <Table.Th>Domain</Table.Th>
+                <Table.Th w={100}>Decision</Table.Th>
+                <Table.Th w={80} style={{ textAlign: "right" }}>Count</Table.Th>
+                <Table.Th w={160}>% of blocked</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {topDomains.map((d, i) => {
+                const pct = totalBlocked > 0 ? (d.count / totalBlocked) * 100 : 0;
+                return (
+                  <Table.Tr key={d.qname}>
+                    <Table.Td>
+                      <Text size="sm" c="dimmed">{i + 1}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm" ff="monospace">{d.qname}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Badge size="sm" color="red" variant="light">{d.decision}</Badge>
+                    </Table.Td>
+                    <Table.Td style={{ textAlign: "right" }}>
+                      <Text size="sm" fw={500}>{d.count.toLocaleString()}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Group gap={8} wrap="nowrap">
+                        <Progress value={pct} color="red" size="sm" radius="xs" style={{ flex: 1 }} />
+                        <Text size="xs" c="dimmed" w={36} style={{ textAlign: "right" }}>
+                          {pct.toFixed(1)}%
+                        </Text>
+                      </Group>
+                    </Table.Td>
+                  </Table.Tr>
+                );
+              })}
+            </Table.Tbody>
+          </Table>
         )}
       </Card>
 
-      <Card withBorder>
-        <Title order={4} mb="sm">
-          By group
-        </Title>
-        {(!byGroup || byGroup.length === 0) && (
-          <Text c="dimmed" size="sm">
-            No query telemetry recorded for any group yet.
-          </Text>
-        )}
-        {byGroup && byGroup.length > 0 && (
-          <Table>
+      {/* ── Group performance ── */}
+      <Card withBorder padding="md">
+        <Title order={4} mb="sm">Performance by group</Title>
+        {sortedGroups.length === 0 ? (
+          <Text c="dimmed" size="sm">No query telemetry recorded for any group yet.</Text>
+        ) : (
+          <Table highlightOnHover>
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>Tenant</Table.Th>
                 <Table.Th>Group</Table.Th>
-                <Table.Th>Total</Table.Th>
-                <Table.Th>Blocked</Table.Th>
-                <Table.Th>Block ratio</Table.Th>
+                <Table.Th w={100} style={{ textAlign: "right" }}>Total</Table.Th>
+                <Table.Th w={100} style={{ textAlign: "right" }}>Blocked</Table.Th>
+                <Table.Th w={200}>Block rate</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
-              {byGroup
-                .sort((a, b) => b.total - a.total)
-                .map((g) => (
+              {sortedGroups.map((g) => {
+                const pct = g.block_ratio * 100;
+                return (
                   <Table.Tr key={g.group_id}>
-                    <Table.Td>{g.tenant_name}</Table.Td>
-                    <Table.Td>{g.group_name}</Table.Td>
-                    <Table.Td>{g.total.toLocaleString()}</Table.Td>
-                    <Table.Td>{g.blocked.toLocaleString()}</Table.Td>
                     <Table.Td>
-                      <Group gap="xs" wrap="nowrap">
-                        <Progress value={g.block_ratio * 100} color="red" size="sm" w={80} />
-                        <Text size="xs">{(g.block_ratio * 100).toFixed(0)}%</Text>
+                      <Text size="sm">{g.tenant_name}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm" fw={500}>{g.group_name}</Text>
+                    </Table.Td>
+                    <Table.Td style={{ textAlign: "right" }}>
+                      <Text size="sm" ff="monospace">{g.total.toLocaleString()}</Text>
+                    </Table.Td>
+                    <Table.Td style={{ textAlign: "right" }}>
+                      <Text size="sm" ff="monospace" c="red">{g.blocked.toLocaleString()}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Group gap={8} wrap="nowrap">
+                        <Progress
+                          value={pct}
+                          color={pct > 50 ? "red" : pct > 20 ? "orange" : "teal"}
+                          size="sm"
+                          radius="xs"
+                          style={{ flex: 1 }}
+                        />
+                        <Text size="xs" fw={500} w={36} style={{ textAlign: "right" }}>
+                          {pct.toFixed(0)}%
+                        </Text>
                       </Group>
                     </Table.Td>
                   </Table.Tr>
-                ))}
+                );
+              })}
             </Table.Tbody>
           </Table>
         )}
       </Card>
-
-      <Card withBorder>
-        <Title order={4} mb="sm">
-          Top blocked domains (org-wide)
-        </Title>
-        {data.top_blocked_domains.length === 0 && (
-          <Text c="dimmed" size="sm">
-            No blocked queries recorded yet.
-          </Text>
-        )}
-        {data.top_blocked_domains.length > 0 && (
-          <Table>
-            <Table.Tbody>
-              {data.top_blocked_domains.map((d) => (
-                <Table.Tr key={d.qname}>
-                  <Table.Td>{d.qname}</Table.Td>
-                  <Table.Td>
-                    <Badge color="red">{d.decision}</Badge>
-                  </Table.Td>
-                  <Table.Td>{d.count}</Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-        )}
-      </Card>
-
-      <Text size="sm" c="dimmed">
-        Per-domain breakdown lives on each group's Policy page. Lower-level dashboards (QPS, cache-hit ratio, p99
-        latency) are in Grafana —{" "}
-        <a href="http://localhost:3000" target="_blank" rel="noreferrer">
-          open Grafana
-        </a>
-        .
-      </Text>
     </Stack>
   );
 }

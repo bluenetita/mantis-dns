@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel, field_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from aegis_control.api import schemas
 from aegis_control.audit import write_audit_log
-from aegis_control.auth import get_current_user, require_role
+from aegis_control.auth import check_tenant_access, get_current_user, get_group_or_403, require_role, user_tenant_filter
 from aegis_control.compiler.build_policy_bundle import compile_and_store
 from aegis_control.compiler.keys import KEY_ID, load_or_create_signing_key, public_key_bytes_for
-from aegis_control.config import BUNDLE_STORAGE_DIR
+from aegis_control.config import BUNDLE_STORAGE_DIR, FEED_STORAGE_DIR
 from aegis_control.db import models
 from aegis_control.db.session import get_db
+from aegis_control.feeds.ingest import load_domains
 
 router = APIRouter()
 _signing_key = load_or_create_signing_key()
@@ -34,14 +38,18 @@ def create_tenant(
 
 
 @router.get("/tenants", response_model=list[schemas.TenantOut])
-def list_tenants(db: Session = Depends(get_db), _user: models.User = Depends(get_current_user)) -> list[models.Tenant]:
+def list_tenants(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)) -> list[models.Tenant]:
+    scope = user_tenant_filter(user)
+    if scope is not None:
+        return list(db.query(models.Tenant).filter(models.Tenant.id == scope).all())
     return list(db.query(models.Tenant).all())
 
 
 @router.get("/tenants/{tenant_id}", response_model=schemas.TenantOut)
 def get_tenant(
-    tenant_id: str, db: Session = Depends(get_db), _user: models.User = Depends(get_current_user)
+    tenant_id: str, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)
 ) -> models.Tenant:
+    check_tenant_access(user, tenant_id)
     tenant = db.get(models.Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(404, "tenant not found")
@@ -76,6 +84,7 @@ def create_group(
     db: Session = Depends(get_db),
     user: models.User = Depends(require_role("admin", "operator")),
 ) -> models.Group:
+    check_tenant_access(user, tenant_id)
     tenant = db.get(models.Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(404, "tenant not found")
@@ -91,8 +100,11 @@ def create_group(
 
 @router.get("/tenants/{tenant_id}/groups", response_model=list[schemas.GroupOut])
 def list_groups(
-    tenant_id: str, db: Session = Depends(get_db), _user: models.User = Depends(get_current_user)
+    tenant_id: str, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)
 ) -> list[models.Group]:
+    check_tenant_access(user, tenant_id)
+    if db.get(models.Tenant, tenant_id) is None:
+        raise HTTPException(404, "tenant not found")
     return list(db.query(models.Group).filter(models.Group.tenant_id == tenant_id).all())
 
 
@@ -103,9 +115,7 @@ def set_group_subnet(
     db: Session = Depends(get_db),
     user: models.User = Depends(require_role("admin", "operator")),
 ) -> models.Group:
-    group = db.get(models.Group, group_id)
-    if group is None:
-        raise HTTPException(404, "group not found")
+    group = get_group_or_403(db, group_id, user)
     group.vpn_subnet = _validate_cidr(payload.vpn_subnet)
     write_audit_log(db, "group.subnet_update", "group", group.id, detail=f"vpn_subnet={group.vpn_subnet}", actor=user.email)
     db.commit()
@@ -120,13 +130,18 @@ def get_routing_table(db: Session = Depends(get_db)) -> list[schemas.RoutingTabl
     involved, so this stays unauthenticated like /public-key and the bundle
     GET endpoint. A service-to-service token is a later hardening item."""
     groups = db.query(models.Group).filter(models.Group.vpn_subnet.is_not(None)).all()
-    return [schemas.RoutingTableEntry(cidr=g.vpn_subnet, group_id=g.id) for g in groups]
+    return [
+        schemas.RoutingTableEntry(cidr=g.vpn_subnet, group_id=g.id)
+        for g in groups
+        if g.vpn_subnet is not None
+    ]
 
 
 @router.get("/groups/{group_id}/policy", response_model=schemas.PolicyOut)
 def get_policy(
-    group_id: str, db: Session = Depends(get_db), _user: models.User = Depends(get_current_user)
+    group_id: str, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)
 ) -> models.Policy:
+    get_group_or_403(db, group_id, user)
     policy = db.query(models.Policy).filter(models.Policy.group_id == group_id).one_or_none()
     if policy is None:
         raise HTTPException(404, "policy not found for group")
@@ -140,9 +155,7 @@ def upsert_policy(
     db: Session = Depends(get_db),
     user: models.User = Depends(require_role("admin", "operator")),
 ) -> models.Policy:
-    group = db.get(models.Group, group_id)
-    if group is None:
-        raise HTTPException(404, "group not found")
+    get_group_or_403(db, group_id, user)
 
     policy = db.query(models.Policy).filter(models.Policy.group_id == group_id).one_or_none()
     if policy is None:
@@ -156,6 +169,7 @@ def upsert_policy(
         models.PolicyCategoryToggle.policy_id == policy.id
     ).delete()
     db.query(models.PolicyOverride).filter(models.PolicyOverride.policy_id == policy.id).delete()
+    db.flush()
 
     for toggle in payload.category_toggles:
         db.add(
@@ -202,26 +216,117 @@ def compile_bundle(
 ) -> Response:
     """Compiles the group's current policy into a signed bundle, stores it
     content-addressed on disk, bumps the version, and returns the bytes."""
+    get_group_or_403(db, group_id, user)
     policy = db.query(models.Policy).filter(models.Policy.group_id == group_id).one_or_none()
     if policy is None:
         raise HTTPException(404, "policy not found for group")
 
-    policy.bundle_version += 1
-    write_audit_log(db, "bundle.compile", "policy", policy.id, detail=f"version={policy.bundle_version}", actor=user.email)
-    db.commit()
-    db.refresh(policy)
-
+    next_version = policy.bundle_version + 1
     bundle_path = compile_and_store(
-        policy, policy.bundle_version, _signing_key, KEY_ID, BUNDLE_STORAGE_DIR, db
+        policy, next_version, _signing_key, KEY_ID, BUNDLE_STORAGE_DIR, db
     )
-    return Response(content=bundle_path.read_bytes(), media_type="application/octet-stream")
+    policy.bundle_version = next_version
+    write_audit_log(db, "bundle.compile", "policy", policy.id, detail=f"version={next_version}", actor=user.email)
+    db.commit()
+    try:
+        content = bundle_path.read_bytes()
+    except FileNotFoundError:
+        raise HTTPException(500, "bundle file missing after compile — storage error")
+    return Response(content=content, media_type="application/octet-stream")
 
 
 @router.get("/groups/{group_id}/bundle")
-def get_latest_bundle(group_id: str) -> Response:
+def get_latest_bundle(group_id: str, db: Session = Depends(get_db)) -> Response:
+    """Fetched by filter nodes after they detect a new bundle_version.
+    Unauthenticated like /routing-table — machine-to-machine traffic.
+    A service-to-service token is a later hardening item (design.md §7.3)."""
+    # Validate group_id exists in DB — prevents probing for arbitrary file paths.
+    if db.get(models.Group, group_id) is None:
+        raise HTTPException(404, "group not found")
     pointer = BUNDLE_STORAGE_DIR / f"{group_id}.latest"
     if not pointer.exists():
         raise HTTPException(404, "no bundle compiled yet for this group")
     digest = pointer.read_text().strip()
+    # digest is a hex/content-addressed string written by compile_and_store;
+    # verify it contains no path separators before using it as a filename.
+    if "/" in digest or "\\" in digest or ".." in digest:
+        raise HTTPException(500, "bundle store corrupted")
     bundle_bytes = (BUNDLE_STORAGE_DIR / f"{digest}.bin").read_bytes()
     return Response(content=bundle_bytes, media_type="application/octet-stream")
+
+
+_DOMAIN_RE = re.compile(
+    r"^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?)+$",
+    re.IGNORECASE,
+)
+
+
+class PolicyTestRequest(BaseModel):
+    domain: str
+
+    @field_validator("domain")
+    @classmethod
+    def _valid_domain(cls, v: str) -> str:
+        v = v.strip().lower().rstrip(".")
+        if not _DOMAIN_RE.match(v):
+            raise ValueError("not a valid domain name")
+        return v
+
+
+class PolicyTestResult(BaseModel):
+    domain: str
+    decision: str  # "allow" | "block"
+    matched: str   # "override_allow" | "override_deny" | "category" | "default"
+    matched_category: str | None = None
+    matched_feed_id: str | None = None
+
+
+@router.post("/groups/{group_id}/policy/test", response_model=PolicyTestResult)
+def test_domain(
+    group_id: str,
+    payload: PolicyTestRequest,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_role("operator", "admin")),
+) -> PolicyTestResult:
+    """Simulates the filter's decision for a given domain against this group's
+    current saved policy (overrides + category toggles). Does NOT require a
+    compiled bundle — reads directly from DB + feed domain files."""
+    get_group_or_403(db, group_id, user)
+    policy = db.query(models.Policy).filter(models.Policy.group_id == group_id).one_or_none()
+    if policy is None:
+        raise HTTPException(404, "no policy found for this group")
+
+    domain = payload.domain  # already normalised by the validator
+
+    # 1. Allow overrides take precedence over deny overrides (mirrors filter logic).
+    for override in policy.overrides:
+        if override.kind == "allow" and override.domain.lower() == domain:
+            return PolicyTestResult(domain=domain, decision="allow", matched="override_allow")
+
+    # 2. Deny overrides.
+    for override in policy.overrides:
+        if override.kind == "deny" and override.domain.lower() == domain:
+            return PolicyTestResult(domain=domain, decision="block", matched="override_deny")
+
+    # 3. Category toggles — check each blocked category's feed domain file.
+    for toggle in policy.category_toggles:
+        if toggle.action != "ACTION_BLOCK":
+            continue
+        feed = db.execute(
+            select(models.Feed).where(
+                models.Feed.category_id == toggle.category_id,
+                models.Feed.enabled.is_(True),
+            )
+        ).scalars().first()
+        if feed is None:
+            continue
+        if domain in load_domains(FEED_STORAGE_DIR, feed.id):
+            return PolicyTestResult(
+                domain=domain,
+                decision="block",
+                matched="category",
+                matched_category=toggle.category_id,
+                matched_feed_id=feed.id,
+            )
+
+    return PolicyTestResult(domain=domain, decision="allow", matched="default")

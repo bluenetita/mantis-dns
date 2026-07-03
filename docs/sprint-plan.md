@@ -107,9 +107,7 @@ Epics B and C start in parallel sprint 1 once the bundle schema (Epic A) is froz
 
 - [ ] Rust: async fire-and-forget query event emission (to a local queue first — NATS or even a Python ingestion endpoint, defer Kafka).
 - [ ] Python: query event consumer → Postgres (or lightweight ClickHouse if already standing one up) for basic analytics.
-- [ ] Prometheus metrics from Rust node (`metrics` crate + exporter) — QPS, cache hit ratio, block ratio, latency histogram.
 - [ ] TypeScript: policy editor UI — category toggles per group, live domain-count display, test-box (enter domain → see category match).
-- [ ] Grafana dashboard v1 against Prometheus.
 
 **Exit criteria:** ops can see live metrics; tenant-admin can toggle categories from UI and see it land in a new bundle within the propagation SLA.
 
@@ -226,6 +224,85 @@ The DNS query stream is the most complete network telemetry source in the stack.
 - [ ] **Event enrichment**: embed `client_name`, `owner`, `device_type`, `tags` in all SIEM exports once registered.
 
 **Exit criteria:** register a client IP via UI → next query event export for that IP contains `client_name` and `owner`; unregistered IPs surface in "unknown clients" list.
+
+---
+
+## Epic L — DNS Upstream Configuration (Sprints 17–18)
+
+Full architecture and data model: **design.md §21**.
+
+Replace the single static upstream resolver with an enterprise-grade upstream management system: named resolver profiles (DoT/DoH/do53), HA pools with health monitoring and automatic failover, split-horizon routing rules, per-tenant policies, DNSSEC enforcement, and a management UI. All upstream config is delivered inside a signed bundle — the filter node resolves with zero control-plane dependency at query time.
+
+### Sprint 17 — Data model, API, bundle delivery
+
+- [ ] **DB models**: `UpstreamResolver`, `UpstreamPool`, `UpstreamPoolMember`, `UpstreamRoute`, `UpstreamTenantPolicy` — full Postgres schema with FK constraints and indexes. Startup `ADD COLUMN IF NOT EXISTS` migration pattern (no Alembic).
+- [ ] **CRUD API** (admin+): resolvers (`GET/POST/PATCH/DELETE /api/v1/upstream/resolvers`), pools (`/pools`), pool members (`/pools/{id}/members`), routes (`/tenants/{tid}/upstream/routes`), tenant policies (`/tenants/{tid}/upstream/policy`).
+- [ ] **Upstream bundle compiler**: `GET /api/v1/upstream-bundle/{tenant_id}` — serialize resolvers/pools/routes/policy for the given tenant into a signed JSON payload (ed25519 over canonical JSON). Filter node fetches this on the same poll interval as the policy bundle.
+- [ ] **"Test resolver" endpoint**: `POST /api/v1/upstream/resolvers/{id}/probe` — live SOA probe from the control-plane host; returns latency, response code, DNSSEC AD bit, TLS handshake details.
+- [ ] **Rust: bundle loader** — deserialize and verify upstream bundle signature; atomic hot-swap with no query-path lock; fallback to `UPSTREAM_FALLBACK_ADDRESS` env var if bundle absent or invalid.
+
+**Exit criteria:** create a DoT resolver + failover pool via API → compile bundle → Rust node loads it and forwards queries through the DoT pool; old flat `UPSTREAM_FALLBACK_ADDRESS` still works as fallback.
+
+### Sprint 18 — Health monitor, failover, routing, observability, UI
+
+- [ ] **Rust: health monitor** — per-pool-member probe loop (`health_check_interval_s`), threshold-based state machine (healthy / unhealthy), latency EMA, emit `UpstreamFailedEvent` / `UpstreamRecoveredEvent` to telemetry pipeline.
+- [ ] **Rust: route evaluation** — per-query route matching (domain suffix, exact, qtype, category, default) ordered by priority; pool selection; fallback pool when min-healthy drops below threshold; SERVFAIL on complete pool collapse.
+- [ ] **Rust: DNSSEC enforcement** — `strict` mode: reject responses without `AD` bit; validate resolver behaviour during health probes using known-broken DNSSEC domain (`dnssec-failed.org`).
+- [ ] **Telemetry metrics**: `upstream_latency_us`, `upstream_errors_total`, `upstream_health_state`, `upstream_pool_healthy_members`, `upstream_dnssec_failures_total` — all surfaced in Analytics.
+- [ ] **Settings UI — Resolvers section**: resolver list + editor (protocol, address, TLS, pin, DNSSEC, QName minimization, ECS, timeout), pool editor (strategy, members, health check config, fallback pool), per-tenant route table (priority-ordered, drag-to-reorder), tenant policy editor.
+- [ ] **Upstream Health dashboard tab**: per-resolver health state timeline, latency P50/P95 chart, error breakdown, pool member utilization.
+
+**Exit criteria:** kill one DoT resolver → health monitor ejects it → queries fail over to secondary within one probe interval; recover resolver → re-admission after healthy_threshold probes; all verified via UI and telemetry dashboard.
+
+---
+
+## Epic M — DHCP via ISC Kea Integration (Sprints 19–21)
+
+Full architecture and integration model: **design.md §22**.
+
+Aegis integrates **ISC Kea DHCP** as a co-located sidecar rather than building a DHCP engine from scratch. Kea handles the full RFC 2131/8415 wire protocol, conflict detection, relay agent processing, HA failover, and all edge cases. Aegis contributes multi-tenant config management (shadow DB → `KeaConfigGenerator` → Kea Control Agent REST API), a DDNS bridge (Kea `run_script` hook → Aegis DNS Zones API), lease-to-client-registry sync, and the management UI.
+
+### Sprint 19 — Kea deployment, config management, scope and reservation CRUD
+
+- [ ] **Docker Compose**: add `kea-dhcp4`, `kea-dhcp6`, `kea-ctrl-agent` services; Postgres backend (`libdhcp_pgsql.so`); mount generated config volumes; `kea-exporter` or Stork agent for Prometheus metrics; `restart: unless-stopped`.
+- [ ] **Kea startup config**: minimal `kea-dhcp4.conf` / `kea-dhcp6.conf` with `lease_cmds`, `host_cmds`, `stat_cmds`, `run_script` hooks enabled; `kea-ctrl-agent.conf` pointing at the FastAPI control-plane network.
+- [ ] **DB models**: `DhcpScope` (cidr/inet columns), `DhcpStaticLease`, `DhcpOption`, `DhcpRelayConfig`, `DhcpScopeGroupBinding` — see design.md §22.2. No `DhcpLease` table; Kea's `kea.dhcp4_leases` is authoritative.
+- [ ] **`KeaConfigGenerator`** (Python class in `aegis_control/dhcp/`): translates Aegis DB models to full Kea `Dhcp4` JSON; pushes via `POST http://kea-ctrl-agent:8080/ {"command":"config-set", ...}`; falls back to incremental `subnet4-add` / `reservation-add` commands for single-scope changes.
+- [ ] **Scope CRUD API**: `GET/POST/PATCH/DELETE /api/v1/tenants/{tid}/dhcp/scopes`; on write → `KeaConfigGenerator.push_scope(scope_id)`; auto-injects DNS option 6 (filter node IPs for tenant), subnet mask, broadcast, lease timing options.
+- [ ] **Static reservation CRUD**: `GET/POST/PATCH/DELETE /api/v1/tenants/{tid}/dhcp/scopes/{sid}/reservations`; on write → `reservation-add` / `reservation-del` Kea command.
+- [ ] **Option CRUD**: per-scope and per-reservation; pushed inside `subnet4` config on next scope push.
+- [ ] **Lease read API**: `GET /api/v1/tenants/{tid}/dhcp/leases` — proxies a `SELECT` from `kea.dhcp4_leases` filtered by known `kea_subnet_id` values for the tenant; supports `?scope_id=`, `?state=`, `?mac=`, `?hostname=` query params.
+
+**Exit criteria:** `docker compose up kea-dhcp4 kea-ctrl-agent`; configure a scope via Aegis API; test client on same L2 → receives DHCPACK with correct IP, subnet mask, gateway, DNS option 6 pointing at Aegis filter node; lease visible via lease read API.
+
+---
+
+### Sprint 20 — Relay, Option 82, DDNS bridge, client registry, PXE
+
+- [ ] **Relay config**: `DhcpRelayConfig` CRUD; `KeaConfigGenerator` maps `relay_agent_cidr` → Kea `relay.ip-addresses` per subnet; unknown giaddr → Kea discards; `run_script` logs `DhcpRelayUnknownAgentEvent` to Aegis audit log.
+- [ ] **Option 82 client-class routing**: `DhcpRelayConfig.circuit_id_hex` / `remote_id_hex` → Kea `client-class` expressions (generated by `KeaConfigGenerator`); pushed as part of full config-set.
+- [ ] **DDNS bridge**: `aegis-ddns-bridge.sh` generated per deployment (with `AEGIS_INTERNAL_TOKEN`); Kea `run_script` hook fires on `DHCP4_LEASE_COMMITTED` / `DHCP4_LEASE_EXPIRED` / `DHCP4_LEASE_RELEASED`; script POSTs to `POST /api/v1/internal/dhcp-event`; handler upserts/deletes A + PTR records in the scope's `ddns_zone_id` zone; retry queue (3× exponential backoff); DDNS skipped if `ddns_enabled=false` or hostname null.
+- [ ] **`DhcpLeaseSyncLoop`**: asyncio background task (30 s interval); `SELECT` from `kea.dhcp4_leases` for tenant's subnets; upserts `ClientEntry` (ip, hostname, device_type inferred from vendor_id, tags `["dhcp-managed","kea-lease"]`, group_id from `DhcpScopeGroupBinding`).
+- [ ] **Routing table endpoint**: `GET /api/v1/dhcp/routing-table` returns `[{subnet, group_id}]` from `DhcpScope` + `DhcpScopeGroupBinding`; filter node can use this instead of manual VPN subnet config (§7.3).
+- [ ] **PXE**: `DhcpPxeProfile` CRUD; `KeaConfigGenerator` emits Kea `client-class` entries for option 93 (arch) matching + option 66/67/17 injection per profile; pushed in config-set.
+
+**Exit criteria:** relay agent forwards DHCP → scope selected by giaddr → ACK → A + PTR records appear in DNS Zones within 5 s → client visible in client registry with correct `device_type` and `group_id`; PXE boot works for at least one arch class.
+
+---
+
+### Sprint 21 — HA, DHCPv6, UI, observability
+
+- [ ] **Kea HA**: `DhcpHaConfig` CRUD (`hot-standby` / `load-balancing` modes); `KeaConfigGenerator` emits `hooks-libraries` entry for `libdhcp_ha.so` with peer list; pushed to both Kea nodes; live HA state exposed via `ha-heartbeat` Control Agent command at `GET /api/v1/dhcp/ha-status`.
+- [ ] **DHCPv6**: `DhcpV6Scope`, `DhcpV6StaticLease` models; `KeaConfigGenerator` generates `kea-dhcp6.conf` (`subnet6` array, IA_NA pools, IA_PD prefix pools); pushes to `kea-dhcp6` via ctrl-agent `service:["dhcp6"]`; DDNS bridge fires AAAA + `ip6.arpa` PTR on DHCPv6 lease events.
+- [ ] **DHCP management UI** (`/dhcp` route, new Shell nav entry):
+  - **Scopes tab**: table (subnet, range, utilization bar, DDNS badge, sync status); Add/Edit modal with CIDR validator, range picker, lease timing, DDNS zone selector, relay IPs.
+  - **Leases tab**: live table from lease API (IP, MAC, hostname, state badge, lease start/end, scope); filters by scope/state/MAC/hostname; bulk delete-expired; "Convert to reservation" action; CSV export; utilization gauge per scope (green <75%, amber 75–90%, red >90%).
+  - **Reservations tab**: MAC/IP/hostname table; bulk CSV import; inline conflict badge.
+  - **HA / Relay tab**: HA mode form + peer config; live HA state chip; relay whitelist; option 82 class table.
+  - **DDNS status** (within scope drawer): bridge event log, retry queue depth.
+- [ ] **Observability**: poll Kea `stat-lease4-get` / `stat-lease6-get` commands (30 s); expose `dhcp_leases_active{scope_id}`, `dhcp_pool_utilization_pct{scope_id}`, `dhcp_offers_total`, `dhcp_acks_total`, `dhcp_naks_total` as Prometheus metrics; `DhcpPoolExhaustedEvent` alert at ≥ 90% utilization; all config pushes and HA state changes written to Aegis audit log.
+
+**Exit criteria:** kill primary Kea node → standby takes over (Kea HA hot-standby) → new leases issued without client interruption; DHCPv6 client receives IA_NA + AAAA DNS record; all UI tabs functional; pool exhaustion alert fires in test; Prometheus metrics visible.
 
 ---
 

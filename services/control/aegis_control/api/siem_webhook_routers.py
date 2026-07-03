@@ -12,15 +12,16 @@ from typing import Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from aegis_control.audit import write_audit_log
-from aegis_control.auth import require_role
+from aegis_control.auth import check_tenant_access, require_role, user_tenant_filter
 from aegis_control.crypto import encrypt_secret
 from aegis_control.db import models
 from aegis_control.db.session import get_db
 from aegis_control.siem_delivery import deliver_test_event
+from aegis_control.ssrf_guard import check_url_safe
 
 router = APIRouter()
 
@@ -31,8 +32,8 @@ class SiemWebhookCreate(BaseModel):
     url: str
     secret: str
     format: Literal["json", "cef"] = "json"
-    batch_size: int = 200
-    flush_interval_s: int = 30
+    batch_size: int = Field(200, ge=1, le=10_000)
+    flush_interval_s: int = Field(30, ge=10, le=86_400)
     filter_decision: Literal["all", "block", "allow"] = "all"
     enabled: bool = True
 
@@ -42,8 +43,8 @@ class SiemWebhookUpdate(BaseModel):
     url: str | None = None
     secret: str | None = None
     format: Literal["json", "cef"] | None = None
-    batch_size: int | None = None
-    flush_interval_s: int | None = None
+    batch_size: int | None = Field(None, ge=1, le=10_000)
+    flush_interval_s: int | None = Field(None, ge=10, le=86_400)
     filter_decision: Literal["all", "block", "allow"] | None = None
     enabled: bool | None = None
 
@@ -79,8 +80,17 @@ def create_webhook(
     db: Session = Depends(get_db),
     admin: models.User = Depends(require_role("admin")),
 ) -> models.SiemWebhook:
+    # Scoped admins can only create webhooks for their own tenant.
+    scope = user_tenant_filter(admin)
+    effective_tenant = scope if scope is not None else payload.tenant_id
+    if scope is not None and payload.tenant_id is not None and payload.tenant_id != scope:
+        raise HTTPException(403, "access denied — cannot create webhook for a different tenant")
+    try:
+        check_url_safe(payload.url)
+    except ValueError as e:
+        raise HTTPException(422, f"webhook URL rejected: {e}") from e
     webhook = models.SiemWebhook(
-        tenant_id=payload.tenant_id,
+        tenant_id=effective_tenant,
         name=payload.name,
         url=payload.url,
         secret_encrypted=encrypt_secret(payload.secret),
@@ -100,7 +110,11 @@ def create_webhook(
 
 @router.get("/siem/webhooks", response_model=list[SiemWebhookOut])
 def list_webhooks(db: Session = Depends(get_db), _admin: models.User = Depends(require_role("admin"))) -> list[models.SiemWebhook]:
-    return list(db.query(models.SiemWebhook).all())
+    scope = user_tenant_filter(_admin)
+    q = db.query(models.SiemWebhook)
+    if scope is not None:
+        q = q.filter(models.SiemWebhook.tenant_id == scope)
+    return list(q.all())
 
 
 @router.patch("/siem/webhooks/{webhook_id}", response_model=SiemWebhookOut)
@@ -113,14 +127,21 @@ def update_webhook(
     webhook = db.get(models.SiemWebhook, webhook_id)
     if webhook is None:
         raise HTTPException(404, "webhook not found")
+    if webhook.tenant_id is not None:
+        check_tenant_access(admin, webhook.tenant_id)
 
     changes = payload.model_dump(exclude_unset=True, exclude={"secret"})
+    if "url" in changes:
+        try:
+            check_url_safe(changes["url"])
+        except ValueError as e:
+            raise HTTPException(422, f"webhook URL rejected: {e}") from e
     for field, value in changes.items():
         setattr(webhook, field, value)
     if payload.secret is not None:
         webhook.secret_encrypted = encrypt_secret(payload.secret)
-    if payload.enabled is True:
-        # Re-enabling clears the failure backoff so delivery resumes immediately.
+    if payload.enabled is True or ("url" in changes and webhook.enabled):
+        # Re-enabling or fixing the URL clears the failure backoff so delivery resumes immediately.
         webhook.consecutive_failures = 0
         webhook.next_retry_at = None
 
@@ -139,6 +160,8 @@ def delete_webhook(
     webhook = db.get(models.SiemWebhook, webhook_id)
     if webhook is None:
         raise HTTPException(404, "webhook not found")
+    if webhook.tenant_id is not None:
+        check_tenant_access(admin, webhook.tenant_id)
     write_audit_log(db, "siem_webhook.delete", "siem_webhook", webhook.id, detail=f"name={webhook.name}", actor=admin.email)
     db.delete(webhook)
     db.commit()
@@ -155,6 +178,8 @@ async def test_webhook(
     webhook = db.get(models.SiemWebhook, webhook_id)
     if webhook is None:
         raise HTTPException(404, "webhook not found")
+    if webhook.tenant_id is not None:
+        check_tenant_access(admin, webhook.tenant_id)
 
     async with httpx.AsyncClient() as client:
         try:

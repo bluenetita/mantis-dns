@@ -266,8 +266,7 @@ export interface paths {
         };
         /**
          * Analytics Summary
-         * @description Org-wide rollup across all tenants/groups. Postgres for now (design.md
-         *     §6: Kafka -> ClickHouse is the at-scale target); fine at current volumes.
+         * @description Org-wide rollup. Optional `hours` window (None = all time).
          */
         get: operations["analytics_summary_api_v1_analytics_summary_get"];
         put?: never;
@@ -309,6 +308,57 @@ export interface paths {
         };
         /** Analytics By Group */
         get: operations["analytics_by_group_api_v1_analytics_by_group_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/top-clients": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Top Clients Analytics */
+        get: operations["top_clients_analytics_api_v1_analytics_top_clients_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/top-categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Top Categories Analytics */
+        get: operations["top_categories_analytics_api_v1_analytics_top_categories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/recent-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recent Events Analytics */
+        get: operations["recent_events_analytics_api_v1_analytics_recent_events_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -400,7 +450,8 @@ export interface paths {
         delete: operations["delete_user_api_v1_users__user_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update User */
+        patch: operations["update_user_api_v1_users__user_id__patch"];
         trace?: never;
     };
     "/api/v1/siem/events": {
@@ -516,6 +567,96 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dns-zones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Zones */
+        get: operations["list_zones_api_v1_dns_zones_get"];
+        put?: never;
+        /** Create Zone */
+        post: operations["create_zone_api_v1_dns_zones_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dns-zones/{zone_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Zone */
+        get: operations["get_zone_api_v1_dns_zones__zone_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Zone */
+        delete: operations["delete_zone_api_v1_dns_zones__zone_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Zone */
+        patch: operations["update_zone_api_v1_dns_zones__zone_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/dns-zones/{zone_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Zone */
+        get: operations["export_zone_api_v1_dns_zones__zone_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dns-zones/{zone_id}/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Records */
+        get: operations["list_records_api_v1_dns_zones__zone_id__records_get"];
+        put?: never;
+        /** Create Record */
+        post: operations["create_record_api_v1_dns_zones__zone_id__records_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dns-zones/{zone_id}/records/{record_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Record */
+        delete: operations["delete_record_api_v1_dns_zones__zone_id__records__record_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Record */
+        patch: operations["update_record_api_v1_dns_zones__zone_id__records__record_id__patch"];
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -547,6 +688,16 @@ export interface components {
             allowed_queries: number;
             /** Block Ratio */
             block_ratio: number;
+            /**
+             * Cache Hit Ratio
+             * @default 0
+             */
+            cache_hit_ratio: number;
+            /**
+             * Unique Clients
+             * @default 0
+             */
+            unique_clients: number;
             /** Tenant Count */
             tenant_count: number;
             /** Group Count */
@@ -575,6 +726,15 @@ export interface components {
             resource_id: string;
             /** Detail */
             detail: string;
+        };
+        /** CategoryBreakdown */
+        CategoryBreakdown: {
+            /** Category */
+            category: string;
+            /** Count */
+            count: number;
+            /** Pct */
+            pct: number;
         };
         /** CategoryToggleIn */
         CategoryToggleIn: {
@@ -690,6 +850,8 @@ export interface components {
             last_domain_count: number | null;
             /** Last Version */
             last_version: string | null;
+            /** Last Fetched At */
+            last_fetched_at: string | null;
         };
         /**
          * FeedUpdate
@@ -863,12 +1025,156 @@ export interface components {
             /** Latency Us */
             latency_us?: number | null;
         };
+        /** RecentEvent */
+        RecentEvent: {
+            /** Id */
+            id: string;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Client Ip */
+            client_ip: string | null;
+            /** Client Name */
+            client_name: string | null;
+            /** Qname */
+            qname: string;
+            /** Decision */
+            decision: string;
+            /** Matched Category */
+            matched_category: string | null;
+            /** Matched Feed Id */
+            matched_feed_id: string | null;
+            /** Group Name */
+            group_name: string | null;
+            /** Latency Us */
+            latency_us: number | null;
+        };
+        /** RecordIn */
+        RecordIn: {
+            /** Name */
+            name: string;
+            /** Record Type */
+            record_type: string;
+            /** Data */
+            data: string;
+            /** Ttl */
+            ttl?: number | null;
+            /** Priority */
+            priority?: number | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+        };
+        /** RecordOut */
+        RecordOut: {
+            /** Id */
+            id: string;
+            /** Zone Id */
+            zone_id: string;
+            /** Name */
+            name: string;
+            /** Record Type */
+            record_type: string;
+            /** Data */
+            data: string;
+            /** Ttl */
+            ttl: number | null;
+            /** Priority */
+            priority: number | null;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** RecordUpdate */
+        RecordUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Record Type */
+            record_type?: string | null;
+            /** Data */
+            data?: string | null;
+            /** Ttl */
+            ttl?: number | null;
+            /** Priority */
+            priority?: number | null;
+            /** Enabled */
+            enabled?: boolean | null;
+        };
         /** RoutingTableEntry */
         RoutingTableEntry: {
             /** Cidr */
             cidr: string;
             /** Group Id */
             group_id: string;
+        };
+        /** SiemEvent */
+        SiemEvent: {
+            /** Id */
+            id: string;
+            /** Seq */
+            seq: number;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Tenant Id */
+            tenant_id: string | null;
+            /** Group Id */
+            group_id: string;
+            /** Client Ip */
+            client_ip: string | null;
+            /** Client Name */
+            client_name?: string | null;
+            /** Owner */
+            owner?: string | null;
+            /** Device Type */
+            device_type?: string | null;
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
+            /** Qname */
+            qname: string;
+            /** Qtype */
+            qtype: string | null;
+            /** Decision */
+            decision: string;
+            /** Matched Rule */
+            matched_rule: string | null;
+            /** Matched Category */
+            matched_category: string | null;
+            /** Matched Feed Id */
+            matched_feed_id: string | null;
+            /** Response Code */
+            response_code: string | null;
+            /** Cache Hit */
+            cache_hit: boolean | null;
+            /** Latency Us */
+            latency_us: number | null;
+        };
+        /** SiemEventsPage */
+        SiemEventsPage: {
+            /** Events */
+            events: components["schemas"]["SiemEvent"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Total In Window */
+            total_in_window: number;
         };
         /** SiemWebhookCreate */
         SiemWebhookCreate: {
@@ -999,6 +1305,23 @@ export interface components {
             /** Allowed */
             allowed: number;
         };
+        /** TopClient */
+        TopClient: {
+            /** Client Ip */
+            client_ip: string;
+            /** Hostname */
+            hostname: string | null;
+            /** Owner */
+            owner: string | null;
+            /** Group Name */
+            group_name: string | null;
+            /** Total */
+            total: number;
+            /** Blocked */
+            blocked: number;
+            /** Block Ratio */
+            block_ratio: number;
+        };
         /** TopDomain */
         TopDomain: {
             /** Qname */
@@ -1029,6 +1352,11 @@ export interface components {
             /** Role */
             role: string;
         };
+        /** UserUpdate */
+        UserUpdate: {
+            /** Role */
+            role: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -1041,6 +1369,74 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** ZoneCreate */
+        ZoneCreate: {
+            /** Name */
+            name: string;
+            /** Zone Type */
+            zone_type: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Ttl Default
+             * @default 300
+             */
+            ttl_default: number;
+            /** Forwarder */
+            forwarder?: string | null;
+        };
+        /** ZoneOut */
+        ZoneOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Zone Type */
+            zone_type: string;
+            /** Description */
+            description: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Ttl Default */
+            ttl_default: number;
+            /** Forwarder */
+            forwarder: string | null;
+            /** Record Count */
+            record_count: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ZoneUpdate */
+        ZoneUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Zone Type */
+            zone_type?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Ttl Default */
+            ttl_default?: number | null;
+            /** Forwarder */
+            forwarder?: string | null;
         };
     };
     responses: never;
@@ -1651,7 +2047,9 @@ export interface operations {
     };
     analytics_summary_api_v1_analytics_summary_get: {
         parameters: {
-            query?: never;
+            query?: {
+                hours?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1665,6 +2063,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnalyticsSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1716,6 +2123,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GroupBreakdown"][];
+                };
+            };
+        };
+    };
+    top_clients_analytics_api_v1_analytics_top_clients_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TopClient"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    top_categories_analytics_api_v1_analytics_top_categories_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryBreakdown"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recent_events_analytics_api_v1_analytics_recent_events_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                decision?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecentEvent"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1887,6 +2390,41 @@ export interface operations {
             };
         };
     };
+    update_user_api_v1_users__user_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_siem_events_api_v1_siem_events_get: {
         parameters: {
             query?: {
@@ -1911,7 +2449,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SiemEventsPage"];
                 };
             };
             /** @description Validation Error */
@@ -2160,6 +2698,317 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_zones_api_v1_dns_zones_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ZoneOut"][];
+                };
+            };
+        };
+    };
+    create_zone_api_v1_dns_zones_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ZoneCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ZoneOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_zone_api_v1_dns_zones__zone_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                zone_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ZoneOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_zone_api_v1_dns_zones__zone_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                zone_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_zone_api_v1_dns_zones__zone_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                zone_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ZoneUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ZoneOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_zone_api_v1_dns_zones__zone_id__export_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                zone_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_records_api_v1_dns_zones__zone_id__records_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                zone_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_record_api_v1_dns_zones__zone_id__records_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                zone_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_record_api_v1_dns_zones__zone_id__records__record_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                zone_id: string;
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_record_api_v1_dns_zones__zone_id__records__record_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                zone_id: string;
+                record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordOut"];
+                };
             };
             /** @description Validation Error */
             422: {

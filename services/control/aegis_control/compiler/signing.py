@@ -29,7 +29,7 @@ def sign_bundle(bundle: bundle_pb2.Bundle, private_key: Ed25519PrivateKey, key_i
     payload = bundle.SerializeToString()
     signature = private_key.sign(payload)
     bundle.signature = signature
-    return bundle.SerializeToString()
+    return bytes(bundle.SerializeToString())
 
 
 def public_key_raw_bytes(public_key: Ed25519PublicKey) -> bytes:

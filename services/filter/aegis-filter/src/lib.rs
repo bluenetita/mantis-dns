@@ -5,9 +5,10 @@
 //! Sprint 5, see design.md §7.3).
 
 mod cache;
-pub mod metrics_init;
+pub mod health_monitor;
 mod router;
 mod telemetry;
+pub mod upstream_bundle;
 
 pub use telemetry::{QueryEventInput, TelemetryEmitter};
 
@@ -108,6 +109,10 @@ impl AppState {
     pub fn with_telemetry(mut self, telemetry: TelemetryEmitter) -> Self {
         self.telemetry = telemetry;
         self
+    }
+
+    pub fn purge_cache(&self) {
+        self.cache.purge_expired();
     }
 }
 
@@ -277,7 +282,12 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
     }
 }
 
+pub use health_monitor::{run_health_monitor, HealthStore};
 pub use router::{refresh_routes, routing_refresh_loop, run_router_udp_server, test_support, TenantRouter};
+pub use upstream_bundle::{
+    fetch_upstream_bundle, upstream_bundle_refresh_loop, UpstreamBundle, UpstreamBundleForwarder,
+    UpstreamBundleStore,
+};
 
 /// Core decision + response logic, parameterized over the resolved bundle so
 /// both the single-tenant `AppState` path and the multi-tenant `TenantRouter`
@@ -292,20 +302,6 @@ pub(crate) async fn build_response(
     telemetry: &TelemetryEmitter,
 ) -> Message {
     let start = std::time::Instant::now();
-    let response = build_response_inner(query, bundle, client_ip, cache, forwarder, telemetry, start).await;
-    metrics::histogram!("aegis_dns_response_seconds").record(start.elapsed().as_secs_f64());
-    response
-}
-
-async fn build_response_inner(
-    query: &Message,
-    bundle: Option<&Bundle>,
-    client_ip: IpAddr,
-    cache: &DnsCache,
-    forwarder: &dyn Forwarder,
-    telemetry: &TelemetryEmitter,
-    start: std::time::Instant,
-) -> Message {
     let mut response = Message::new();
     response.set_id(query.id());
     response.set_message_type(MessageType::Response);
@@ -327,7 +323,6 @@ async fn build_response_inner(
         // No bundle loaded yet (or no tenant matched, in router mode).
         // Fail-open by default at this stage (dev-friendly); per-tenant
         // FailurePolicy enforcement lands in Sprint 9 HA hardening.
-        metrics::counter!("aegis_dns_queries_total", "decision" => "no_bundle").increment(1);
         response.set_response_code(ResponseCode::ServFail);
         return response;
     };
@@ -337,11 +332,9 @@ async fn build_response_inner(
 
     match outcome.decision {
         Decision::Block => {
-            metrics::counter!("aegis_dns_queries_total", "decision" => "block").increment(1);
             response.set_response_code(ResponseCode::NXDomain);
         }
         Decision::Allow => {
-            metrics::counter!("aegis_dns_queries_total", "decision" => "allow").increment(1);
             if question.query_type() == RecordType::A {
                 cache_hit = Some(
                     resolve_a_record(&qname, question.name().clone(), cache, forwarder, &mut response)
@@ -384,15 +377,12 @@ async fn resolve_a_record(
     response: &mut Message,
 ) -> bool {
     if let Some(ips) = cache.get(qname) {
-        metrics::counter!("aegis_dns_cache_total", "result" => "hit").increment(1);
         response.set_response_code(ResponseCode::NoError);
         for ip in ips {
             response.add_answer(Record::from_rdata(record_name.clone(), 60, RData::A(A(ip))));
         }
         return true;
     }
-    metrics::counter!("aegis_dns_cache_total", "result" => "miss").increment(1);
-
     match forwarder.lookup_a(qname).await {
         Ok((ips, ttl)) => {
             cache.put(qname.to_string(), ips.clone(), Duration::from_secs(ttl as u64));
@@ -403,7 +393,6 @@ async fn resolve_a_record(
             }
         }
         Err(e) => {
-            metrics::counter!("aegis_dns_upstream_errors_total").increment(1);
             debug!("upstream resolution failed for {qname}: {e}");
             response.set_response_code(ResponseCode::ServFail);
         }

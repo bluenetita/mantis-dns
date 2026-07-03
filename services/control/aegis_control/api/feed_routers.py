@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from aegis_control.audit import write_audit_log
@@ -12,6 +13,7 @@ from aegis_control.db import models
 from aegis_control.db.session import get_db
 from aegis_control.feeds.ingest import fetch_and_ingest
 from aegis_control.scheduler import sync_feed_schedule, unschedule_feed
+from aegis_control.ssrf_guard import check_url_safe
 
 router = APIRouter()
 
@@ -21,7 +23,7 @@ class FeedCreate(BaseModel):
     category_id: str
     url: str
     format: str
-    interval_seconds: int = 86400
+    interval_seconds: int = Field(86400, ge=60)
     license: str = ""
     provider: str = ""
     enabled: bool = True
@@ -35,7 +37,7 @@ class FeedUpdate(BaseModel):
     category_id: str | None = None
     url: str | None = None
     format: str | None = None
-    interval_seconds: int | None = None
+    interval_seconds: int | None = Field(None, ge=60)
     license: str | None = None
     provider: str | None = None
     enabled: bool | None = None
@@ -53,6 +55,7 @@ class FeedOut(BaseModel):
     enabled: bool
     last_domain_count: int | None
     last_version: str | None
+    last_fetched_at: datetime | None
 
     class Config:
         from_attributes = True
@@ -70,8 +73,15 @@ def create_feed(
     db: Session = Depends(get_db),
     user: models.User = Depends(require_role("admin", "operator")),
 ) -> models.Feed:
+    import re
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", payload.id):
+        raise HTTPException(422, "feed id must be 1–64 characters, only letters, digits, hyphens, and underscores")
     if db.get(models.Feed, payload.id) is not None:
         raise HTTPException(409, "feed with this id already exists")
+    try:
+        check_url_safe(payload.url)
+    except ValueError as e:
+        raise HTTPException(422, f"feed URL rejected: {e}") from e
     feed = models.Feed(**payload.model_dump(), from_catalog=False)
     db.add(feed)
     db.flush()
@@ -102,6 +112,11 @@ def update_feed(
         raise HTTPException(404, "feed not found")
 
     changes = payload.model_dump(exclude_unset=True)
+    if "url" in changes:
+        try:
+            check_url_safe(changes["url"])
+        except ValueError as e:
+            raise HTTPException(422, f"feed URL rejected: {e}") from e
     for field, value in changes.items():
         setattr(feed, field, value)
 

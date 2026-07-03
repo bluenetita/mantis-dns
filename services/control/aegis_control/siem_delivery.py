@@ -24,6 +24,7 @@ from aegis_control.audit import write_audit_log
 from aegis_control.crypto import decrypt_secret
 from aegis_control.db import models
 from aegis_control.db.session import SessionLocal
+from aegis_control.ssrf_guard import check_url_safe
 
 BACKOFF_SECONDS = [5, 30, 120, 600, 3600]
 MAX_CONSECUTIVE_FAILURES = 6
@@ -39,15 +40,15 @@ def _serialize_events(webhook: models.SiemWebhook, events: list[SiemEvent], deli
     payload = {
         "events": [jsonlib.loads(e.model_dump_json()) for e in events],
         "delivery_id": delivery_id,
-        "cursor": str(events[-1].seq),
+        "cursor": str(events[-1].seq) if events else None,
     }
     return jsonlib.dumps(payload).encode(), "application/json"
 
 
-async def _post(webhook: models.SiemWebhook, body: bytes, content_type: str, client: httpx.AsyncClient) -> int:
+async def _post(webhook: models.SiemWebhook, body: bytes, content_type: str, client: httpx.AsyncClient, delivery_id: str) -> int:
+    check_url_safe(webhook.url)  # raises ValueError → caught by caller as delivery failure
     secret = decrypt_secret(webhook.secret_encrypted)
     signature = _sign(secret, body)
-    delivery_id = str(uuid4())
     headers = {
         "Content-Type": content_type,
         "X-Aegis-Signature": f"sha256={signature}",
@@ -84,7 +85,7 @@ async def deliver_test_event(webhook: models.SiemWebhook, client: httpx.AsyncCli
     )
     delivery_id = str(uuid4())
     body, content_type = _serialize_events(webhook, [fake], delivery_id)
-    return await _post(webhook, body, content_type, client)
+    return await _post(webhook, body, content_type, client, delivery_id)
 
 
 def _as_aware(dt: datetime) -> datetime:
@@ -118,7 +119,7 @@ async def _process_webhook(db: Session, webhook: models.SiemWebhook, client: htt
     try:
         delivery_id = str(uuid4())
         body, content_type = _serialize_events(webhook, events, delivery_id)
-        await _post(webhook, body, content_type, client)
+        await _post(webhook, body, content_type, client, delivery_id)
     except Exception as e:
         webhook.consecutive_failures += 1
         webhook.last_error = str(e)[:2000]
@@ -153,6 +154,9 @@ async def run_webhook_delivery_cycle() -> None:
             return
         async with httpx.AsyncClient() as client:
             for webhook in webhooks:
-                await _process_webhook(db, webhook, client)
+                try:
+                    await _process_webhook(db, webhook, client)
+                except Exception:
+                    db.rollback()
     finally:
         db.close()

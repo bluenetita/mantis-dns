@@ -6,6 +6,7 @@ queried casino.com`.
 
 from __future__ import annotations
 
+import ipaddress
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from aegis_control.audit import write_audit_log
-from aegis_control.auth import get_current_user, require_role
+from aegis_control.auth import check_tenant_access, get_current_user, require_role
 from aegis_control.db import models
 from aegis_control.db.session import get_db
 
@@ -51,6 +52,7 @@ def list_clients(
     db: Session = Depends(get_db),
     _user: models.User = Depends(get_current_user),
 ) -> list[models.ClientEntry]:
+    check_tenant_access(_user, tenant_id)
     query = db.query(models.ClientEntry).filter(models.ClientEntry.tenant_id == tenant_id)
     if unregistered_only:
         query = query.filter(models.ClientEntry.registered_at.is_(None))
@@ -67,6 +69,11 @@ def register_client(
 ) -> models.ClientEntry:
     """Upsert: registers a not-yet-seen IP directly (rather than requiring a
     query event first) or edits an already-auto-discovered stub."""
+    check_tenant_access(user, tenant_id)
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        raise HTTPException(422, f"invalid IP address: {ip!r}")
     client = (
         db.query(models.ClientEntry)
         .filter(models.ClientEntry.tenant_id == tenant_id, models.ClientEntry.ip == ip)
@@ -98,6 +105,11 @@ def delete_client(
     db: Session = Depends(get_db),
     user: models.User = Depends(require_role("admin", "operator")),
 ) -> None:
+    check_tenant_access(user, tenant_id)
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        raise HTTPException(422, f"invalid IP address: {ip!r}")
     client = (
         db.query(models.ClientEntry)
         .filter(models.ClientEntry.tenant_id == tenant_id, models.ClientEntry.ip == ip)

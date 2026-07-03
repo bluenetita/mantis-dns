@@ -3,22 +3,32 @@ import { useDisclosure } from "@mantine/hooks";
 import {
   IconBuildingSkyscraper,
   IconRss,
-  IconChartBar,
+  IconLayoutDashboard,
   IconHistory,
   IconSettings,
   IconSun,
   IconMoon,
   IconShieldLock,
   IconLogout,
+  IconWorld,
+  IconChartBar,
+  IconUsers,
+  IconServer,
+  IconNetwork,
 } from "@tabler/icons-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { type Role, useAuth } from "../auth/AuthContext";
 
 const NAV_ITEMS: { to: string; label: string; icon: typeof IconRss; minRole?: Role }[] = [
+  { to: "/dashboard", label: "Dashboard", icon: IconLayoutDashboard },
   { to: "/tenants", label: "Tenants & policies", icon: IconBuildingSkyscraper },
   { to: "/feeds", label: "Feeds", icon: IconRss },
+  { to: "/zones", label: "DNS Zones", icon: IconWorld },
   { to: "/analytics", label: "Analytics", icon: IconChartBar },
   { to: "/audit", label: "Audit log", icon: IconHistory, minRole: "operator" },
+  { to: "/users", label: "Users", icon: IconUsers, minRole: "admin" },
+  { to: "/upstream", label: "DNS Upstream", icon: IconServer, minRole: "operator" },
+  { to: "/dhcp", label: "DHCP", icon: IconNetwork, minRole: "operator" },
   { to: "/settings", label: "Settings", icon: IconSettings },
 ];
 

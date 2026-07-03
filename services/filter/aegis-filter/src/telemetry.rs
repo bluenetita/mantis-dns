@@ -50,9 +50,11 @@ impl TelemetryEmitter {
     }
 
     pub fn emit(&self, event: QueryEventInput) {
-        if self.tx.try_send(event).is_err() {
-            metrics::counter!("aegis_dns_telemetry_dropped_total").increment(1);
+        use tokio::sync::mpsc::error::TrySendError;
+        if let Err(TrySendError::Full(_)) = self.tx.try_send(event) {
+            warn!("telemetry channel full — event dropped");
         }
+        // TrySendError::Closed means no receiver (noop mode) — silently discard
     }
 }
 

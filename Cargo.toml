@@ -22,8 +22,8 @@ thiserror = "2"
 arc-swap = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 hickory-proto = "0.25"
-hickory-resolver = { version = "0.25", features = ["tls-ring", "webpki-roots"] }
+hickory-resolver = { version = "0.25", features = ["tls-ring", "webpki-roots", "https-ring", "dnssec-ring"] }
 ipnet = "2"
 serde = { version = "1", features = ["derive"] }
-metrics = "0.24"
-metrics-exporter-prometheus = { version = "0.16", default-features = false, features = ["http-listener"] }
+base64 = "0.22"
+hex = "0.4"

@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta, timezone
 
+from typing import Any
+
 import bcrypt
 import jwt
 from fastapi import Depends, HTTPException
@@ -43,6 +45,7 @@ def create_access_token(user: models.User) -> str:
         "sub": user.id,
         "email": user.email,
         "role": user.role,
+        "tenant_id": user.tenant_id,
         "iat": now,
         "exp": now + _ACCESS_TOKEN_TTL,
     }
@@ -58,7 +61,7 @@ def get_current_user(
     try:
         payload = jwt.decode(creds.credentials, _JWT_SECRET, algorithms=[_JWT_ALGORITHM])
     except jwt.PyJWTError as e:
-        raise HTTPException(401, f"invalid token: {e}") from e
+        raise HTTPException(401, "invalid token") from e
 
     user = db.get(models.User, payload["sub"])
     if user is None:
@@ -66,7 +69,30 @@ def get_current_user(
     return user
 
 
-def require_role(*roles: str):
+def check_tenant_access(user: models.User, tenant_id: str) -> None:
+    """403 if a non-admin user is scoped to a different tenant."""
+    if user.role == "admin":
+        return
+    if user.tenant_id is not None and user.tenant_id != tenant_id:
+        raise HTTPException(403, "access denied — resource belongs to a different tenant")
+
+
+def user_tenant_filter(user: models.User) -> str | None:
+    """Returns the tenant_id to filter by, or None (= unrestricted) for admins."""
+    if user.role == "admin":
+        return None
+    return user.tenant_id
+
+
+def get_group_or_403(db: Session, group_id: str, user: models.User) -> models.Group:
+    group = db.get(models.Group, group_id)
+    if group is None:
+        raise HTTPException(404, "group not found")
+    check_tenant_access(user, group.tenant_id)
+    return group
+
+
+def require_role(*roles: str) -> Any:
     """Dependency factory: caller's role must be >= the lowest rank in `roles`."""
     min_rank = min(_ROLE_RANK[r] for r in roles)
 

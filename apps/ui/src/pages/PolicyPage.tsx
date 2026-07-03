@@ -6,6 +6,7 @@ import {
   Card,
   Center,
   Checkbox,
+  Code,
   Group,
   Loader,
   Select,
@@ -21,7 +22,7 @@ import { notifications } from "@mantine/notifications";
 import { IconPlus, IconX } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useCompileBundle, useTopDomains, usePolicy, useUpsertPolicy } from "../api/hooks";
+import { useCompileBundle, useTopDomains, usePolicy, useUpsertPolicy, useTestPolicy } from "../api/hooks";
 import type { components } from "../api/schema";
 import { useAuth } from "../auth/AuthContext";
 
@@ -65,7 +66,11 @@ export function PolicyPage() {
   const { data: policy, isLoading } = usePolicy(groupId);
   const upsertPolicy = useUpsertPolicy(groupId);
   const compileBundle = useCompileBundle();
+  const testPolicy = useTestPolicy(groupId);
   const { data: topDomains } = useTopDomains(groupId);
+  const { hasRole } = useAuth();
+
+  const [testDomain, setTestDomain] = useState("");
 
   const [categoryToggles, setCategoryToggles] = useState<CategoryToggle[]>([]);
   const [overrides, setOverrides] = useState<Override[]>([]);
@@ -75,7 +80,8 @@ export function PolicyPage() {
     setCategoryToggles(policy?.category_toggles ?? []);
     setOverrides(policy?.overrides ?? []);
     setOnLoadFailure(policy?.on_load_failure ?? "FAIL_OPEN");
-  }, [policy]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [policy?.id]);
 
   function toggleCategory(categoryId: string) {
     setCategoryToggles((prev) =>
@@ -186,7 +192,63 @@ export function PolicyPage() {
         />
       </Card>
 
-      {useAuth().hasRole("operator") && (
+      <Card withBorder>
+        <Title order={4} mb="sm">
+          Test a domain
+        </Title>
+        <Text size="sm" c="dimmed" mb="sm">
+          Checks the saved policy (overrides + category feeds) without requiring a compiled bundle.
+        </Text>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const d = testDomain.trim().toLowerCase().replace(/\.$/, "");
+            if (d) testPolicy.mutate(d);
+          }}
+        >
+          <Group align="flex-end">
+            <TextInput
+              placeholder="ads.example.com"
+              value={testDomain}
+              onChange={(e) => setTestDomain(e.currentTarget.value)}
+              style={{ flex: 1 }}
+            />
+            <Button type="submit" loading={testPolicy.isPending}>
+              Test
+            </Button>
+          </Group>
+        </form>
+        {testPolicy.data && (
+          <Group mt="sm" gap="xs" align="center">
+            <Badge
+              size="lg"
+              color={testPolicy.data.decision === "block" ? "red" : "green"}
+            >
+              {testPolicy.data.decision.toUpperCase()}
+            </Badge>
+            <Text size="sm" c="dimmed">
+              {testPolicy.data.matched === "override_allow" && "matched allow override"}
+              {testPolicy.data.matched === "override_deny" && "matched deny override"}
+              {testPolicy.data.matched === "category" && (
+                <>
+                  category <Code>{testPolicy.data.matched_category}</Code>
+                  {testPolicy.data.matched_feed_id && (
+                    <> · feed <Code>{testPolicy.data.matched_feed_id}</Code></>
+                  )}
+                </>
+              )}
+              {testPolicy.data.matched === "default" && "no rule matched — default allow"}
+            </Text>
+          </Group>
+        )}
+        {testPolicy.error && (
+          <Text size="sm" c="red" mt="xs">
+            {String(testPolicy.error)}
+          </Text>
+        )}
+      </Card>
+
+      {hasRole("operator") && (
         <Group>
           <Button onClick={save} loading={upsertPolicy.isPending}>
             Save policy

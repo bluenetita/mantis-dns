@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
@@ -29,7 +29,7 @@ class AuditLogEntry(BaseModel):
 
 @router.get("/audit-log", response_model=list[AuditLogEntry])
 def list_audit_log(
-    limit: int = 100,
+    limit: int = Query(100, ge=1, le=1000),
     resource_type: str | None = None,
     db: Session = Depends(get_db),
     _user: models.User = Depends(require_role("admin", "operator")),
@@ -37,4 +37,4 @@ def list_audit_log(
     query = db.query(models.AuditLog)
     if resource_type:
         query = query.filter(models.AuditLog.resource_type == resource_type)
-    return list(query.order_by(desc(models.AuditLog.occurred_at)).limit(min(limit, 1000)).all())
+    return list(query.order_by(desc(models.AuditLog.occurred_at)).limit(limit).all())

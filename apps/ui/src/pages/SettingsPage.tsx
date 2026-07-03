@@ -1,27 +1,48 @@
+import { useState } from "react";
 import {
-  Alert,
   Anchor,
   Badge,
   Button,
   Card,
   Center,
+  CopyButton,
+  Divider,
   Group,
   Loader,
   Modal,
   NumberInput,
   Select,
+  SimpleGrid,
   Stack,
   Switch,
   Table,
+  Tabs,
   Text,
   TextInput,
+  ThemeIcon,
   Title,
+  Tooltip,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { modals } from "@mantine/modals";
 import { notifications } from "@mantine/notifications";
-import { IconInfoCircle, IconPlus, IconSend, IconTrash } from "@tabler/icons-react";
+import {
+  IconCheck,
+  IconChevronRight,
+  IconCircleFilled,
+  IconCopy,
+  IconExternalLink,
+  IconKey,
+  IconLock,
+  IconPlus,
+  IconSend,
+  IconServer,
+  IconShield,
+  IconTrash,
+  IconUsers,
+  IconWebhook,
+} from "@tabler/icons-react";
 import { useAuth } from "../auth/AuthContext";
 import {
   useCreateSiemWebhook,
@@ -35,6 +56,8 @@ import type { components } from "../api/schema";
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 type SiemWebhook = components["schemas"]["SiemWebhookOut"];
+
+// ─── SIEM webhook form ────────────────────────────────────────────────────────
 
 function AddWebhookForm({ onDone }: { onDone: () => void }) {
   const createWebhook = useCreateSiemWebhook();
@@ -52,12 +75,7 @@ function AddWebhookForm({ onDone }: { onDone: () => void }) {
     validate: {
       name: (v) => (v.trim().length < 2 ? "Required" : null),
       url: (v) => {
-        try {
-          new URL(v);
-          return null;
-        } catch {
-          return "Must be a valid URL";
-        }
+        try { new URL(v); return null; } catch { return "Must be a valid URL"; }
       },
       secret: (v) => (v.trim().length < 8 ? "At least 8 characters" : null),
     },
@@ -77,153 +95,149 @@ function AddWebhookForm({ onDone }: { onDone: () => void }) {
     >
       <Stack>
         <TextInput label="Name" placeholder="Splunk HEC prod" required {...form.getInputProps("name")} />
-        <TextInput label="URL" placeholder="https://splunk.internal:8088/services/collector" required {...form.getInputProps("url")} />
-        <TextInput label="Signing secret" description="Used to HMAC-sign the X-Aegis-Signature header — share this with the SIEM side" required {...form.getInputProps("secret")} />
-        <Select
-          label="Format"
-          data={[
-            { value: "json", label: "JSON" },
-            { value: "cef", label: "CEF" },
-          ]}
-          {...form.getInputProps("format")}
-        />
-        <Select
-          label="Decision filter"
-          data={[
-            { value: "all", label: "All queries" },
-            { value: "block", label: "Blocked only" },
-            { value: "allow", label: "Allowed only" },
-          ]}
-          {...form.getInputProps("filter_decision")}
-        />
-        <NumberInput label="Delivery interval (seconds)" min={5} {...form.getInputProps("flush_interval_s")} />
-        <Button type="submit" loading={createWebhook.isPending}>
-          Add webhook
-        </Button>
+        <TextInput label="Endpoint URL" placeholder="https://splunk.internal:8088/services/collector" required {...form.getInputProps("url")} />
+        <TextInput label="Signing secret" description="HMAC-signs the X-Aegis-Signature header — share with the SIEM side" required {...form.getInputProps("secret")} />
+        <SimpleGrid cols={2}>
+          <Select label="Format" data={[{ value: "json", label: "JSON" }, { value: "cef", label: "CEF (ArcSight)" }]} {...form.getInputProps("format")} />
+          <Select
+            label="Event filter"
+            data={[
+              { value: "all", label: "All queries" },
+              { value: "block", label: "Blocked only" },
+              { value: "allow", label: "Allowed only" },
+            ]}
+            {...form.getInputProps("filter_decision")}
+          />
+        </SimpleGrid>
+        <SimpleGrid cols={2}>
+          <NumberInput label="Batch size" min={1} max={1000} {...form.getInputProps("batch_size")} />
+          <NumberInput label="Flush interval (s)" min={5} {...form.getInputProps("flush_interval_s")} />
+        </SimpleGrid>
+        <Group justify="flex-end">
+          <Button variant="default" onClick={onDone}>Cancel</Button>
+          <Button type="submit" loading={createWebhook.isPending}>Add webhook</Button>
+        </Group>
       </Stack>
     </form>
   );
 }
+
+// ─── SIEM section ─────────────────────────────────────────────────────────────
 
 function SiemSection() {
   const { data: webhooks, isLoading } = useSiemWebhooks();
   const updateWebhook = useUpdateSiemWebhook();
   const deleteWebhook = useDeleteSiemWebhook();
   const testWebhook = useTestSiemWebhook();
+  const [testingId, setTestingId] = useState<string | null>(null);
   const [addOpened, { open: openAdd, close: closeAdd }] = useDisclosure(false);
 
-  function toggleEnabled(webhook: SiemWebhook) {
+  function toggleEnabled(w: SiemWebhook) {
     updateWebhook.mutate(
-      { webhookId: webhook.id, body: { enabled: !webhook.enabled } },
+      { webhookId: w.id, body: { enabled: !w.enabled } },
       { onError: (e) => notifications.show({ message: String(e), color: "red" }) }
     );
   }
 
-  function test(webhook: SiemWebhook) {
-    testWebhook.mutate(webhook.id, {
-      onSuccess: (result) =>
+  function test(w: SiemWebhook) {
+    setTestingId(w.id);
+    testWebhook.mutate(w.id, {
+      onSuccess: (r) =>
         notifications.show({
-          message: result.success
-            ? `${webhook.name}: test event delivered (HTTP ${result.status_code})`
-            : `${webhook.name}: delivery failed — ${result.error}`,
-          color: result.success ? "green" : "red",
+          message: r.success
+            ? `${w.name}: delivered (HTTP ${r.status_code})`
+            : `${w.name}: failed — ${r.error}`,
+          color: r.success ? "green" : "red",
         }),
       onError: (e) => notifications.show({ message: String(e), color: "red" }),
+      onSettled: () => setTestingId(null),
     });
   }
 
-  function confirmDelete(webhook: SiemWebhook) {
+  function confirmDelete(w: SiemWebhook) {
     modals.openConfirmModal({
       title: "Delete SIEM webhook",
-      children: <Text size="sm">Delete "{webhook.name}"? This stops all delivery to {webhook.url}.</Text>,
+      children: <Text size="sm">Delete <strong>{w.name}</strong>? This stops all delivery to {w.url}.</Text>,
       labels: { confirm: "Delete", cancel: "Cancel" },
       confirmProps: { color: "red" },
       onConfirm: () =>
-        deleteWebhook.mutate(webhook.id, {
-          onSuccess: () => notifications.show({ message: `Webhook "${webhook.name}" deleted`, color: "green" }),
+        deleteWebhook.mutate(w.id, {
+          onSuccess: () => notifications.show({ message: `Webhook "${w.name}" deleted`, color: "green" }),
           onError: (e) => notifications.show({ message: String(e), color: "red" }),
         }),
     });
   }
 
   return (
-    <Card withBorder>
-      <Group justify="space-between" mb="sm">
-        <Title order={4}>SIEM export</Title>
+    <Stack gap="md">
+      <Group justify="space-between">
+        <Stack gap={2}>
+          <Group gap={8}>
+            <ThemeIcon size="sm" variant="light" color="violet"><IconWebhook size={14} /></ThemeIcon>
+            <Text fw={600}>SIEM webhooks</Text>
+          </Group>
+          <Text size="xs" c="dimmed">
+            Push enriched DNS events to Splunk, Microsoft Sentinel, or any HTTP collector. Pull-based access via <code>GET /api/v1/siem/events</code>.
+          </Text>
+        </Stack>
         <Button size="xs" leftSection={<IconPlus size={14} />} onClick={openAdd}>
           Add webhook
         </Button>
       </Group>
-      <Text size="sm" c="dimmed" mb="sm">
-        Push enriched DNS query events to a SIEM via signed webhook (design.md §20.4). Pull-based access is also
-        available at <code>GET /api/v1/siem/events</code> for any SIEM that polls instead.
-      </Text>
 
-      {isLoading && (
-        <Center h={100}>
-          <Loader size="sm" />
-        </Center>
-      )}
+      {isLoading && <Center h={80}><Loader size="sm" /></Center>}
 
-      {!isLoading && webhooks?.length === 0 && (
-        <Text c="dimmed" size="sm">
-          No SIEM webhooks configured yet.
-        </Text>
+      {!isLoading && (!webhooks || webhooks.length === 0) && (
+        <Card withBorder padding="lg" style={{ borderStyle: "dashed" }}>
+          <Text c="dimmed" size="sm" ta="center">No SIEM webhooks configured. Add one to start streaming DNS events.</Text>
+        </Card>
       )}
 
       {webhooks && webhooks.length > 0 && (
-        <Table>
+        <Table striped highlightOnHover withTableBorder withColumnBorders>
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>Name</Table.Th>
-              <Table.Th>Format</Table.Th>
-              <Table.Th>Filter</Table.Th>
-              <Table.Th>Status</Table.Th>
-              <Table.Th>Enabled</Table.Th>
-              <Table.Th />
+              <Table.Th>Destination</Table.Th>
+              <Table.Th w={80}>Format</Table.Th>
+              <Table.Th w={110}>Filter</Table.Th>
+              <Table.Th w={160}>Last delivery</Table.Th>
+              <Table.Th w={70}>On</Table.Th>
+              <Table.Th w={130} />
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
             {webhooks.map((w) => (
               <Table.Tr key={w.id}>
                 <Table.Td>
-                  <Text size="sm" fw={500}>
-                    {w.name}
-                  </Text>
-                  <Text size="xs" c="dimmed">
-                    {w.url}
-                  </Text>
+                  <Text size="sm" fw={500}>{w.name}</Text>
+                  <Text size="xs" c="dimmed" ff="monospace">{w.url}</Text>
                 </Table.Td>
                 <Table.Td>
-                  <Badge size="sm" variant="light">
-                    {w.format.toUpperCase()}
-                  </Badge>
+                  <Badge size="sm" variant="light">{w.format.toUpperCase()}</Badge>
                 </Table.Td>
-                <Table.Td>{w.filter_decision}</Table.Td>
+                <Table.Td>
+                  <Text size="sm">{w.filter_decision}</Text>
+                </Table.Td>
                 <Table.Td>
                   {w.last_error ? (
-                    <Badge size="sm" color="red">
-                      {w.consecutive_failures} failures
-                    </Badge>
+                    <Badge size="sm" color="red">{w.consecutive_failures} failures</Badge>
                   ) : w.last_delivered_at ? (
                     <Badge size="sm" color="green">
-                      delivered {new Date(w.last_delivered_at).toLocaleTimeString()}
+                      {new Date(w.last_delivered_at).toLocaleTimeString()}
                     </Badge>
                   ) : (
-                    <Badge size="sm" color="gray">
-                      no deliveries yet
-                    </Badge>
+                    <Badge size="sm" color="gray">no deliveries yet</Badge>
                   )}
                 </Table.Td>
                 <Table.Td>
-                  <Switch checked={w.enabled} onChange={() => toggleEnabled(w)} />
+                  <Switch checked={w.enabled} onChange={() => toggleEnabled(w)} size="sm" />
                 </Table.Td>
                 <Table.Td>
-                  <Group gap="xs">
-                    <Button size="xs" variant="default" leftSection={<IconSend size={14} />} onClick={() => test(w)} loading={testWebhook.isPending}>
+                  <Group gap={4} wrap="nowrap" justify="flex-end">
+                    <Button size="xs" variant="default" leftSection={<IconSend size={12} />} onClick={() => test(w)} loading={testingId === w.id}>
                       Test
                     </Button>
-                    <Button size="xs" variant="subtle" color="red" leftSection={<IconTrash size={14} />} onClick={() => confirmDelete(w)}>
+                    <Button size="xs" variant="subtle" color="red" leftSection={<IconTrash size={12} />} onClick={() => confirmDelete(w)}>
                       Delete
                     </Button>
                   </Group>
@@ -234,98 +248,282 @@ function SiemSection() {
         </Table>
       )}
 
-      <Modal opened={addOpened} onClose={closeAdd} title="Add SIEM webhook" size="md">
+      <Modal opened={addOpened} onClose={closeAdd} title="Add SIEM webhook" size="lg">
         <AddWebhookForm onDone={closeAdd} />
       </Modal>
-    </Card>
+    </Stack>
   );
 }
 
+// ─── Endpoint row ─────────────────────────────────────────────────────────────
+
+function EndpointRow({ label, url, description }: { label: string; url: string; description: string }) {
+  return (
+    <Group justify="space-between" wrap="nowrap" py={10}>
+      <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
+        <Text size="sm" fw={500}>{label}</Text>
+        <Text size="xs" c="dimmed">{description}</Text>
+      </Stack>
+      <Group gap={6} wrap="nowrap">
+        <Text size="xs" ff="monospace" c="dimmed" style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {url}
+        </Text>
+        <CopyButton value={url} timeout={1500}>
+          {({ copied, copy }) => (
+            <Tooltip label={copied ? "Copied" : "Copy URL"} withArrow>
+              <Button size="xs" variant="subtle" color={copied ? "teal" : "gray"} onClick={copy} px={6}>
+                {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
+              </Button>
+            </Tooltip>
+          )}
+        </CopyButton>
+        <Anchor href={url} target="_blank" rel="noreferrer">
+          <Button size="xs" variant="default" rightSection={<IconExternalLink size={12} />}>Open</Button>
+        </Anchor>
+      </Group>
+    </Group>
+  );
+}
+
+// ─── Role capability table ────────────────────────────────────────────────────
+
+const CAPABILITIES = [
+  { capability: "View dashboard & analytics",  admin: true, operator: true,  viewer: true  },
+  { capability: "View tenants, groups, feeds", admin: true, operator: true,  viewer: true  },
+  { capability: "View DNS zones & records",    admin: true, operator: true,  viewer: true  },
+  { capability: "View audit log",              admin: true, operator: true,  viewer: false },
+  { capability: "Edit tenants & groups",       admin: true, operator: true,  viewer: false },
+  { capability: "Edit policies & feeds",       admin: true, operator: true,  viewer: false },
+  { capability: "Manage DNS zones & records",  admin: true, operator: true,  viewer: false },
+  { capability: "Configure SIEM webhooks",     admin: true, operator: false, viewer: false },
+  { capability: "Manage users",                admin: true, operator: false, viewer: false },
+  { capability: "System settings",             admin: true, operator: false, viewer: false },
+];
+
+function Cap({ yes }: { yes: boolean }) {
+  return yes
+    ? <IconCircleFilled size={12} style={{ color: "var(--mantine-color-teal-6)" }} />
+    : <IconCircleFilled size={12} style={{ color: "var(--mantine-color-dark-4)" }} />;
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
+
 export function SettingsPage() {
-  const isAdmin = useAuth().hasRole("admin");
+  const { hasRole } = useAuth();
+  const isAdmin = hasRole("admin");
 
   return (
-    <Stack>
-      <Title order={2}>Settings</Title>
+    <Stack gap="lg">
+      <Stack gap={2}>
+        <Title order={2}>Settings</Title>
+        <Text c="dimmed" size="sm">System configuration, security, and integrations.</Text>
+      </Stack>
 
-      <Card withBorder>
-        <Title order={4} mb="sm">
-          System
-        </Title>
-        <Table>
-          <Table.Tbody>
-            <Table.Tr>
-              <Table.Td>Control plane API</Table.Td>
-              <Table.Td>
-                <Anchor href={API_BASE} target="_blank" rel="noreferrer">
-                  {API_BASE}
-                </Anchor>
-              </Table.Td>
-            </Table.Tr>
-            <Table.Tr>
-              <Table.Td>API docs (OpenAPI)</Table.Td>
-              <Table.Td>
-                <Anchor href={`${API_BASE}/docs`} target="_blank" rel="noreferrer">
-                  {API_BASE}/docs
-                </Anchor>
-              </Table.Td>
-            </Table.Tr>
-            <Table.Tr>
-              <Table.Td>Metrics (Prometheus)</Table.Td>
-              <Table.Td>
-                <Anchor href="http://localhost:9091" target="_blank" rel="noreferrer">
-                  localhost:9091
-                </Anchor>
-              </Table.Td>
-            </Table.Tr>
-            <Table.Tr>
-              <Table.Td>Dashboards (Grafana)</Table.Td>
-              <Table.Td>
-                <Anchor href="http://localhost:3000" target="_blank" rel="noreferrer">
-                  localhost:3000
-                </Anchor>
-              </Table.Td>
-            </Table.Tr>
-          </Table.Tbody>
-        </Table>
-      </Card>
+      <Tabs defaultValue="system" keepMounted={false}>
+        <Tabs.List mb="lg">
+          <Tabs.Tab value="system"       leftSection={<IconServer size={15} />}>System</Tabs.Tab>
+          <Tabs.Tab value="security"     leftSection={<IconShield size={15} />}>Security</Tabs.Tab>
+          <Tabs.Tab value="integrations" leftSection={<IconWebhook size={15} />}>Integrations</Tabs.Tab>
+        </Tabs.List>
 
-      <Card withBorder>
-        <Group justify="space-between" mb="sm">
-          <Title order={4}>Single sign-on (SSO)</Title>
-          <Badge color="gray">Not configured</Badge>
-        </Group>
-        <Alert icon={<IconInfoCircle size={16} />} color="blue" variant="light">
-          OIDC/SAML login isn't wired up yet — this requires backend work (design.md §9, Sprint 8: "Python OIDC/SSO
-          integration, Keycloak target") plus a real identity provider to point at. There's nothing to configure
-          here until that lands; this section isn't a working form because a non-functional SSO config screen
-          would be worse than no screen at all.
-        </Alert>
-      </Card>
+        {/* ── System tab ── */}
+        <Tabs.Panel value="system">
+          <Stack gap="md">
+            {/* Platform */}
+            <Card withBorder padding="md">
+              <Group gap={8} mb="md">
+                <ThemeIcon size="sm" variant="light" color="blue"><IconServer size={14} /></ThemeIcon>
+                <Text fw={600}>Platform</Text>
+              </Group>
+              <SimpleGrid cols={{ base: 1, sm: 3 }}>
+                {[
+                  { label: "Product",     value: "Aegis-DNS" },
+                  { label: "Control API", value: "FastAPI / Python" },
+                  { label: "Filter node", value: "Rust (aegis-filter)" },
+                  { label: "UI",          value: "React + Mantine 9" },
+                  { label: "Auth",        value: "JWT (HS256)" },
+                  { label: "Database",    value: "PostgreSQL 17 (psycopg3)" },
+                ].map(({ label, value }) => (
+                  <Stack key={label} gap={2}>
+                    <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: "0.05em" }}>{label}</Text>
+                    <Text size="sm">{value}</Text>
+                  </Stack>
+                ))}
+              </SimpleGrid>
+            </Card>
 
-      <Card withBorder>
-        <Group justify="space-between" mb="sm">
-          <Title order={4}>Role-based access control</Title>
-          <Badge color="green">Enabled</Badge>
-        </Group>
-        <Text size="sm" c="dimmed">
-          JWT auth + a fixed role hierarchy (admin &gt; operator &gt; viewer) gate every mutating endpoint (Sprint 8,
-          design.md §9). SSO/OIDC as a login method — rather than local email/password — is the remaining gap; user
-          management is via <code>POST /api/v1/users</code> today (admin-only), no dedicated UI screen yet.
-        </Text>
-      </Card>
+            {/* Infrastructure endpoints */}
+            <Card withBorder padding="md">
+              <Group gap={8} mb="xs">
+                <ThemeIcon size="sm" variant="light" color="blue"><IconServer size={14} /></ThemeIcon>
+                <Text fw={600}>Infrastructure endpoints</Text>
+              </Group>
+              <Text size="xs" c="dimmed" mb="sm">Service URLs for this deployment.</Text>
 
-      {isAdmin && <SiemSection />}
+              <Stack gap={0} style={{ borderTop: "1px solid var(--mantine-color-dark-4)" }}>
+                {[
+                  { label: "Control plane API",  url: API_BASE,             description: "FastAPI REST API — all management operations" },
+                  { label: "OpenAPI / Swagger",  url: `${API_BASE}/docs`,   description: "Interactive API documentation" },
+                  { label: "ReDoc reference",    url: `${API_BASE}/redoc`,  description: "Structured API reference" },
+                ].map((ep, i, arr) => (
+                  <div key={ep.label} style={{ borderBottom: i < arr.length - 1 ? "1px solid var(--mantine-color-dark-4)" : undefined }}>
+                    <EndpointRow {...ep} />
+                  </div>
+                ))}
+              </Stack>
+            </Card>
+          </Stack>
+        </Tabs.Panel>
 
-      <Card withBorder>
-        <Group justify="space-between" mb="sm">
-          <Title order={4}>White-label / branding</Title>
-          <Badge color="gray">Not built</Badge>
-        </Group>
-        <Text size="sm" c="dimmed">
-          Per-tenant branding for MSP resale scenarios — design.md §19.2 (U11). Not started.
-        </Text>
-      </Card>
+        {/* ── Security tab ── */}
+        <Tabs.Panel value="security">
+          <Stack gap="md">
+            {/* RBAC */}
+            <Card withBorder padding="md">
+              <Group justify="space-between" mb="md">
+                <Group gap={8}>
+                  <ThemeIcon size="sm" variant="light" color="teal"><IconUsers size={14} /></ThemeIcon>
+                  <Text fw={600}>Role-based access control</Text>
+                </Group>
+                <Badge color="teal">Active</Badge>
+              </Group>
+              <Text size="xs" c="dimmed" mb="md">
+                JWT-authenticated role hierarchy. Every mutating API endpoint is gated by role. Manage users via the{" "}
+                <Anchor href="/users" size="xs">Users page</Anchor>.
+              </Text>
+
+              <Table withTableBorder withColumnBorders>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Capability</Table.Th>
+                    <Table.Th w={90} style={{ textAlign: "center" }}>
+                      <Badge color="red" size="sm">Admin</Badge>
+                    </Table.Th>
+                    <Table.Th w={90} style={{ textAlign: "center" }}>
+                      <Badge color="blue" size="sm">Operator</Badge>
+                    </Table.Th>
+                    <Table.Th w={90} style={{ textAlign: "center" }}>
+                      <Badge color="gray" size="sm">Viewer</Badge>
+                    </Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {CAPABILITIES.map((row) => (
+                    <Table.Tr key={row.capability}>
+                      <Table.Td><Text size="sm">{row.capability}</Text></Table.Td>
+                      <Table.Td style={{ textAlign: "center" }}><Cap yes={row.admin} /></Table.Td>
+                      <Table.Td style={{ textAlign: "center" }}><Cap yes={row.operator} /></Table.Td>
+                      <Table.Td style={{ textAlign: "center" }}><Cap yes={row.viewer} /></Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Card>
+
+            {/* SSO */}
+            <Card withBorder padding="md">
+              <Group justify="space-between" mb="md">
+                <Group gap={8}>
+                  <ThemeIcon size="sm" variant="light" color="violet"><IconKey size={14} /></ThemeIcon>
+                  <Text fw={600}>Single sign-on (SSO / OIDC)</Text>
+                </Group>
+                <Badge color="gray" variant="outline">Planned — Sprint 8</Badge>
+              </Group>
+              <Text size="xs" c="dimmed" mb="md">
+                OIDC/SAML integration with Keycloak, Okta, or Azure AD. Requires backend work (design.md §9).
+                Fields below are a preview of the configuration surface.
+              </Text>
+
+              <Stack gap="sm" style={{ opacity: 0.45, pointerEvents: "none", userSelect: "none" }}>
+                <SimpleGrid cols={2}>
+                  <TextInput label="Issuer URL" placeholder="https://keycloak.corp.local/realms/aegis" disabled />
+                  <TextInput label="Client ID" placeholder="aegis-dns" disabled />
+                </SimpleGrid>
+                <TextInput label="Client secret" placeholder="••••••••••••••••" disabled />
+                <SimpleGrid cols={2}>
+                  <TextInput label="Redirect URI" placeholder={`${window.location.origin}/auth/callback`} disabled />
+                  <Select label="Claim mapping (role)" data={["groups", "roles", "aegis_role"]} disabled />
+                </SimpleGrid>
+                <Group>
+                  <Button size="sm" disabled leftSection={<IconLock size={14} />}>Save SSO configuration</Button>
+                  <Button size="sm" variant="default" disabled>Test connection</Button>
+                </Group>
+              </Stack>
+            </Card>
+
+            {/* Password policy */}
+            <Card withBorder padding="md">
+              <Group justify="space-between" mb="md">
+                <Group gap={8}>
+                  <ThemeIcon size="sm" variant="light" color="orange"><IconLock size={14} /></ThemeIcon>
+                  <Text fw={600}>Password policy</Text>
+                </Group>
+                <Badge color="orange">Local accounts only</Badge>
+              </Group>
+              <Stack gap={4}>
+                {[
+                  "Minimum 12 characters",
+                  "No maximum length limit",
+                  "Passwords are bcrypt-hashed (cost 12)",
+                  "No password rotation enforcement (planned for Sprint 9)",
+                ].map((rule) => (
+                  <Group key={rule} gap={8} wrap="nowrap">
+                    <IconChevronRight size={12} style={{ color: "var(--mantine-color-dimmed)", flexShrink: 0 }} />
+                    <Text size="sm" c="dimmed">{rule}</Text>
+                  </Group>
+                ))}
+              </Stack>
+            </Card>
+          </Stack>
+        </Tabs.Panel>
+
+        {/* ── Integrations tab ── */}
+        <Tabs.Panel value="integrations">
+          <Stack gap="md">
+            {isAdmin ? (
+              <Card withBorder padding="md">
+                <SiemSection />
+              </Card>
+            ) : (
+              <Card withBorder padding="md">
+                <Text c="dimmed" size="sm">Admin role required to manage integrations.</Text>
+              </Card>
+            )}
+
+            {/* API access */}
+            <Card withBorder padding="md">
+              <Group justify="space-between" mb="md">
+                <Group gap={8}>
+                  <ThemeIcon size="sm" variant="light" color="blue"><IconKey size={14} /></ThemeIcon>
+                  <Text fw={600}>API access</Text>
+                </Group>
+                <Badge color="gray" variant="outline">API keys — Planned</Badge>
+              </Group>
+              <Text size="xs" c="dimmed" mb="sm">
+                Currently the API is authenticated via the same JWT tokens issued at login (Bearer header).
+                Dedicated long-lived API keys for service accounts are planned for Sprint 9.
+              </Text>
+              <Divider my="sm" />
+              <Group gap="md">
+                <Stack gap={2}>
+                  <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: "0.05em" }}>Authentication</Text>
+                  <Text size="sm">Bearer JWT (Authorization header)</Text>
+                </Stack>
+                <Stack gap={2}>
+                  <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: "0.05em" }}>Token expiry</Text>
+                  <Text size="sm">8 hours</Text>
+                </Stack>
+                <Stack gap={2}>
+                  <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: "0.05em" }}>Docs</Text>
+                  <Anchor href={`${API_BASE}/docs`} size="sm" target="_blank" rel="noreferrer">
+                    {API_BASE}/docs
+                  </Anchor>
+                </Stack>
+              </Group>
+            </Card>
+          </Stack>
+        </Tabs.Panel>
+      </Tabs>
     </Stack>
   );
 }

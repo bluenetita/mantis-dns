@@ -99,7 +99,7 @@ This separation is the single most important departure from Pi-hole, which colla
             ▼
    ┌─────────────────────────────────────────────────────────────────┐
    │  TELEMETRY PIPELINE: Kafka/NATS → stream processor → ClickHouse   │
-   │  Prometheus metrics · OpenTelemetry traces · Loki/ELK logs        │
+   │  OpenTelemetry traces · Loki/ELK logs                             │
    └─────────────────────────────────────────────────────────────────┘
 
    OpenVPN AS cluster pushes DHCP-option DNS = Anycast VIP of filter fleet
@@ -152,8 +152,8 @@ Scaling: add nodes behind anycast/LB. No coordination needed — pure function o
 - Query events are **enriched at the filter node** before leaving the data plane: client IP, query type, response code, matched category, matched feed ID, and resolution latency are attached at source — not inferred later from partial data.
 - Enriched events → message bus (Kafka or NATS JetStream), partitioned by tenant.
 - Stream processor → **ClickHouse** for high-cardinality, fast analytical query logs with TTL-based retention.
-- **Prometheus** for node/system metrics; **OpenTelemetry** traces on the resolve path; **Loki/ELK** for operational logs.
-- Dashboards (Grafana): QPS, block ratio, cache hit ratio, p50/p99 latency, upstream health, per-tenant volume.
+- **OpenTelemetry** traces on the resolve path; **Loki/ELK** for operational logs.
+- Dashboards (in-app, off the telemetry/metrics APIs): QPS, block ratio, cache hit ratio, p50/p99 latency, upstream health, per-tenant volume.
 - **SIEM export layer** (§20): query event stream exposed via pull API (cursor-based REST) and push webhook, in JSON or CEF format, so any SIEM can consume without a custom connector.
 
 ---
@@ -272,7 +272,7 @@ Organization (tenant)
 
 ## 11. Observability
 
-- **Metrics (Prometheus):** QPS, block ratio, cache hit ratio, latency histograms, upstream errors, bundle version per node, recursor pool health.
+- **Metrics:** QPS, block ratio, cache hit ratio, latency histograms, upstream errors, bundle version per node — surfaced via the control plane telemetry API and the in-app Analytics dashboard.
 - **Logs (Loki/ELK):** operational; structured JSON.
 - **Query analytics (ClickHouse):** per-tenant top domains, blocked categories, client breakdown, retention by policy.
 - **Traces (OpenTelemetry):** resolve path spans for latency debugging.
@@ -313,7 +313,7 @@ Organization (tenant)
 | Shared cache | Redis Cluster | KeyDB / Dragonfly |
 | Bus | Kafka | NATS JetStream |
 | Query analytics | ClickHouse | Druid |
-| Metrics | Prometheus + Grafana | VictoriaMetrics |
+| Metrics | In-app Analytics dashboard (telemetry API) | External APM (optional) |
 | Secrets | Vault | Cloud KMS |
 | Orchestration | Kubernetes | Nomad |
 
@@ -338,7 +338,7 @@ Organization (tenant)
 | 0c | Proxmox VE appliance: CT templates + Ansible, collapsed control plane (§17) |
 | 1 | Stateless filter node (CoreDNS plugin chain), bundle pull + verify, local cache |
 | 2 | OpenVPN AS integration (sidecar + VIP), tenant/group mapping |
-| 3 | Telemetry pipeline (Kafka → ClickHouse), Grafana dashboards |
+| 3 | Telemetry pipeline (Kafka → ClickHouse), in-app analytics dashboards |
 | 4 | Management API + UI, SSO/RBAC, audit |
 | 5 | HA hardening, multi-AZ, DR drills, canary rollout, autoscaling |
 | 6 | Migration tooling, shadow mode, production cutover |
@@ -373,7 +373,7 @@ Many deployments are not a cloud Kubernetes fleet but a **single Proxmox VE host
 
 ### 17.2 Collapsed control plane
 
-- Postgres can run as a small instance in the `aegis-control` CT (or SQLite-compatible mode for very small sites — but Postgres preferred for the category/audit schema).
+- Postgres runs as a small instance in the `aegis-control` CT. PostgreSQL 17 is the only supported database; it provides the ARRAY type, JSONB audit columns, and the pg_isready healthcheck used by all deployment configurations.
 - Bundle distribution degenerates to a **shared volume / bind-mount** (or local HTTP) between control and filter CTs. The signed-bundle + version-pointer mechanism is unchanged; the "bus" is just the filesystem. Filter still verifies signature before applying.
 - Object store, Kafka, ClickHouse are **optional** at this scale: query logs can land in Postgres or a local ClickHouse CT only if analytics are wanted.
 
@@ -537,7 +537,7 @@ This section is the plan to take it from prototype to a console an enterprise wo
 | U5 | Real forms with validation (no prompt/alert) | CIDR, domain, URL, interval inputs need inline validation + good error UX. |
 | U6 | Async server-state layer (cache, refetch, optimistic, error/loading states) | Every view currently reimplements fetch+loading+error by hand. |
 | U7 | Toast notifications + confirmation dialogs for destructive actions | Deleting a feed or tenant via `confirm()` is not acceptable. |
-| U8 | In-app observability: dashboards, query-log explorer, propagation status | Ops shouldn't have to bounce to Grafana for the common case (§11). |
+| U8 | In-app observability: dashboards, query-log explorer, propagation status | All observability surfaced natively in the console (§11). |
 | U9 | Audit log viewer (who changed which policy when) | Compliance (SOC2/ISO27001) requires it; ties to §5.3 audit log. |
 | U10 | Accessibility (WCAG 2.1 AA, keyboard nav, screen-reader) | Public-sector / large-enterprise procurement mandates it (Section 508, VPAT). |
 | U11 | Theming (light/dark) + optional per-tenant white-label | MSP resale scenarios brand the console per customer. |
@@ -589,7 +589,7 @@ apps/ui/
 1. **Policy editor** — replace the prototype: category toggles with live domain counts and per-category action (block / log-only / allow), override management with validated domain input, a **domain test box** (enter a domain → see which category/feed matches and the resulting decision — the explainability feature from §18.5, still unbuilt), bundle compile + propagation status indicator.
 2. **Feed manager** — catalog browser with search/filter, per-feed ingest status + last-run/next-run, sanity-gate rejection surfacing, license display, add/edit/delete with real forms.
 3. **Query-log explorer** — server-side paginated, filterable by tenant/group/decision/time-range, backed by ClickHouse once §6 lands (Postgres for now).
-4. **Analytics dashboard** — block ratio, QPS, cache-hit ratio, top blocked domains, per-category volume; either embedded Grafana panels or native charts off the metrics/telemetry APIs.
+4. **Analytics dashboard** — block ratio, QPS, cache-hit ratio, top blocked domains, per-category volume; native charts backed by the telemetry/metrics APIs (already implemented).
 5. **Audit log viewer** — immutable, filterable, exportable.
 6. **Settings** — SSO config, RBAC role assignment, API keys, white-label branding.
 
@@ -838,12 +838,620 @@ Syslog (RFC 5424, TLS) is a thin adapter on top of the same enriched event model
 
 ---
 
-### 20.9 Sprint plan update
+### 20.9 Sprint plan update (superseded — see sprint-plan.md Sprints 14–16)
 
 | Sprint | Scope |
 |---|---|
 | **Sprint 14** | QueryEvent enrichment (client_ip, qtype, rcode, matched_category, matched_feed_id, latency_us) in Rust filter node + Postgres schema. Pull API `/api/v1/siem/events` with cursor pagination, tenant/decision filters, JSON + CEF format. Auth gated (operator+). |
 | **Sprint 15** | `SiemWebhook` model + delivery engine (async, retry/backoff, HMAC signing). Webhook management UI in Settings. Delivery status + last-error surface. |
 | **Sprint 16** | Client registry (CRUD API + UI, auto-discovery from query events, `client_name` embedded in events). |
+
+---
+
+## 21. DNS Upstream Configuration
+
+Today the filter node forwards allowed queries to a single, statically configured resolver. That is adequate for a prototype but brittle in production: a single upstream is a single point of failure, offers no per-tenant privacy controls, cannot route internal domains to internal resolvers, and exposes no operational visibility into upstream health. This section defines the enterprise upstream model.
+
+---
+
+### 21.1 Design goals
+
+| # | Goal |
+|---|------|
+| US1 | Zero-downtime upstream failover — a dead resolver must be ejected automatically and re-admitted after recovery. |
+| US2 | Per-tenant resolver policy — tenant A uses its own corporate recursors; tenant B uses privacy-preserving public DoT. |
+| US3 | Split-horizon routing — internal domain suffixes (e.g. `corp.local`) route to internal recursors; everything else routes to the external pool. |
+| US4 | Protocol diversity — DoT (853), DoH (443), plain DNS (53 fallback) per resolver, not global. |
+| US5 | Certificate pinning — DoT/DoH resolvers may have their public key pinned so a compromised CA cannot MitM upstream traffic. |
+| US6 | QNAME minimization and no ECS by default — privacy-preserving default; opt-in per resolver for ECS. |
+| US7 | DNSSEC validation — enforced per upstream / per tenant; `AD` bit propagated to clients. |
+| US8 | Observability — per-resolver: latency histogram, error rate, health state, last-failure reason — surfaced in the Analytics UI. |
+| US9 | No DNS hot-path dependency on the control plane — upstream routing config is delivered inside the signed policy bundle; the filter node resolves without ever calling home during query processing. |
+
+---
+
+### 21.2 Data model
+
+#### UpstreamResolver
+
+A single named upstream DNS server. Multiple resolvers are grouped into pools for load-balancing and failover.
+
+```
+UpstreamResolver {
+    id                  UUID
+    name                string          // human label, e.g. "Cloudflare DoT #1"
+    protocol            "dot" | "doh" | "do53"
+    address             string          // IPv4, IPv6, or hostname
+    port                int             // 853 (DoT default), 443 (DoH), 53 (Do53)
+    tls_hostname        string | null   // SNI for DoT/DoH; null → use address
+    tls_pin_sha256      string[] | null // hex SHA-256 of SubjectPublicKeyInfo;
+                                        // null = trust system CA bundle
+    doh_path            string          // URL path for DoH; default "/dns-query"
+    doh_method          "get" | "post"  // RFC 8484; default "post"
+    dnssec_validation   "strict"        // reject unsigned / bad chains
+                      | "opportunistic" // validate if AD bit set; pass through otherwise
+                      | "disabled"      // pass through, do not validate
+    qname_minimization  bool            // RFC 7816; default true
+    edns_client_subnet  bool            // RFC 7871; default false (privacy)
+    timeout_ms          int             // per-query timeout; default 5000
+    max_retries         int             // attempts before marking failed; default 2
+    connect_timeout_ms  int             // TCP/TLS handshake timeout; default 3000
+    tags                string[]        // "public", "internal", "threat-intel", "doh"
+    enabled             bool
+    created_at          timestamp
+    updated_at          timestamp
+}
+```
+
+Key invariants:
+- `do53` resolvers must not be used as the sole resolver for a tenant marked `require_encrypted_upstream = true`.
+- `tls_pin_sha256` pins are evaluated against the **leaf certificate** SPKI, not the CA. Pinning against the CA is also supported if a single CA value is provided.
+- `doh_path` supports query templates: `{?dns}` will be replaced with the base64url-encoded query for GET requests (RFC 8484 §4.1).
+
+#### UpstreamPool
+
+A pool groups one or more resolvers under a named load-balancing / failover policy.
+
+```
+UpstreamPool {
+    id                          UUID
+    name                        string   // e.g. "public-dot-ha", "corp-internal"
+    strategy                    "round_robin"
+                              | "weighted_round_robin"
+                              | "failover"    // priority order; lowest priority first
+                              | "latency"     // always route to lowest-latency healthy member
+    health_check_interval_s     int      // probe each member this often; default 30
+    health_check_timeout_ms     int      // probe timeout; default 2000
+    health_check_query          string   // domain to probe; default "." (SOA query)
+    health_check_type           "soa" | "a" | "txt"  // record type for probe
+    unhealthy_threshold         int      // consecutive failures before ejecting; default 3
+    healthy_threshold           int      // consecutive successes before re-admitting; default 2
+    min_healthy_members         int      // alert + fallback pool if pool drops below; default 1
+    fallback_pool_id            UUID | null  // pool to use if this one collapses entirely
+    members                     [UpstreamPoolMember]
+}
+
+UpstreamPoolMember {
+    pool_id         UUID
+    resolver_id     UUID
+    weight          int   // for weighted_round_robin; default 1
+    priority        int   // for failover: lower value = preferred; default 0
+}
+```
+
+The `latency` strategy maintains a running P50 latency estimate per member (exponentially weighted moving average over the last 100 probes) and routes each query to the member with the lowest estimated latency, unless it is unhealthy.
+
+#### UpstreamRoute
+
+Routes map a (tenant, domain pattern) tuple to a pool. Routes are evaluated per-query, in priority order, by the filter node.
+
+```
+UpstreamRoute {
+    id              UUID
+    name            string          // human label, e.g. "corp-internal-domains"
+    tenant_id       UUID | null     // null = applies to all tenants (global route)
+    group_id        UUID | null     // null = applies to all groups within the tenant
+    match_type      "domain_suffix" // qname ends with match_value, e.g. ".corp.local"
+                  | "domain_exact"  // qname == match_value exactly
+                  | "qtype"         // match on record type (e.g. route PTR queries to internal)
+                  | "category"      // match on the category the domain falls into
+                  | "default"       // catch-all; must be the lowest-priority route
+    match_value     string | null   // the suffix / fqdn / qtype / category; null for "default"
+    pool_id         UUID            // target pool
+    nxdomain_ttl_override int | null  // override NXDOMAIN TTL for this route; null = use reply
+    require_dnssec  bool | null     // override tenant's dnssec_validation for this route
+    priority        int             // lower value = evaluated first; default 100
+    enabled         bool
+}
+```
+
+Example routing table for a tenant with a corporate network:
+
+| Priority | Match type | Match value | Pool |
+|----------|-----------|------------|------|
+| 10 | `domain_suffix` | `.corp.local` | corp-internal |
+| 10 | `domain_suffix` | `.10.in-addr.arpa` | corp-internal |
+| 20 | `domain_suffix` | `.ad.corp.local` | corp-ad-dc |
+| 50 | `category` | `threat-intel` | threat-intel-resolvers |
+| 100 | `default` | — | public-dot-ha |
+
+#### UpstreamTenantPolicy
+
+Per-tenant defaults that interact with the routing model.
+
+```
+UpstreamTenantPolicy {
+    tenant_id               UUID
+    require_encrypted       bool    // reject do53 resolvers in any pool used by this tenant
+    dnssec_validation       "strict" | "opportunistic" | "disabled"  // tenant default
+    qname_minimization      bool    // tenant default; overrides resolver setting
+    blocked_response_type   "nxdomain" | "refused" | "zero_ip"  // how to answer blocked queries
+    min_ttl_s               int     // clamp downstream TTL; default 0 (honour reply)
+    max_ttl_s               int     // clamp downstream TTL; default 86400
+    negative_ttl_s          int     // TTL for synthesized NXDOMAIN/REFUSED; default 300
+}
+```
+
+---
+
+### 21.3 Bundle integration
+
+Upstream configuration is compiled into a **signed upstream config bundle** — separate from the policy bundle but using the same signing key and distribution channel. The filter node fetches both bundles on the same poll interval. Separating them limits blast radius: a policy change does not force a full upstream-config redistribute, and vice versa.
+
+```
+UpstreamBundle {
+    version         uint64
+    tenant_id       UUID | null   // null = global (applies to all tenants on this node)
+    routes          [UpstreamRoute]   // ordered by priority
+    pools           {pool_id → UpstreamPool}
+    resolvers       {resolver_id → UpstreamResolver}
+    tenant_policies {tenant_id → UpstreamTenantPolicy}
+    issued_at       timestamp
+    signature       bytes         // ed25519 over the serialized payload
+}
+```
+
+The filter node loads the bundle atomically. If verification fails, it keeps the previous bundle and logs an alert. If this is the first startup and no bundle is present, it falls back to a single configurable `UPSTREAM_FALLBACK_ADDRESS` environment variable — this covers the Proxmox single-host profile where the control plane may not yet be reachable.
+
+---
+
+### 21.4 Health monitoring (filter node)
+
+Each filter node runs an independent health monitor — there is no shared health state to avoid distributed coordination on the hot path.
+
+```
+HealthMonitor (per pool member, per filter node):
+    state:      healthy | unhealthy | probe_pending
+    last_probe: timestamp
+    consec_failures: int
+    consec_successes: int
+    latency_ema_ms: float   // exponentially weighted moving average
+
+Probe cycle (every health_check_interval_s):
+    1. Send health_check_query (SOA "." or configured domain) to the resolver.
+    2. If response within health_check_timeout_ms and response_code ∈ {NOERROR, NXDOMAIN}:
+           consec_successes++; consec_failures = 0
+           if state == unhealthy and consec_successes >= healthy_threshold:
+               state = healthy; emit UpstreamRecoveredEvent
+    3. Else:
+           consec_failures++; consec_successes = 0
+           if state == healthy and consec_failures >= unhealthy_threshold:
+               state = unhealthy; emit UpstreamFailedEvent
+    4. Update latency_ema_ms (regardless of state transition).
+```
+
+Health events (`UpstreamFailedEvent`, `UpstreamRecoveredEvent`) are forwarded to the telemetry pipeline (§5.4) and surfaced in the Analytics UI as resolver health timelines.
+
+If a pool's healthy member count drops below `min_healthy_members`:
+- An alert is emitted to the audit log and (if configured) to the notification channel.
+- If `fallback_pool_id` is set, queries for this pool are routed to the fallback pool.
+- If no fallback is set and the pool is completely dead, the filter node returns `SERVFAIL` for affected queries (not `NXDOMAIN` — the distinction matters for client retry behavior).
+
+---
+
+### 21.5 DNSSEC validation
+
+DNSSEC validation is performed by the upstream resolver, not by the filter node itself (that would require running a recursive validator — it is in scope for a future sprint, see §21.9). Instead, the filter node enforces the DNSSEC *policy*:
+
+| Validation mode | Behavior |
+|----------------|---------|
+| `strict` | Resolver must set the `AD` (Authentic Data) bit. If the response is `SERVFAIL` with `AD=0` (DNSSEC validation failure at the resolver), the filter node returns `SERVFAIL` to the client and logs a `DnssecFailureEvent`. |
+| `opportunistic` | Propagate `AD` bit from the upstream response. Do not escalate `SERVFAIL` with DNSSEC context. |
+| `disabled` | Strip `AD` bit before forwarding to client. Never log DNSSEC events. |
+
+For `strict` mode to work, the resolver must be configured to validate DNSSEC and return `SERVFAIL` on validation failures (e.g. Unbound `val-override-date: "20990101T0000"` turned off, `module-config: "validator iterator"`). The filter node validates that the configured resolver behaves correctly during health probes by sending a query to a known-broken DNSSEC domain (e.g. `dnssec-failed.org`) and asserting `SERVFAIL` is returned.
+
+---
+
+### 21.6 Split-horizon and private DNS
+
+The route table (§21.2) is the primary mechanism for split-horizon. Additionally:
+
+**RPZ (Response Policy Zone) integration:** upstream resolvers that support RPZ (Unbound, BIND) can be configured with threat-intelligence zone feeds directly at the resolver layer. The Aegis filter node can optionally forward to an RPZ-capable resolver for categories that benefit from real-time threat data (e.g. `threat-intel` category) while using a faster public resolver for general queries.
+
+**DNS64:** for IPv6-only client segments that need to reach IPv4-only destinations, a pool member can be a DNS64-capable resolver. The filter node routes `AAAA` queries from the tenant's IPv6 group to the DNS64 pool, where the resolver synthesizes `64:ff9b::/96` prefixes. Configuration:
+
+```
+Dns64Config {
+    scope_id    UUID    // the DHCP scope (§22) or VPN group
+    pool_id     UUID    // must point to a DNS64-capable resolver pool
+    pref64      string  // prefix, default "64:ff9b::/96"
+}
+```
+
+**Stub zones (authoritative answers):** for domains the tenant owns that should be answered from local data without forwarding (e.g. `corp.local` records managed by the DNS Zones feature, §DNS-Zones), the route type `stub_zone` overrides pool routing entirely and answers from the local zone database. This is a zero-latency path (no upstream needed) and is the mechanism by which the DNS Zones feature integrates with the upstream routing model.
+
+---
+
+### 21.7 Observability
+
+The filter node exposes per-resolver metrics on the telemetry pipeline:
+
+| Metric | Description |
+|--------|-------------|
+| `upstream_latency_us{resolver_id, quantile}` | P50/P95/P99 latency per resolver |
+| `upstream_errors_total{resolver_id, error_type}` | timeout, tls_error, refused, servfail, etc. |
+| `upstream_queries_total{resolver_id, dnssec_ad}` | query count, broken out by DNSSEC AD bit |
+| `upstream_health_state{resolver_id}` | 1=healthy, 0=unhealthy |
+| `upstream_pool_healthy_members{pool_id}` | count of healthy members |
+| `upstream_dnssec_failures_total{tenant_id}` | DNSSEC validation failures per tenant |
+
+These are surfaced in the Analytics UI on a new **Upstream Health** tab: per-resolver latency timeline, error breakdown, health state history, pool member utilization donut.
+
+---
+
+### 21.8 Management UI
+
+A new **Resolvers** section under Settings:
+
+- **Resolvers list** — name, protocol, address, health state badge (green/red/amber), P50 latency, error rate. Add / edit / delete.
+- **Resolver editor** — form with protocol selector, address, port, TLS hostname, pin input with SHA-256 fingerprint helper (pastes a cert PEM, extracts SPKI hash), DNSSEC validation selector, QName minimization toggle, ECS toggle, timeout/retry fields. "Test resolver" button — sends a live SOA probe and shows the raw response.
+- **Pools list** — name, strategy, member count, min-healthy, current health. Add / edit / delete.
+- **Pool editor** — member list with drag-to-reorder (for failover priority), weight sliders for WRR, health check config, fallback pool selector.
+- **Routes table** — per-tenant, ordered by priority; inline drag-to-reorder; add / edit / delete route.
+- **Tenant policy editor** — encrypted upstream requirement, DNSSEC mode, TTL clamp, blocked response type.
+- **Upstream health dashboard** — health state timeline per resolver, latency heatmap, DNSSEC failure rate.
+
+---
+
+### 21.9 Future work (not in scope for this epic)
+
+- **In-node DNSSEC validation** (run `hickory-resolver` in validating mode, removing dependency on the upstream resolver for validation). This enables `strict` mode even with do53 resolvers.
+- **DoQ (DNS-over-QUIC, RFC 9250)** as a protocol option.
+- **Per-client upstream routing** — route VPN clients in the `engineering` group through a different upstream than `guests` based on DHCP scope (§22) correlation.
+- **Upstream policy as code** — export/import resolver + pool + route config as YAML for GitOps workflows.
+- **Threat-intel resolver integration** — forward queries for newly registered domains to a threat-intel resolver (Quad9, NextDNS) regardless of category match, then apply category block on top. Belt-and-suspenders for APT/zero-day coverage.
+
+---
+
+## 22. DHCP — ISC Kea Integration
+
+Aegis-DNS provides enterprise DHCP management by integrating **ISC Kea DHCP** as a co-located sidecar rather than re-implementing the DHCP protocol stack. Kea is the industry-standard successor to ISC dhcpd: it handles the full RFC 2131/8415 wire protocol, conflict detection, relay agent processing, HA failover, and DNSSEC — all battle-tested and actively maintained. Aegis contributes what Kea lacks: a multi-tenant control plane, a UI, DDNS bridging into Aegis DNS Zones, client registry integration, and tenant-aware policy enforcement.
+
+**The result is the same operational outcome as a custom engine with a fraction of the implementation risk:**
+
+- A new device plugs into the VPN or network → Kea assigns an IP → Aegis DDNS bridge writes A + PTR into DNS Zones → device appears in the client registry → visible in SIEM export — all without operator action.
+- Scope/reservation/option changes made in the Aegis UI are immediately pushed to Kea's running config via the Kea Control Agent REST API; no daemon restart required.
+
+---
+
+### 22.1 Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Aegis node (Docker Compose)                                  │
+│                                                               │
+│  ┌──────────────┐   REST      ┌─────────────────────────┐   │
+│  │  aegis-ctrl  │ ──────────► │  kea-ctrl-agent :8080   │   │
+│  │  (FastAPI)   │             └────────┬────────────────┘   │
+│  │              │                      │ commands            │
+│  │  config-gen  │             ┌────────▼────────────────┐   │
+│  │  lease-sync  │ ◄──────────│  kea-dhcp4 (UDP :67)    │   │
+│  │  ddns-bridge │  Postgres   │  kea-dhcp6 (UDP :547)   │   │
+│  └──────┬───────┘             └────────┬────────────────┘   │
+│         │                              │ leases              │
+│  ┌──────▼───────────────────────────────▼────────────────┐  │
+│  │  PostgreSQL 17                                         │  │
+│  │  schema: aegis.*   +   kea.dhcp4_leases               │  │
+│  └────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Kea services:**
+- `kea-dhcp4` — DHCPv4 server (UDP port 67); Postgres lease backend.
+- `kea-dhcp6` — DHCPv6 server (UDP port 547); same Postgres instance, separate schema.
+- `kea-ctrl-agent` — HTTP REST API (port 8080) that forwards JSON commands to the running daemons; used by Aegis config-gen for live config updates without restart.
+
+**Aegis components added for Kea integration:**
+- **`KeaConfigGenerator`** — Python class that translates Aegis DB models to Kea JSON config and pushes it via the Control Agent API (`config-set`, `subnet4-add`, `subnet4-del`, `reservation-add`).
+- **`DhcpLeaseSyncLoop`** — asyncio background task; reads `kea.dhcp4_leases` (Kea's native Postgres table) every 30 s and upserts `ClientEntry` records in the Aegis client registry.
+- **`DhcpDdnsBridge`** — called by Kea's `run_script` hook on DHCP4_LEASE_COMMITTED / DHCP4_LEASE_EXPIRED; writes/deletes A + PTR records in Aegis DNS Zones via the internal records API.
+
+---
+
+### 22.2 Aegis data model (shadow tables)
+
+Aegis maintains its own shadow of the DHCP configuration. This decouples the UI and API from Kea's JSON format, enables tenant isolation (Kea has no tenant concept), and allows offline planning before pushing to Kea.
+
+**Kea's lease table (`kea.dhcp4_leases`) is authoritative for live lease state.** Aegis does not maintain a duplicate `DhcpLease` table; it reads directly from the Kea schema.
+
+#### DhcpScope
+
+```
+DhcpScope {
+    id                  UUID             PK
+    tenant_id           UUID             FK → Tenant; indexed
+    name                string(255)
+    description         text | null
+    // addressing (maps to Kea subnet4.subnet)
+    subnet              cidr             // e.g. "10.8.1.0/24"
+    range_start         inet             // start of dynamic pool
+    range_end           inet             // end of dynamic pool
+    exclusions          inet[]           // IPs excluded from the pool
+    // binding
+    interface           string(64) | null   // Kea "interface" field; null = all
+    relay_agent_cidr    cidr | null         // giaddr CIDR for relay scope selection
+    vlan_id             int | null          // informational
+    // lease timing (maps to Kea valid-lifetime, renew-timer, rebind-timer)
+    lease_time_s        int              default 86400
+    max_lease_time_s    int              default 604800
+    renew_time_s        int | null       // T1; null → Kea default (50% of valid-lifetime)
+    rebind_time_s       int | null       // T2; null → Kea default (87.5%)
+    // DNS integration
+    domain_name         string(255) | null  // Kea option 15
+    ddns_enabled        bool             default false
+    ddns_zone_id        UUID | null      // FK → DnsZone; required if ddns_enabled
+    ddns_ttl_s          int              default 300
+    // Kea sync state
+    kea_subnet_id       int | null       // Kea's internal subnet4 id after push
+    last_pushed_at      timestamp | null
+    // meta
+    enabled             bool             default true
+    created_at          timestamp
+    updated_at          timestamp
+}
+```
+
+#### DhcpStaticLease
+
+Maps to Kea's `reservations` array within a subnet. Can also be a global reservation (subnet-independent).
+
+```
+DhcpStaticLease {
+    id              UUID             PK
+    scope_id        UUID | null      FK → DhcpScope; null = global reservation
+    tenant_id       UUID             FK → Tenant
+    mac_address     string(17)       // lowercase, colon-delimited; MAC or DUID
+    ip_address      inet             // reserved IP
+    hostname        string(255) | null
+    description     text | null
+    client_id       string(255) | null   // option 61; Kea "client-id" field
+    next_server     inet | null          // option 66 TFTP for PXE (siaddr)
+    boot_filename   string(255) | null   // option 67
+    enabled         bool             default true
+    created_at      timestamp
+}
+```
+
+#### DhcpOption
+
+Per-scope or per-reservation DHCP options. Kea accepts these as the `option-data` array.
+
+```
+DhcpOption {
+    id              UUID
+    scope_id        UUID | null          // null = global; FK → DhcpScope
+    static_lease_id UUID | null          // FK → DhcpStaticLease (reservation-level)
+    option_code     int                  // 1–254 (DHCPv4) or 0–65535 (DHCPv6)
+    option_space    string default "dhcp4"
+    value           text                 // Kea "data" field (CSV or hex)
+    always_send     bool default false   // Kea "always-send"
+}
+```
+
+**Automatically injected options** (generated by `KeaConfigGenerator`, not stored in `DhcpOption`):
+- Option 1 (subnet mask) — from subnet CIDR.
+- Option 6 (DNS servers) — Aegis filter node IPs for the scope's tenant.
+- Option 15 (domain name) — from `scope.domain_name`.
+- Option 28 (broadcast) — from subnet CIDR.
+- Options 51/58/59 — lease/T1/T2 from scope timing fields.
+- Option 54 (server ID) — Kea sets automatically.
+
+#### DhcpRelayConfig
+
+```
+DhcpRelayConfig {
+    id              UUID
+    scope_id        UUID             FK → DhcpScope
+    relay_ip        inet             // giaddr whitelist entry; maps to Kea relay.ip-addresses
+    circuit_id_hex  string | null    // option 82 sub-option 1 match (hex)
+    remote_id_hex   string | null    // option 82 sub-option 2 match (hex)
+    // Kea client-class name generated from this for option-82 routing
+}
+```
+
+#### DhcpHaConfig
+
+```
+DhcpHaConfig {
+    id                  UUID
+    tenant_id           UUID         // informational; HA is per-Kea-instance not per-tenant
+    mode                "hot-standby" | "load-balancing" | "passive-backup"
+    this_server_name    string       // Kea "this-server-name"
+    peers               jsonb        // array of {name, url, role, auto-failover}
+    heartbeat_delay_ms  int default 10000
+    max_response_delay_ms int default 60000
+    max_ack_delay_ms    int default 10000
+    max_unacked_clients int default 10
+    // generated Kea HA config pushed via config-set
+    updated_at          timestamp
+}
+```
+
+---
+
+### 22.3 Kea config push
+
+`KeaConfigGenerator` maintains a full Kea `Dhcp4` JSON config in memory and pushes it to the running daemon:
+
+```
+Push flow (on any DhcpScope / DhcpStaticLease / DhcpOption change):
+  1. Build full kea-dhcp4.conf JSON from Aegis DB:
+       subnet4 array    ← DhcpScope (enabled only)
+       reservations     ← DhcpStaticLease per scope
+       option-data      ← DhcpOption per scope/reservation + auto-injected options
+       relay            ← DhcpRelayConfig per scope
+       client-classes   ← generated for option-82 circuit-id / remote-id routing
+       hooks-libraries  ← run_script (DDNS bridge), lease_cmds, host_cmds, stat_cmds
+       ha               ← DhcpHaConfig if set
+  2. POST http://kea-ctrl-agent:8080/ {"command":"config-set","service":["dhcp4"],"arguments":{...}}
+  3. On success: UPDATE DhcpScope SET kea_subnet_id=..., last_pushed_at=now() WHERE ...
+  4. On failure: log KeaConfigPushFailedEvent; expose error in UI.
+
+Alternative (incremental, for single-scope changes):
+  - Use subnet4-add / subnet4-del / subnet4-update commands via lease_cmds hook.
+  - Use reservation-add / reservation-del commands via host_cmds hook.
+  - Incremental path used when only one scope changed; full config-set used after HA or
+    hook config changes that require a full reload.
+```
+
+---
+
+### 22.4 DDNS bridge
+
+Kea's `run_script` hook library calls a script on each lease event. The script POSTs to the Aegis control-plane internal endpoint, which then calls the DNS Zones records API.
+
+```
+Kea hook config (generated):
+  "hooks-libraries": [{
+    "library": "/usr/lib/kea/hooks/libdhcp_run_script.so",
+    "parameters": {
+      "name": "/etc/kea/aegis-ddns-bridge.sh",
+      "sync": false
+    }
+  }]
+
+aegis-ddns-bridge.sh:
+  curl -s -X POST http://aegis-ctrl:8000/api/v1/internal/dhcp-event \
+       -H "Authorization: Bearer ${AEGIS_INTERNAL_TOKEN}" \
+       -H "Content-Type: application/json" \
+       -d "{\"event\":\"${KEA_LEASE4_TYPE}\", \"ip\":\"${KEA_LEASE4_ADDRESS}\",
+            \"mac\":\"${KEA_LEASE4_HWADDR}\", \"hostname\":\"${KEA_LEASE4_HOSTNAME}\"}"
+
+POST /api/v1/internal/dhcp-event handler:
+  - DHCP4_LEASE_COMMITTED → upsert A record + PTR in ddns_zone_id zone.
+  - DHCP4_LEASE_EXPIRED / DHCP4_LEASE_RELEASED → delete A + PTR records.
+  - Enqueue retry (3× exponential backoff) on DNS Zones API failure.
+  - DDNS skipped if scope.ddns_enabled=false or hostname is null.
+```
+
+---
+
+### 22.5 Lease sync → client registry
+
+```
+DhcpLeaseSyncLoop (30 s interval):
+  SELECT address, hwaddr, hostname, vendor_id, state, lease_type
+    FROM kea.dhcp4_leases
+   WHERE state IN (0, 1)         -- 0=active 1=offered
+     AND expire > now() - interval '5 minutes'   -- include recently-expired for cleanup
+     AND subnet_id = ANY($known_kea_subnet_ids);
+
+  For each row:
+    - Upsert ClientEntry(ip, mac, hostname, device_type inferred from vendor_id option 60).
+    - Set tags: ["dhcp-managed", "kea-lease"].
+    - Set group_id from DhcpScope.relay_agent_cidr → DhcpScopeGroupBinding.group_id.
+```
+
+---
+
+### 22.6 HA
+
+Kea's built-in HA hook (`libdhcp_ha.so`) handles failover without VRRP:
+
+| Mode | Behaviour |
+|---|---|
+| `hot-standby` | Primary handles all traffic; standby listens and syncs lease DB; takes over automatically on primary failure. Both Kea instances share the same Postgres `kea.dhcp4_leases` table — no proprietary sync needed. |
+| `load-balancing` | Each peer owns roughly half the address range; failover is peer-triggered. |
+| `passive-backup` | Primary active; backup receives lease updates but never takes over autonomously. |
+
+Aegis generates the Kea HA config section from `DhcpHaConfig` and pushes it via `config-set`. No keepalived/VRRP configuration is required.
+
+---
+
+### 22.7 Option 82 / relay
+
+Kea handles relay agent (giaddr) processing natively. Aegis models relay configuration as `DhcpRelayConfig` rows and translates them to:
+- `relay.ip-addresses` array in each subnet4 config (giaddr whitelist).
+- Kea `client-class` expressions for circuit-id / remote-id routing (option 82 sub-options).
+
+Unknown giaddr → Kea discards; `run_script` logs `DhcpRelayUnknownAgentEvent` to Aegis audit log.
+
+---
+
+### 22.8 PXE
+
+PXE options are configured as `DhcpOption` rows (option code 66/67/17) at scope or reservation level. Architecture-aware PXE (option 93) is expressed as Kea `client-class` conditions:
+
+```json
+{"name": "UEFI-x64",
+ "test": "option[93].hex == 0x0007",
+ "option-data": [{"code": 67, "data": "shimx64.efi"}]}
+```
+
+`KeaConfigGenerator` generates these classes from `DhcpPxeProfile` rows and includes them in the config push.
+
+---
+
+### 22.9 DHCPv6
+
+`kea-dhcp6` runs as a separate Docker Compose service alongside `kea-dhcp4`, sharing the same Postgres instance (separate Kea schema). Aegis shadow tables:
+
+- `DhcpV6Scope` — maps to Kea `subnet6`; CIDR `/48`–`/128`, IA_NA address range, IA_PD prefix pool.
+- `DhcpV6StaticLease` — Kea DHCPv6 reservation (DUID-based).
+
+DDNS bridge: same `aegis-ddns-bridge.sh` script handles `DHCP6_LEASE_COMMITTED` events → AAAA + `ip6.arpa` PTR records via Aegis DNS Zones API.
+
+---
+
+### 22.10 Management UI
+
+A new **DHCP** section in the left nav:
+
+**Scopes** — table (subnet, range, utilization bar, DDNS badge, last-pushed); Add/Edit modal with CIDR validator, range picker, lease timing, DDNS zone selector, relay IPs; scope detail opens Options and Static leases sub-tables.
+
+**Leases** — live read from `kea.dhcp4_leases` via Aegis proxy API; state badge; filters by scope/state/MAC/hostname/expiry; "Convert to reservation" one-click; bulk delete-expired; CSV export; utilization gauge per scope (green <75%, amber 75–90%, red >90%).
+
+**Reservations** — MAC/IP/hostname table; bulk CSV import; inline conflict detection (red badge if IP has active dynamic lease for a different MAC).
+
+**HA / Relay** — HA mode selector + peer config form; live Kea HA state (`partner-down`, `load-balancing`, etc.) via `ha-heartbeat` Control Agent command; relay IP whitelist; option 82 client-class table.
+
+**DDNS status** (within scope detail) — recent bridge events (hostname, IP, action, status, timestamp); retry queue depth; `ddns_zone_id` zone selector.
+
+---
+
+### 22.11 Observability
+
+Kea exposes statistics via the `stat_cmds` hook and its Prometheus exporter (Stork agent or `kea-exporter`). Aegis augments with tenant-scoped metrics:
+
+| Source | Metric / Event |
+|---|---|
+| Kea stat_cmds | `pkt4-discover-received`, `pkt4-offer-sent`, `pkt4-ack-sent`, `pkt4-nak-sent` per subnet |
+| Kea stat_cmds | `declined-addresses`, `reclaimed-declined-addresses` per subnet |
+| Aegis lease sync | `dhcp_leases_active{scope_id}`, `dhcp_pool_utilization_pct{scope_id}` |
+| Aegis DDNS bridge | `dhcp_ddns_updates_total{scope_id, action, status}` |
+| Aegis | `DhcpPoolExhaustedEvent` — alert at 90% pool utilization |
+| Aegis audit log | Every config push, reservation add/del, HA state transition |
+| Kea run_script | `DhcpRelayUnknownAgentEvent` logged on unrecognised giaddr |
+
+---
+
+### 22.13 Security
+
+- **Rogue DHCP prevention**: Aegis does not prevent rogue servers — that is a network-layer concern (DHCP snooping on managed switches). However, Aegis logs `DhcpUnknownServerEvent` if it receives a DHCP reply packet (not a request) on its listening interface, which may indicate a rogue server.
+- **Relay agent authentication**: giaddr whitelist validation (§22.5) prevents option 82 injection from untrusted relays.
+- **DDNS authentication**: TSIG keys are per-tenant, stored encrypted (same mechanism as §20.4 webhook secrets), never exposed in plaintext via the API.
+- **Lease data in audit log**: every DHCPACK, DHCPNAK, and DHCPRELEASE is appended to the audit log with actor=`dhcp-engine`, enabling forensic reconstruction of "who had IP 10.8.1.47 at 14:32 UTC on 2026-06-01".
+- **PXE security**: TFTP server address is operator-configured; Aegis does not run a TFTP server itself, only injects the option. UEFI HTTP boot URLs must be HTTPS.
 
 ---

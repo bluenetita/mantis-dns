@@ -18,6 +18,7 @@ import httpx
 
 from aegis_control.db.models import Feed
 from aegis_control.feeds.parsers import PARSERS
+from aegis_control.ssrf_guard import check_url_safe
 
 # Domains that must never appear in a compiled category set. A feed proposing
 # to block one of these is treated as poisoned/broken and rejected outright.
@@ -61,7 +62,7 @@ def _sanity_check(new_domains: set[str], previous_count: int | None) -> str | No
     if hit:
         return f"feed contains must-never-block domains: {sorted(hit)}"
 
-    if previous_count and previous_count > 0:
+    if previous_count is not None and previous_count > 0:
         delta_pct = abs(len(new_domains) - previous_count) / previous_count * 100
         if delta_pct > DEFAULT_MAX_DELTA_PCT:
             return (
@@ -78,9 +79,14 @@ async def fetch_and_ingest(
     if parser is None:
         return IngestResult(status="error", reason=f"unknown feed format '{feed.format}'")
 
+    try:
+        check_url_safe(feed.url)
+    except ValueError as e:
+        return IngestResult(status="error", reason=f"SSRF guard rejected feed URL: {e}")
+
     headers = {"If-None-Match": feed.last_etag} if feed.last_etag else {}
     try:
-        resp = await client.get(feed.url, headers=headers, timeout=30.0, follow_redirects=True)
+        resp = await client.get(feed.url, headers=headers, timeout=30.0, follow_redirects=False)
     except httpx.HTTPError as e:
         return IngestResult(status="error", reason=str(e))
 

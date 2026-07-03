@@ -16,9 +16,14 @@ export function LoginPage() {
     initialValues: { email: "", password: "" },
   });
 
+  function safeFrom(): string {
+    const raw = (location.state as { from?: string } | null)?.from;
+    if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/tenants";
+    return raw;
+  }
+
   if (!loading && user) {
-    const from = (location.state as { from?: string } | null)?.from ?? "/tenants";
-    return <Navigate to={from} replace />;
+    return <Navigate to={safeFrom()} replace />;
   }
 
   const handleSubmit = form.onSubmit(async (values) => {
@@ -26,8 +31,7 @@ export function LoginPage() {
     setSubmitting(true);
     try {
       await login(values.email, values.password);
-      const from = (location.state as { from?: string } | null)?.from ?? "/tenants";
-      navigate(from, { replace: true });
+      navigate(safeFrom(), { replace: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

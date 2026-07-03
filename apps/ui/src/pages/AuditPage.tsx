@@ -3,7 +3,7 @@ import { IconInfoCircle } from "@tabler/icons-react";
 import { useState } from "react";
 import { useAuditLog } from "../api/hooks";
 
-const RESOURCE_TYPES = ["tenant", "group", "policy", "feed"];
+const RESOURCE_TYPES = ["tenant", "group", "policy", "feed", "dns_zone", "dns_record", "user"];
 
 const ACTION_COLOR: Record<string, string> = {
   create: "green",

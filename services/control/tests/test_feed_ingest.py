@@ -1,5 +1,6 @@
 import httpx
 import pytest
+from unittest.mock import patch
 
 from aegis_control.db.models import Feed
 from aegis_control.feeds.ingest import MUST_NEVER_BLOCK, fetch_and_ingest, load_domains, _sanity_check
@@ -57,8 +58,9 @@ async def test_fetch_and_ingest_updates_and_stores(tmp_path):
     transport = httpx.MockTransport(handler)
     feed = Feed(id="test-feed", category_id="malware", url="https://example.test/feed", format="hostfile")
 
-    async with httpx.AsyncClient(transport=transport) as client:
-        result = await fetch_and_ingest(feed, tmp_path, client)
+    with patch("aegis_control.feeds.ingest.check_url_safe"):
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await fetch_and_ingest(feed, tmp_path, client)
 
     assert result.status == "updated"
     assert result.domain_count == 2
@@ -74,8 +76,9 @@ async def test_fetch_and_ingest_rejects_poisoned_feed(tmp_path):
     transport = httpx.MockTransport(handler)
     feed = Feed(id="test-feed", category_id="malware", url="https://example.test/feed", format="hostfile")
 
-    async with httpx.AsyncClient(transport=transport) as client:
-        result = await fetch_and_ingest(feed, tmp_path, client)
+    with patch("aegis_control.feeds.ingest.check_url_safe"):
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await fetch_and_ingest(feed, tmp_path, client)
 
     assert result.status == "rejected"
     assert load_domains(tmp_path, "test-feed") == set()  # nothing written on rejection
@@ -97,8 +100,9 @@ async def test_fetch_and_ingest_unchanged_on_304(tmp_path):
         last_domain_count=42,
     )
 
-    async with httpx.AsyncClient(transport=transport) as client:
-        result = await fetch_and_ingest(feed, tmp_path, client)
+    with patch("aegis_control.feeds.ingest.check_url_safe"):
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await fetch_and_ingest(feed, tmp_path, client)
 
     assert result.status == "unchanged"
     assert result.domain_count == 42

@@ -7,6 +7,7 @@ export interface AuthUser {
   id: string;
   email: string;
   role: Role;
+  tenant_id: string | null;
 }
 
 const ROLE_RANK: Record<Role, number> = { viewer: 0, operator: 1, admin: 2 };
@@ -67,7 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const hasRole = useCallback(
     (...roles: Role[]) => {
       if (!user) return false;
-      const minRank = Math.min(...roles.map((r) => ROLE_RANK[r]));
+      const minRank = Math.max(...roles.map((r) => ROLE_RANK[r]));
       return ROLE_RANK[user.role] >= minRank;
     },
     [user]

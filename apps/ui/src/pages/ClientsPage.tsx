@@ -226,7 +226,7 @@ export function ClientsPage() {
       )}
 
       {tenantId && editing && (
-        <Modal opened={editOpened} onClose={closeEdit} title={`Edit client ${editing.ip}`}>
+        <Modal opened={editOpened} onClose={() => { closeEdit(); setEditing(null); }} title={`Edit client ${editing.ip}`}>
           <EditClientForm tenantId={tenantId} client={editing} onDone={closeEdit} />
         </Modal>
       )}

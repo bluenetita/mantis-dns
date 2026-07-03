@@ -45,7 +45,7 @@ def _category_bloom(db: Session, category_id: str) -> tuple[bytes, BloomParams, 
         select(Feed).where(Feed.category_id == category_id, Feed.enabled.is_(True))
     ).scalars().first()
 
-    if feed is None or not feed.last_domain_count:
+    if feed is None or feed.last_domain_count is None:
         bf = BloomFilterBuilder(_EMPTY_CATEGORY_PARAMS)
         return bf.to_bytes(), _EMPTY_CATEGORY_PARAMS, feed
 
@@ -72,7 +72,7 @@ def build_bundle(policy: Policy, version: int, db: Session) -> bundle_pb2.Bundle
             bundle_pb2.CategorySet(
                 category_id=toggle.category_id,
                 source_feed_id=feed.id if feed else "",
-                feed_version=feed.last_version or "" if feed else "",
+                feed_version=(feed.last_version or "") if feed else "",
                 license=feed.license if feed else "",
                 bloom=bundle_pb2.BloomParams(
                     num_hashes=params.num_hashes,

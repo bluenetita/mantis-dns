@@ -74,6 +74,10 @@ impl TenantRouter {
     pub fn route_count(&self) -> usize {
         self.routes.load().len()
     }
+
+    pub fn purge_cache(&self) {
+        self.cache.purge_expired();
+    }
 }
 
 async fn fetch_routing_table(control_url: &str) -> Result<Vec<RoutingTableEntry>> {
@@ -117,14 +121,23 @@ pub async fn refresh_routes(router: &TenantRouter, control_url: &str) -> Result<
     router.routes.store(Arc::new(new_routes));
     debug!("routing table refreshed: {route_count} routes");
 
-    // Refresh each routed group's bundle. Sequential is fine at expected
-    // group-count scale (tens, not thousands); parallelize if that changes.
+    // Fetch all groups' bundles concurrently — independent HTTP round-trips.
     let routes = router.routes.load();
+    let mut set = tokio::task::JoinSet::new();
     for route in routes.iter() {
-        if let Err(e) =
-            fetch_and_publish_bundle(&route.store, &router.public_key, control_url, &route.group_id).await
-        {
-            warn!("bundle refresh failed for group {}: {e}", route.group_id);
+        let store = route.store.clone();
+        let key = router.public_key;
+        let url = control_url.to_string();
+        let gid = route.group_id.clone();
+        set.spawn(async move {
+            if let Err(e) = fetch_and_publish_bundle(&store, &key, &url, &gid).await {
+                warn!("bundle refresh failed for group {gid}: {e}");
+            }
+        });
+    }
+    while let Some(res) = set.join_next().await {
+        if let Err(e) = res {
+            warn!("bundle refresh task panicked: {e}");
         }
     }
 

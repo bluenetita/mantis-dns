@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TenantCreate(BaseModel):
@@ -40,8 +41,8 @@ class RoutingTableEntry(BaseModel):
 
 
 class CategoryToggleIn(BaseModel):
-    category_id: str
-    action: str = "ACTION_BLOCK"
+    category_id: str = Field(max_length=64)
+    action: Literal["ACTION_BLOCK", "ACTION_LOG_ONLY", "ACTION_ALLOW"] = "ACTION_BLOCK"
 
 
 class CategoryToggleOut(BaseModel):
@@ -51,8 +52,8 @@ class CategoryToggleOut(BaseModel):
 
 
 class OverrideIn(BaseModel):
-    domain: str
-    kind: str  # "allow" | "deny"
+    domain: str = Field(max_length=255)
+    kind: Literal["allow", "deny"]
 
 
 class OverrideOut(BaseModel):
@@ -71,6 +72,6 @@ class PolicyOut(BaseModel):
 
 
 class PolicyUpsert(BaseModel):
-    on_load_failure: str = "FAIL_OPEN"
+    on_load_failure: Literal["FAIL_OPEN", "FAIL_CLOSED"] = "FAIL_OPEN"
     category_toggles: list[CategoryToggleIn] = []
     overrides: list[OverrideIn] = []

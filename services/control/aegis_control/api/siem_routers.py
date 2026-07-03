@@ -64,12 +64,12 @@ def build_siem_events(db: Session, rows: list[models.QueryEvent]) -> list[SiemEv
     if pairs:
         tenant_ids = {p[0] for p in pairs}
         ips = {p[1] for p in pairs}
-        for c in (
+        for entry in (
             db.query(models.ClientEntry)
             .filter(models.ClientEntry.tenant_id.in_(tenant_ids), models.ClientEntry.ip.in_(ips))
             .all()
         ):
-            clients[(c.tenant_id, c.ip)] = c
+            clients[(entry.tenant_id, entry.ip)] = entry
 
     events = []
     for r in rows:
@@ -100,38 +100,51 @@ def build_siem_events(db: Session, rows: list[models.QueryEvent]) -> list[SiemEv
     return events
 
 
+def _cef_ext(value: str) -> str:
+    """Escape a CEF extension field value per the CEF 0 spec."""
+    return (
+        value
+        .replace("\\", "\\\\")
+        .replace("=", "\\=")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace(" ", "\\s")   # Unicode LINE SEPARATOR — some parsers split on it
+        .replace(" ", "\\s")   # Unicode PARAGRAPH SEPARATOR
+    )
+
+
 def _to_cef(e: SiemEvent) -> str:
     """Maps an enriched SiemEvent to a CEF:0 line per design.md §20.5."""
     severity = 7 if e.decision == "block" else 3
-    parts = [f"start={int(e.occurred_at.timestamp() * 1_000_000)}"]
+    parts = [f"start={int(e.occurred_at.timestamp() * 1_000)}"]
     if e.client_ip:
-        parts.append(f"src={e.client_ip}")
+        parts.append(f"src={_cef_ext(e.client_ip)}")
     if e.client_name:
-        parts.append(f"shost={e.client_name}")
-    parts.append(f"dhost={e.qname}")
+        parts.append(f"shost={_cef_ext(e.client_name)}")
+    parts.append(f"dhost={_cef_ext(e.qname)}")
     if e.matched_category:
-        parts.append(f"cs1={e.matched_category} cs1Label=matchedCategory")
+        parts.append(f"cs1={_cef_ext(e.matched_category)} cs1Label=matchedCategory")
     if e.matched_feed_id:
-        parts.append(f"cs2={e.matched_feed_id} cs2Label=matchedFeed")
+        parts.append(f"cs2={_cef_ext(e.matched_feed_id)} cs2Label=matchedFeed")
     if e.qtype:
-        parts.append(f"cs3={e.qtype} cs3Label=queryType")
+        parts.append(f"cs3={_cef_ext(e.qtype)} cs3Label=queryType")
     if e.latency_us is not None:
         parts.append(f"cn1={e.latency_us} cn1Label=latencyMicros")
     if e.cache_hit is not None:
         parts.append(f"cn2={int(e.cache_hit)} cn2Label=cacheHit")
-    parts.append(f"act={e.decision}")
+    parts.append(f"act={_cef_ext(e.decision)}")
     if e.response_code:
-        parts.append(f"outcome={e.response_code}")
-    parts.append(f"deviceExternalId={e.id}")
+        parts.append(f"outcome={_cef_ext(e.response_code)}")
+    parts.append(f"deviceExternalId={_cef_ext(e.id)}")
     if e.tenant_id:
-        parts.append(f"tenantId={e.tenant_id}")
-    parts.append(f"grp={e.group_id}")
+        parts.append(f"tenantId={_cef_ext(e.tenant_id)}")
+    parts.append(f"grp={_cef_ext(e.group_id)}")
 
     extension = " ".join(parts)
     return f"CEF:0|AegisDNS|aegis-filter|1.0|DNS_QUERY|DNS query event|{severity}|{extension}"
 
 
-@router.get("/siem/events")
+@router.get("/siem/events", response_model=None)
 def list_siem_events(
     after_id: str | None = None,
     limit: int = Query(500, ge=1, le=10_000),
@@ -143,7 +156,7 @@ def list_siem_events(
     format: Literal["json", "cef"] = "json",
     db: Session = Depends(get_db),
     _user: models.User = Depends(require_role("admin", "operator")),
-):
+) -> SiemEventsPage | PlainTextResponse:
     query = select(models.QueryEvent)
 
     if after_id is not None:
@@ -163,8 +176,10 @@ def list_siem_events(
     if until:
         query = query.where(models.QueryEvent.occurred_at <= until)
 
-    query = query.order_by(models.QueryEvent.seq.asc()).limit(limit)
+    query = query.order_by(models.QueryEvent.seq.asc()).limit(limit + 1)
     rows = list(db.execute(query).scalars().all())
+    has_more = len(rows) > limit
+    rows = rows[:limit]
     events = build_siem_events(db, rows)
 
     if format == "cef":
@@ -172,6 +187,6 @@ def list_siem_events(
 
     return SiemEventsPage(
         events=events,
-        next_cursor=str(rows[-1].seq) if len(rows) == limit else None,
+        next_cursor=str(rows[-1].seq) if has_more else None,
         total_in_window=len(rows),
     )

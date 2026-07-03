@@ -26,7 +26,7 @@ impl DnsCache {
     }
 
     pub fn get(&self, qname: &str) -> Option<Vec<Ipv4Addr>> {
-        let map = self.map.read().unwrap();
+        let map = self.map.read().unwrap_or_else(|e| e.into_inner());
         let entry = map.get(qname)?;
         if entry.expires_at <= Instant::now() {
             return None;
@@ -34,8 +34,19 @@ impl DnsCache {
         Some(entry.ips.clone())
     }
 
+    /// Removes all entries whose TTL has expired. Called periodically by a
+    /// background task to bound memory growth when the cache is under capacity.
+    pub fn purge_expired(&self) {
+        let now = Instant::now();
+        let mut map = self.map.write().unwrap_or_else(|e| e.into_inner());
+        map.retain(|_, e| e.expires_at > now);
+    }
+
     pub fn put(&self, qname: String, ips: Vec<Ipv4Addr>, ttl: Duration) {
-        let mut map = self.map.write().unwrap();
+        if ttl.is_zero() {
+            return;
+        }
+        let mut map = self.map.write().unwrap_or_else(|e| e.into_inner());
         if map.len() >= self.max_entries && !map.contains_key(&qname) {
             // Cheap eviction: drop one expired entry if we can find one, else
             // drop an arbitrary entry. Good enough at Sprint 4 scale; a real
@@ -100,7 +111,7 @@ mod tests {
         cache.put("a.example".into(), vec![], Duration::from_secs(60));
         cache.put("b.example".into(), vec![], Duration::from_secs(60));
         cache.put("c.example".into(), vec![], Duration::from_secs(60));
-        let map = cache.map.read().unwrap();
+        let map = cache.map.read().unwrap_or_else(|e| e.into_inner());
         assert!(map.len() <= 2);
     }
 }
