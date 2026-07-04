@@ -77,10 +77,11 @@ def clear_auth_cookies(response: Response) -> None:
 _SERVICE_TOKEN = os.environ.get("MANTIS_SERVICE_TOKEN", "")
 
 
-def require_service_token(x_mantis_service_token: str | None = Header(None)) -> None:
+def require_service_token(authorization: str | None = Header(None)) -> None:
     if not _SERVICE_TOKEN:
         return
-    if not x_mantis_service_token or not hmac.compare_digest(x_mantis_service_token, _SERVICE_TOKEN):
+    token = authorization.removeprefix("Bearer ") if authorization else None
+    if not token or not hmac.compare_digest(token, _SERVICE_TOKEN):
         raise HTTPException(403, "invalid or missing service token")
 
 
