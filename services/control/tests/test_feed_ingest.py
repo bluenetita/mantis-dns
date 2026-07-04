@@ -30,6 +30,11 @@ def test_parse_domain_list_basic():
     assert parse_domain_list(text) == {"ads.example.com", "tracker.example.net"}
 
 
+def test_parse_domain_list_strips_inline_comment():
+    text = "gore.example.com           #Gore\nclean.example.net\n"
+    assert parse_domain_list(text) == {"gore.example.com", "clean.example.net"}
+
+
 def test_sanity_check_rejects_must_never_block():
     new_domains = {"ads.example.com", "google.com"}
     reason = _sanity_check(new_domains, previous_count=None)

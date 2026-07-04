@@ -4,10 +4,11 @@ into the DB on startup. Idempotent: only inserts feeds whose id isn't
 already present, so it never clobbers admin edits (enabled toggle, interval,
 custom feeds) made via the UI after first boot.
 
-Known gap: there's no good free, reliably-maintained public list for
-"weapons", "social", or "proxies" categories as of writing — those are left
-for an admin to add manually via the UI (POST /api/v1/feeds) once they have
-a vetted source.
+Known gap: there's no good free, reliably-maintained public list for every
+category in the taxonomy (aegis_control.categories.CATEGORY_REGISTRY) — see
+each entry's has_bundled_feed flag. Those categories are left for an admin
+to add manually via the UI (POST /api/v1/feeds) once they have a vetted
+source.
 """
 
 from __future__ import annotations

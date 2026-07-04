@@ -173,6 +173,27 @@ export function useTopDomains(groupId: string | undefined) {
   });
 }
 
+// --- Categories ---
+
+export interface Category {
+  id: string;
+  label: string;
+  description: string;
+  group: "security" | "content" | "distraction" | "privacy" | "network";
+  color: string;
+  icon: string;
+  default_action: "ACTION_BLOCK" | "ACTION_LOG_ONLY";
+  has_bundled_feed: boolean;
+}
+
+export function useCategories() {
+  return useQuery({
+    queryKey: ["categories"],
+    queryFn: () => rawGet<Category[]>("/api/v1/categories"),
+    staleTime: Infinity,
+  });
+}
+
 // --- Feeds ---
 
 export function useFeeds() {

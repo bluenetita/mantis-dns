@@ -40,6 +40,17 @@ class RoutingTableEntry(BaseModel):
     group_id: str
 
 
+class CategoryOut(BaseModel):
+    id: str
+    label: str
+    description: str
+    group: str
+    color: str
+    icon: str
+    default_action: str
+    has_bundled_feed: bool
+
+
 class CategoryToggleIn(BaseModel):
     category_id: str = Field(max_length=64)
     action: Literal["ACTION_BLOCK", "ACTION_LOG_ONLY", "ACTION_ALLOW"] = "ACTION_BLOCK"

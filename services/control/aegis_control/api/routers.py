@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from aegis_control.api import schemas
 from aegis_control.audit import write_audit_log
 from aegis_control.auth import check_tenant_access, get_current_user, get_group_or_403, require_role, require_service_token, user_tenant_filter
+from aegis_control.categories import CATEGORY_REGISTRY
 from aegis_control.compiler.build_policy_bundle import compile_and_store
 from aegis_control.compiler.keys import KEY_ID, load_or_create_signing_key, public_key_bytes_for
 from aegis_control.config import BUNDLE_STORAGE_DIR, FEED_STORAGE_DIR
@@ -20,6 +21,14 @@ from aegis_control.feeds.ingest import load_domains
 
 router = APIRouter()
 _signing_key = load_or_create_signing_key()
+
+
+@router.get("/categories", response_model=list[schemas.CategoryOut])
+def list_categories(user: models.User = Depends(get_current_user)) -> list[schemas.CategoryOut]:
+    """Canonical category taxonomy (design.md §18.1) — static, system-defined,
+    same for every tenant. Drives the PolicyPage category picker and the
+    FeedsPage category filter/badges."""
+    return [schemas.CategoryOut(**c.__dict__) for c in CATEGORY_REGISTRY]
 
 
 @router.post("/tenants", response_model=schemas.TenantOut, status_code=201)

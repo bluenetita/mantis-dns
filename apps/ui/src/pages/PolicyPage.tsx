@@ -5,37 +5,92 @@ import {
   Button,
   Card,
   Center,
-  Checkbox,
   Code,
   Group,
   Loader,
+  Paper,
   Select,
   SimpleGrid,
   Stack,
   Table,
   Text,
   TextInput,
+  ThemeIcon,
   Title,
+  Tooltip,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { notifications } from "@mantine/notifications";
 import { IconPlus, IconX } from "@tabler/icons-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useCompileBundle, useTopDomains, usePolicy, useUpsertPolicy, useTestPolicy } from "../api/hooks";
+import { useCategories, useCompileBundle, useTopDomains, usePolicy, useUpsertPolicy, useTestPolicy } from "../api/hooks";
+import type { Category } from "../api/hooks";
+import { categoryIcon, CATEGORY_GROUP_LABEL } from "../categoryIcons";
 import type { components } from "../api/schema";
 import { useAuth } from "../auth/AuthContext";
 
 type CategoryToggle = components["schemas"]["CategoryToggleIn"];
 type Override = components["schemas"]["OverrideIn"];
 
-// Backed by services/control/aegis_control/feeds/catalog.json — adult, gambling,
-// malware, ads, phishing, tracking have a pre-loaded feed. weapons/social/proxies
-// have no vetted free source yet (see Feeds page); the toggle still works, the
-// bloom is just empty until a feed is added.
-const KNOWN_CATEGORIES = ["adult", "gambling", "weapons", "malware", "ads", "phishing", "tracking", "social", "proxies"];
+const CATEGORY_ACTION_OPTIONS = [
+  { value: "off", label: "Off" },
+  { value: "ACTION_BLOCK", label: "Block" },
+  { value: "ACTION_LOG_ONLY", label: "Log only" },
+  { value: "ACTION_ALLOW", label: "Allow" },
+];
+
+const GROUP_ORDER = ["security", "content", "distraction", "privacy", "network"];
 
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/i;
+
+function CategoryRow({
+  category,
+  action,
+  onChange,
+}: {
+  category: Category;
+  action: string;
+  onChange: (value: string) => void;
+}) {
+  const Icon = categoryIcon(category.icon);
+  return (
+    <Paper withBorder p="sm" radius="md">
+      <Stack gap="xs">
+        <Group gap="sm" wrap="nowrap" align="flex-start">
+          <ThemeIcon color={category.color} variant="light" size="lg" radius="md" style={{ flexShrink: 0 }}>
+            <Icon size={18} />
+          </ThemeIcon>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <Group gap={6}>
+              <Text fw={500} size="sm">
+                {category.label}
+              </Text>
+              {!category.has_bundled_feed && (
+                <Tooltip label="No pre-loaded feed — add one on the Feeds page">
+                  <Badge size="xs" variant="outline" color="gray">
+                    no feed
+                  </Badge>
+                </Tooltip>
+              )}
+            </Group>
+            <Text size="xs" c="dimmed">
+              {category.description}
+            </Text>
+          </div>
+        </Group>
+        <Select
+          data={CATEGORY_ACTION_OPTIONS}
+          value={action}
+          onChange={(v) => v && onChange(v)}
+          size="xs"
+          allowDeselect={false}
+          ml={44}
+        />
+      </Stack>
+    </Paper>
+  );
+}
 
 function AddOverrideForm({ onAdd }: { onAdd: (o: Override) => void }) {
   const form = useForm<{ domain: string; kind: "allow" | "deny" }>({
@@ -64,6 +119,7 @@ function AddOverrideForm({ onAdd }: { onAdd: (o: Override) => void }) {
 export function PolicyPage() {
   const { tenantId, groupId } = useParams<{ tenantId: string; groupId: string }>();
   const { data: policy, isLoading } = usePolicy(groupId);
+  const { data: categories } = useCategories();
   const upsertPolicy = useUpsertPolicy(groupId);
   const compileBundle = useCompileBundle();
   const testPolicy = useTestPolicy(groupId);
@@ -83,13 +139,23 @@ export function PolicyPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [policy?.id]);
 
-  function toggleCategory(categoryId: string) {
-    setCategoryToggles((prev) =>
-      prev.some((c) => c.category_id === categoryId)
-        ? prev.filter((c) => c.category_id !== categoryId)
-        : [...prev, { category_id: categoryId, action: "ACTION_BLOCK" }]
-    );
+  function setCategoryAction(categoryId: string, action: string) {
+    setCategoryToggles((prev) => {
+      const rest = prev.filter((c) => c.category_id !== categoryId);
+      if (action === "off") return rest;
+      return [...rest, { category_id: categoryId, action: action as CategoryToggle["action"] }];
+    });
   }
+
+  const categoriesByGroup = useMemo(() => {
+    const groups = new Map<string, Category[]>();
+    for (const cat of categories ?? []) {
+      const list = groups.get(cat.group) ?? [];
+      list.push(cat);
+      groups.set(cat.group, list);
+    }
+    return groups;
+  }, [categories]);
 
   function save() {
     if (!groupId) return;
@@ -135,16 +201,25 @@ export function PolicyPage() {
         <Title order={4} mb="sm">
           Categories
         </Title>
-        <SimpleGrid cols={{ base: 2, sm: 3, md: 4 }}>
-          {KNOWN_CATEGORIES.map((cat) => (
-            <Checkbox
-              key={cat}
-              label={cat}
-              checked={categoryToggles.some((c) => c.category_id === cat)}
-              onChange={() => toggleCategory(cat)}
-            />
+        <Stack gap="lg">
+          {GROUP_ORDER.filter((g) => categoriesByGroup.has(g)).map((group) => (
+            <div key={group}>
+              <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb="xs">
+                {CATEGORY_GROUP_LABEL[group] ?? group}
+              </Text>
+              <SimpleGrid cols={{ base: 1, sm: 2 }}>
+                {categoriesByGroup.get(group)!.map((cat) => (
+                  <CategoryRow
+                    key={cat.id}
+                    category={cat}
+                    action={categoryToggles.find((c) => c.category_id === cat.id)?.action ?? "off"}
+                    onChange={(action) => setCategoryAction(cat.id, action)}
+                  />
+                ))}
+              </SimpleGrid>
+            </div>
           ))}
-        </SimpleGrid>
+        </Stack>
       </Card>
 
       <Card withBorder>

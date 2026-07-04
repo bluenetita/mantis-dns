@@ -37,11 +37,13 @@ def parse_hostfile(text: str) -> set[str]:
 
 
 def parse_domain_list(text: str) -> set[str]:
-    """Parses a plain newline-delimited domain list (one domain per line, no IP prefix)."""
+    """Parses a plain newline-delimited domain list (one domain per line, no IP
+    prefix). Strips trailing '# comment' annotations some maintainers append
+    after the domain (e.g. ShadowWhisperer's 'domain.com   #Gore')."""
     domains: set[str] = set()
     for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
+        line = line.split("#", 1)[0].strip()
+        if not line:
             continue
         domain = _normalize_domain(line)
         if domain and _PLAIN_DOMAIN_LINE.match(domain):

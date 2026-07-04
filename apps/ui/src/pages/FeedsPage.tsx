@@ -33,8 +33,10 @@ import {
   IconSearch,
   IconTrash,
 } from "@tabler/icons-react";
-import { useState } from "react";
-import { useCreateFeed, useDeleteFeed, useFeeds, useIngestFeedNow, useUpdateFeed } from "../api/hooks";
+import { Fragment, useMemo, useState } from "react";
+import { useCategories, useCreateFeed, useDeleteFeed, useFeeds, useIngestFeedNow, useUpdateFeed } from "../api/hooks";
+import type { Category } from "../api/hooks";
+import { categoryIcon, CATEGORY_GROUP_LABEL } from "../categoryIcons";
 import type { components } from "../api/schema";
 import { useAuth } from "../auth/AuthContext";
 
@@ -42,22 +44,12 @@ type Feed = components["schemas"]["FeedOut"];
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-const CATEGORY_COLOR: Record<string, string> = {
-  malware: "red",
-  phishing: "orange",
-  ransomware: "red",
-  adult: "grape",
-  gambling: "yellow",
-  social: "blue",
-  ads: "teal",
-  tracking: "cyan",
-  cryptomining: "orange",
-  fake: "pink",
-  mixed: "violet",
-};
+function categoryLabel(id: string, byId: Map<string, Category>): string {
+  return byId.get(id)?.label ?? id.charAt(0).toUpperCase() + id.slice(1);
+}
 
-function categoryColor(id: string): string {
-  return CATEGORY_COLOR[id.toLowerCase()] ?? "gray";
+function categoryColor(id: string, byId: Map<string, Category>): string {
+  return byId.get(id)?.color ?? "gray";
 }
 
 function feedStatus(f: Feed): { label: string; color: string } {
@@ -258,6 +250,8 @@ function EditFeedModal({ feed, onClose }: { feed: Feed | null; onClose: () => vo
 
 export function FeedsPage() {
   const { data: feeds = [], isLoading } = useFeeds();
+  const { data: categoryRegistry = [] } = useCategories();
+  const categoryById = useMemo(() => new Map(categoryRegistry.map((c) => [c.id, c])), [categoryRegistry]);
   const updateFeed = useUpdateFeed();
   const deleteFeed = useDeleteFeed();
   const ingestNow = useIngestFeedNow();
@@ -276,6 +270,21 @@ export function FeedsPage() {
   const catalogFeeds = feeds.filter((f) => f.from_catalog);
   const categories = [...new Set(feeds.map((f) => f.category_id))].sort();
 
+  // Category chips: one per category that has at least one feed, in registry
+  // order (falls back to alphabetical for any custom/unregistered category).
+  const categoryChips = useMemo(() => {
+    const present = new Set(feeds.map((f) => f.category_id));
+    const registryIds = categoryRegistry.map((c) => c.id);
+    const orderedIds = [
+      ...registryIds.filter((id) => present.has(id)),
+      ...[...present].filter((id) => !registryIds.includes(id)).sort(),
+    ];
+    return orderedIds.map((id) => ({
+      id,
+      count: feeds.filter((f) => f.category_id === id).length,
+    }));
+  }, [feeds, categoryRegistry]);
+
   // Stable sort so toggling enabled never changes row position
   const sorted = [...feeds].sort((a, b) => a.id.localeCompare(b.id));
 
@@ -290,6 +299,23 @@ export function FeedsPage() {
     if (statusFilter === "disabled" && f.enabled) return false;
     return true;
   });
+
+  // Group the visible rows by category, in registry order, so category is
+  // the primary visual axis instead of a badge buried inside each row.
+  const groupedRows = useMemo(() => {
+    const registryIds = categoryRegistry.map((c) => c.id);
+    const byCategory = new Map<string, Feed[]>();
+    for (const f of visible) {
+      const list = byCategory.get(f.category_id) ?? [];
+      list.push(f);
+      byCategory.set(f.category_id, list);
+    }
+    const orderedIds = [
+      ...registryIds.filter((id) => byCategory.has(id)),
+      ...[...byCategory.keys()].filter((id) => !registryIds.includes(id)).sort(),
+    ];
+    return orderedIds.map((id) => ({ id, feeds: byCategory.get(id)! }));
+  }, [visible, categoryRegistry]);
 
   function toggleEnabled(feed: Feed) {
     updateFeed.mutate(
@@ -372,14 +398,6 @@ export function FeedsPage() {
           style={{ flex: 1, maxWidth: 360 }}
         />
         <Select
-          placeholder="All categories"
-          clearable
-          data={categories.map((c) => ({ value: c, label: c.charAt(0).toUpperCase() + c.slice(1) }))}
-          value={categoryFilter}
-          onChange={setCategoryFilter}
-          style={{ width: 180 }}
-        />
-        <Select
           data={[
             { value: "all", label: "All statuses" },
             { value: "active", label: "Active only" },
@@ -389,6 +407,39 @@ export function FeedsPage() {
           onChange={(v) => setStatusFilter(v ?? "all")}
           style={{ width: 160 }}
         />
+      </Group>
+
+      {/* Category chips — click to filter, click again to clear */}
+      <Group gap={6}>
+        <Badge
+          size="lg"
+          radius="sm"
+          variant={categoryFilter === null ? "filled" : "light"}
+          color="gray"
+          style={{ cursor: "pointer" }}
+          onClick={() => setCategoryFilter(null)}
+        >
+          All ({feeds.length})
+        </Badge>
+        {categoryChips.map(({ id, count }) => {
+          const cat = categoryById.get(id);
+          const Icon = cat ? categoryIcon(cat.icon) : null;
+          const active = categoryFilter === id;
+          return (
+            <Badge
+              key={id}
+              size="lg"
+              radius="sm"
+              variant={active ? "filled" : "light"}
+              color={categoryColor(id, categoryById)}
+              leftSection={Icon ? <Icon size={12} /> : undefined}
+              style={{ cursor: "pointer" }}
+              onClick={() => setCategoryFilter(active ? null : id)}
+            >
+              {categoryLabel(id, categoryById)} ({count})
+            </Badge>
+          );
+        })}
       </Group>
 
       {/* Table */}
@@ -410,109 +461,140 @@ export function FeedsPage() {
               </Table.Td>
             </Table.Tr>
           )}
-          {visible.map((f) => {
-            const { label, color } = feedStatus(f);
+          {groupedRows.map(({ id: catId, feeds: catFeeds }) => {
+            const cat = categoryById.get(catId);
+            const Icon = categoryIcon(cat?.icon ?? "");
+            const catDomains = catFeeds.reduce((s, f) => s + (f.last_domain_count ?? 0), 0);
             return (
-              <Table.Tr key={f.id}>
-                {/* Feed cell */}
-                <Table.Td>
-                  <Group gap={6} wrap="nowrap" align="flex-start">
-                    {/* Status dot */}
-                    <Tooltip label={label} position="right">
-                      <IconCircleFilled
-                        size={9}
-                        style={{ color: `var(--mantine-color-${color}-6)`, flexShrink: 0, marginTop: 5 }}
-                      />
-                    </Tooltip>
-
-                    <Stack gap={3} style={{ minWidth: 0 }}>
-                      {/* Row 1: ID + copy/link */}
-                      <Group gap={4} wrap="nowrap">
-                        <Text size="sm" fw={600} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {f.id}
+              <Fragment key={catId}>
+                {/* Category divider row */}
+                <Table.Tr style={{ backgroundColor: "var(--mantine-color-default-hover)" }}>
+                  <Table.Td colSpan={5} py={6}>
+                    <Group gap={8} wrap="nowrap">
+                      <ActionIcon color={categoryColor(catId, categoryById)} variant="light" size="sm" radius="sm">
+                        <Icon size={13} />
+                      </ActionIcon>
+                      <Text size="sm" fw={700}>
+                        {categoryLabel(catId, categoryById)}
+                      </Text>
+                      {cat && (
+                        <Text size="xs" c="dimmed">
+                          {CATEGORY_GROUP_LABEL[cat.group] ?? cat.group}
                         </Text>
-                        <CopyButton value={f.url} timeout={1500}>
-                          {({ copied, copy }) => (
-                            <Tooltip label={copied ? "Copied!" : f.url} multiline maw={360} position="bottom">
-                              <ActionIcon size="xs" variant="subtle" color={copied ? "teal" : "gray"} onClick={copy} style={{ flexShrink: 0 }}>
-                                {copied ? <IconCheck size={11} /> : <IconCopy size={11} />}
+                      )}
+                      <Badge size="xs" variant="outline" color="gray">
+                        {catFeeds.length} feed{catFeeds.length === 1 ? "" : "s"}
+                      </Badge>
+                      <Text size="xs" c="dimmed" ml="auto">
+                        {catDomains.toLocaleString()} domains
+                      </Text>
+                    </Group>
+                  </Table.Td>
+                </Table.Tr>
+
+                {catFeeds.map((f) => {
+                  const { label, color } = feedStatus(f);
+                  return (
+                    <Table.Tr key={f.id}>
+                      {/* Feed cell */}
+                      <Table.Td>
+                        <Group gap={6} wrap="nowrap" align="flex-start">
+                          {/* Status dot */}
+                          <Tooltip label={label} position="right">
+                            <IconCircleFilled
+                              size={9}
+                              style={{ color: `var(--mantine-color-${color}-6)`, flexShrink: 0, marginTop: 5 }}
+                            />
+                          </Tooltip>
+
+                          <Stack gap={3} style={{ minWidth: 0 }}>
+                            {/* Row 1: ID + copy/link */}
+                            <Group gap={4} wrap="nowrap">
+                              <Text size="sm" fw={600} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {f.id}
+                              </Text>
+                              <CopyButton value={f.url} timeout={1500}>
+                                {({ copied, copy }) => (
+                                  <Tooltip label={copied ? "Copied!" : f.url} multiline maw={360} position="bottom">
+                                    <ActionIcon size="xs" variant="subtle" color={copied ? "teal" : "gray"} onClick={copy} style={{ flexShrink: 0 }}>
+                                      {copied ? <IconCheck size={11} /> : <IconCopy size={11} />}
+                                    </ActionIcon>
+                                  </Tooltip>
+                                )}
+                              </CopyButton>
+                              <ActionIcon
+                                component="a" href={f.url} target="_blank" rel="noreferrer"
+                                size="xs" variant="subtle" color="gray" style={{ flexShrink: 0 }}
+                              >
+                                <IconExternalLink size={11} />
                               </ActionIcon>
-                            </Tooltip>
-                          )}
-                        </CopyButton>
-                        <ActionIcon
-                          component="a" href={f.url} target="_blank" rel="noreferrer"
-                          size="xs" variant="subtle" color="gray" style={{ flexShrink: 0 }}
+                            </Group>
+
+                            {/* Row 2: format + catalog tag + provider + interval */}
+                            <Group gap={4} wrap="wrap">
+                              <Badge size="xs" variant="outline" color="gray" tt="none" style={{ flexShrink: 0 }}>
+                                {f.format}
+                              </Badge>
+                              {f.from_catalog && (
+                                <Badge size="xs" variant="dot" color="blue" style={{ flexShrink: 0 }}>catalog</Badge>
+                              )}
+                              {f.provider && <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>{f.provider}</Text>}
+                              <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>· {fmtInterval(f.interval_seconds)}</Text>
+                            </Group>
+                          </Stack>
+                        </Group>
+                      </Table.Td>
+
+                      {/* Domains */}
+                      <Table.Td style={{ textAlign: "right" }}>
+                        <Text size="sm" ff="monospace">{fmtDomains(f.last_domain_count)}</Text>
+                      </Table.Td>
+
+                      {/* Last sync */}
+                      <Table.Td>
+                        <Tooltip
+                          label={f.last_fetched_at ? new Date(f.last_fetched_at).toLocaleString() : "Never synced"}
+                          position="left"
                         >
-                          <IconExternalLink size={11} />
-                        </ActionIcon>
-                      </Group>
-
-                      {/* Row 2: category + format + catalog tag + provider + interval */}
-                      <Group gap={4} wrap="wrap">
-                        <Badge color={categoryColor(f.category_id)} variant="light" size="xs" tt="capitalize" style={{ flexShrink: 0 }}>
-                          {f.category_id}
-                        </Badge>
-                        <Badge size="xs" variant="outline" color="gray" tt="none" style={{ flexShrink: 0 }}>
-                          {f.format}
-                        </Badge>
-                        {f.from_catalog && (
-                          <Badge size="xs" variant="dot" color="blue" style={{ flexShrink: 0 }}>catalog</Badge>
-                        )}
-                        {f.provider && <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>{f.provider}</Text>}
-                        <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>· {fmtInterval(f.interval_seconds)}</Text>
-                      </Group>
-                    </Stack>
-                  </Group>
-                </Table.Td>
-
-                {/* Domains */}
-                <Table.Td style={{ textAlign: "right" }}>
-                  <Text size="sm" ff="monospace">{fmtDomains(f.last_domain_count)}</Text>
-                </Table.Td>
-
-                {/* Last sync */}
-                <Table.Td>
-                  <Tooltip
-                    label={f.last_fetched_at ? new Date(f.last_fetched_at).toLocaleString() : "Never synced"}
-                    position="left"
-                  >
-                    <Text size="sm" c={f.last_fetched_at ? undefined : "dimmed"}>
-                      {relativeTime(f.last_fetched_at)}
-                    </Text>
-                  </Tooltip>
-                </Table.Td>
-
-                {/* Toggle */}
-                <Table.Td>
-                  <Switch size="sm" checked={f.enabled} disabled={!canWrite} onChange={() => toggleEnabled(f)} />
-                </Table.Td>
-
-                {/* Actions */}
-                <Table.Td>
-                  <Group gap={2} wrap="nowrap" justify="flex-end">
-                    {canWrite && (
-                      <>
-                        <Tooltip label="Sync now">
-                          <ActionIcon size="sm" variant="subtle" onClick={() => ingest(f)} loading={syncingId === f.id} disabled={!f.enabled}>
-                            <IconRefresh size={14} />
-                          </ActionIcon>
+                          <Text size="sm" c={f.last_fetched_at ? undefined : "dimmed"}>
+                            {relativeTime(f.last_fetched_at)}
+                          </Text>
                         </Tooltip>
-                        <Tooltip label="Edit">
-                          <ActionIcon size="sm" variant="subtle" onClick={() => setEditFeed(f)}>
-                            <IconEdit size={14} />
-                          </ActionIcon>
-                        </Tooltip>
-                        <Tooltip label="Delete">
-                          <ActionIcon size="sm" variant="subtle" color="red" onClick={() => confirmDelete(f)}>
-                            <IconTrash size={14} />
-                          </ActionIcon>
-                        </Tooltip>
-                      </>
-                    )}
-                  </Group>
-                </Table.Td>
-              </Table.Tr>
+                      </Table.Td>
+
+                      {/* Toggle */}
+                      <Table.Td>
+                        <Switch size="sm" checked={f.enabled} disabled={!canWrite} onChange={() => toggleEnabled(f)} />
+                      </Table.Td>
+
+                      {/* Actions */}
+                      <Table.Td>
+                        <Group gap={2} wrap="nowrap" justify="flex-end">
+                          {canWrite && (
+                            <>
+                              <Tooltip label="Sync now">
+                                <ActionIcon size="sm" variant="subtle" onClick={() => ingest(f)} loading={syncingId === f.id} disabled={!f.enabled}>
+                                  <IconRefresh size={14} />
+                                </ActionIcon>
+                              </Tooltip>
+                              <Tooltip label="Edit">
+                                <ActionIcon size="sm" variant="subtle" onClick={() => setEditFeed(f)}>
+                                  <IconEdit size={14} />
+                                </ActionIcon>
+                              </Tooltip>
+                              <Tooltip label="Delete">
+                                <ActionIcon size="sm" variant="subtle" color="red" onClick={() => confirmDelete(f)}>
+                                  <IconTrash size={14} />
+                                </ActionIcon>
+                              </Tooltip>
+                            </>
+                          )}
+                        </Group>
+                      </Table.Td>
+                    </Table.Tr>
+                  );
+                })}
+              </Fragment>
             );
           })}
         </Table.Tbody>

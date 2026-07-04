@@ -70,5 +70,131 @@
     "interval_seconds": 86400,
     "license": "MIT",
     "provider": "The Block List Project"
+  },
+  {
+    "id": "blocklistproject-ransomware",
+    "category_id": "ransomware",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/ransomware.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  },
+  {
+    "id": "blocklistproject-scam",
+    "category_id": "scam",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/scam.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  },
+  {
+    "id": "blocklistproject-crypto",
+    "category_id": "cryptojacking",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/crypto.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  },
+  {
+    "id": "blocklistproject-drugs",
+    "category_id": "drugs",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/drugs.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  },
+  {
+    "id": "blocklistproject-piracy",
+    "category_id": "piracy",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/piracy.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  },
+  {
+    "id": "blocklistproject-social",
+    "category_id": "social",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/social.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  },
+  {
+    "id": "blocklistproject-youtube",
+    "category_id": "streaming",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/youtube.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  },
+  {
+    "id": "ipfire-violence",
+    "category_id": "hate-violence",
+    "url": "https://dbl.ipfire.org/lists/violence/domains.txt",
+    "format": "domain-list",
+    "interval_seconds": 86400,
+    "license": "CC BY-SA 4.0",
+    "provider": "IPFire Project"
+  },
+  {
+    "id": "shadowwhisperer-shock",
+    "category_id": "hate-violence",
+    "url": "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Shock",
+    "format": "domain-list",
+    "interval_seconds": 86400,
+    "license": "Unlicense",
+    "provider": "ShadowWhisperer"
+  },
+  {
+    "id": "ipfire-games",
+    "category_id": "gaming",
+    "url": "https://dbl.ipfire.org/lists/games/domains.txt",
+    "format": "domain-list",
+    "interval_seconds": 86400,
+    "license": "CC BY-SA 4.0",
+    "provider": "IPFire Project"
+  },
+  {
+    "id": "ipfire-dating",
+    "category_id": "dating",
+    "url": "https://dbl.ipfire.org/lists/dating/domains.txt",
+    "format": "domain-list",
+    "interval_seconds": 86400,
+    "license": "CC BY-SA 4.0",
+    "provider": "IPFire Project"
+  },
+  {
+    "id": "shadowwhisperer-dating",
+    "category_id": "dating",
+    "url": "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Dating",
+    "format": "domain-list",
+    "interval_seconds": 86400,
+    "license": "Unlicense",
+    "provider": "ShadowWhisperer"
+  },
+  {
+    "id": "hagezi-doh-vpn-proxy-bypass",
+    "category_id": "proxies",
+    "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/doh-vpn-proxy-bypass-onlydomains.txt",
+    "format": "domain-list",
+    "interval_seconds": 86400,
+    "license": "GPL-3.0",
+    "provider": "HaGeZi"
+  },
+  {
+    "id": "shadowwhisperer-tunnels",
+    "category_id": "proxies",
+    "url": "https://raw.githubusercontent.com/ShadowWhisperer/BlockLists/master/Lists/Tunnels",
+    "format": "domain-list",
+    "interval_seconds": 86400,
+    "license": "Unlicense",
+    "provider": "ShadowWhisperer"
   }
 ]
