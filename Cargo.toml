@@ -8,7 +8,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-license = "Proprietary"
+license = "AGPL-3.0-only"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }

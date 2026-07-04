@@ -3,7 +3,11 @@
   <img alt="Mantis-DNS" src="docs/brand/logo-lockup-light.svg" height="60">
 </picture>
 
-Enterprise DNS filtering platform. See [`docs/`](docs/) for the full design and sprint plan.
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+[![CI](https://github.com/<your-owner>/mantis-dns/actions/workflows/ci.yml/badge.svg)](https://github.com/<your-owner>/mantis-dns/actions/workflows/ci.yml)
+
+Enterprise DNS filtering platform. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for
+a system overview and [`docs/`](docs/) for the full design and sprint plan.
 
 ## Quick start (Docker)
 
@@ -183,3 +187,21 @@ Sprint 1 exit-criteria check (Python signs a bundle, Rust verifies it):
 cd services/control && .venv/Scripts/python -m mantis_control.compiler.build_empty_bundle
 cd .. && cargo run -p mantis-bundle --example verify_bundle -- services/control/bundle.bin services/control/bundle_pubkey.bin
 ```
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for dev setup, the cross-language
+contract rules, and PR expectations. This project follows the
+[Contributor Covenant](CODE_OF_CONDUCT.md).
+
+## Security
+
+See [`SECURITY.md`](SECURITY.md) to report a vulnerability. Please don't file
+public issues for security problems.
+
+## License
+
+Mantis-DNS is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).
+AGPL requires that anyone who runs a modified version of this software as a
+network service also make their modified source available to that service's
+users — see the [license text](LICENSE) for the exact terms.

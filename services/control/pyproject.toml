@@ -3,6 +3,7 @@ name = "mantis-control"
 version = "0.1.0"
 description = "Mantis-DNS control plane: policy compiler, feed ingester, admin API"
 requires-python = ">=3.12"
+license = "AGPL-3.0-only"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
