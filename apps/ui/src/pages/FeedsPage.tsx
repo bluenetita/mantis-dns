@@ -365,6 +365,7 @@ export function FeedsPage() {
   const [bulkAddOpened, { open: openBulkAdd, close: closeBulkAdd }] = useDisclosure(false);
   const [editFeed, setEditFeed] = useState<Feed | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -498,6 +499,23 @@ export function FeedsPage() {
     setSelected(new Set());
   }
 
+  async function bulkSync() {
+    const ids = [...selected].filter((id) => feeds.find((f) => f.id === id)?.enabled);
+    if (ids.length === 0) {
+      notifications.show({ message: "No enabled feeds selected", color: "yellow" });
+      return;
+    }
+    setSyncingIds(new Set(ids));
+    const results = await Promise.allSettled(ids.map((id) => ingestNow.mutateAsync(id)));
+    setSyncingIds(new Set());
+    const ok = results.filter((r) => r.status === "fulfilled").length;
+    const failed = results.length - ok;
+    notifications.show({
+      message: `${ok} feed${ok === 1 ? "" : "s"} synced${failed ? `, ${failed} failed` : ""}`,
+      color: failed ? "yellow" : "green",
+    });
+  }
+
   function bulkDelete() {
     const ids = [...selected];
     modals.openConfirmModal({
@@ -627,6 +645,9 @@ export function FeedsPage() {
             {selected.size} feed{selected.size === 1 ? "" : "s"} selected
           </Text>
           <Group gap={6}>
+            <Button size="xs" variant="light" onClick={bulkSync} loading={syncingIds.size > 0} leftSection={<IconRefresh size={14} />}>
+              Sync now
+            </Button>
             <Button size="xs" variant="light" color="green" onClick={() => bulkSetEnabled(true)}>
               Enable
             </Button>
@@ -807,7 +828,7 @@ export function FeedsPage() {
                           {canWrite && (
                             <>
                               <Tooltip label="Sync now">
-                                <ActionIcon size="sm" variant="subtle" onClick={() => ingest(f)} loading={syncingId === f.id} disabled={!f.enabled}>
+                                <ActionIcon size="sm" variant="subtle" onClick={() => ingest(f)} loading={syncingId === f.id || syncingIds.has(f.id)} disabled={!f.enabled}>
                                   <IconRefresh size={14} />
                                 </ActionIcon>
                               </Tooltip>
