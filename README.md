@@ -2,6 +2,28 @@
 
 Enterprise DNS filtering platform. See [`docs/`](docs/) for the full design and sprint plan.
 
+## Quick start (Docker)
+
+Requires Docker + Docker Compose. No local Rust/Python/Node toolchain needed.
+
+```
+git clone <repo> && cd aegis-dns
+./scripts/bootstrap.sh        # Windows: .\scripts\bootstrap.ps1
+```
+
+This generates a `.env` with random secrets and runs `docker compose up --build -d`
+(Postgres, control plane, filter node, Kea DHCP, UI). Migrations and the initial
+admin user are applied automatically on first boot.
+
+- UI: http://localhost:5173
+- API: http://localhost:8000
+- Log in with `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env` (default `admin@aegis.local` / `change-me-now`), then rotate the password.
+
+To customize ports, tokens, or CORS origins, copy [`.env.example`](.env.example) to
+`.env` yourself and edit it before running `docker compose up --build`.
+Deploying with `AEGIS_ENV=production` requires every secret in `.env.example`
+to be set to a strong value — the control plane refuses to boot otherwise.
+
 ## Layout
 
 ```
