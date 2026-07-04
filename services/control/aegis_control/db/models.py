@@ -245,6 +245,15 @@ class DnsRecord(Base):
     data: Mapped[str] = mapped_column(String(1024))
     priority: Mapped[int | None] = mapped_column(nullable=True)  # MX / SRV
     enabled: Mapped[bool] = mapped_column(default=True)
+    # Set only for records created/updated via the DDNS bridge
+    # (dhcp_internal_routers._upsert_a_record) — the MAC of the DHCP client
+    # that currently "owns" this name. NULL means the record was created
+    # through the normal zone-editing API (or predates this column) and DDNS
+    # must never silently overwrite it. A non-NULL owner that doesn't match
+    # the requesting event's MAC also blocks the overwrite — otherwise any
+    # DHCP client could set its hostname option to an existing name (e.g.
+    # another host's "printer") and hijack that name's A record.
+    ddns_owner_mac: Mapped[str | None] = mapped_column(String(17), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 

@@ -88,7 +88,14 @@ def _upsert_client_entry(
         db.add(ClientEntry(tenant_id=tenant_id, ip=ip, hostname=hostname, last_seen=now))
 
 
-def _upsert_a_record(db: Session, scope: DhcpScope, hostname: str, ip: str) -> None:
+def _upsert_a_record(db: Session, scope: DhcpScope, hostname: str, ip: str, mac: str | None) -> None:
+    """Creates/updates the A record for `hostname`, refusing to clobber a
+    name owned by a *different* client. Without this, a DHCP client could set
+    its hostname option to an existing name (another host's "printer", or a
+    name an admin created by hand through the zone API) and hijack that
+    name's A record — every event here comes straight from a client-supplied
+    DHCP hostname, unauthenticated beyond the DHCP handshake itself.
+    """
     zone = db.get(DnsZone, scope.ddns_zone_id)
     if zone is None or not zone.enabled:
         return
@@ -107,8 +114,19 @@ def _upsert_a_record(db: Session, scope: DhcpScope, hostname: str, ip: str) -> N
     )
     now = _now()
     if existing:
+        if existing.ddns_owner_mac is None:
+            log.info("DDNS update for %s/%s ignored: record was not created via DDNS", zone.name, name)
+            return
+        if mac and existing.ddns_owner_mac != mac:
+            log.warning(
+                "DDNS update for %s/%s ignored: owned by a different client (%s != %s)",
+                zone.name, name, existing.ddns_owner_mac, mac,
+            )
+            return
         existing.data = ip
         existing.updated_at = now
+        if mac:
+            existing.ddns_owner_mac = mac
     else:
         db.add(DnsRecord(
             zone_id=zone.id,
@@ -117,11 +135,12 @@ def _upsert_a_record(db: Session, scope: DhcpScope, hostname: str, ip: str) -> N
             data=ip,
             ttl=scope.ddns_ttl_s,
             enabled=True,
+            ddns_owner_mac=mac,
         ))
     zone.updated_at = now  # signal filter to refresh zone
 
 
-def _delete_a_record(db: Session, scope: DhcpScope, hostname: str, ip: str) -> None:
+def _delete_a_record(db: Session, scope: DhcpScope, hostname: str, ip: str, mac: str | None) -> None:
     zone = db.get(DnsZone, scope.ddns_zone_id)
     if zone is None:
         return
@@ -129,16 +148,19 @@ def _delete_a_record(db: Session, scope: DhcpScope, hostname: str, ip: str) -> N
     if not name:
         return
 
-    deleted = (
-        db.query(DnsRecord)
-        .filter(
-            DnsRecord.zone_id == zone.id,
-            DnsRecord.name == name,
-            DnsRecord.record_type == "A",
-            DnsRecord.data == ip,
-        )
-        .delete()
-    )
+    filters = [
+        DnsRecord.zone_id == zone.id,
+        DnsRecord.name == name,
+        DnsRecord.record_type == "A",
+        DnsRecord.data == ip,
+    ]
+    if mac:
+        # Extra defense-in-depth alongside the ip match above: don't let a
+        # different client's expire/delete event remove a record it doesn't
+        # own even if it somehow supplied the matching ip.
+        filters.append(DnsRecord.ddns_owner_mac == mac)
+
+    deleted = db.query(DnsRecord).filter(*filters).delete()
     if deleted:
         zone.updated_at = _now()
 
@@ -173,10 +195,10 @@ def dhcp_event(
     if body.event == "add":
         _upsert_client_entry(db, scope.tenant_id, body.ip, hostname, mac)
         if scope.ddns_enabled and scope.ddns_zone_id and hostname:
-            _upsert_a_record(db, scope, hostname, body.ip)
+            _upsert_a_record(db, scope, hostname, body.ip, mac)
 
     elif body.event in ("expire", "delete"):
         if scope.ddns_enabled and scope.ddns_zone_id and hostname:
-            _delete_a_record(db, scope, hostname, body.ip)
+            _delete_a_record(db, scope, hostname, body.ip, mac)
 
     db.commit()

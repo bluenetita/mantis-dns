@@ -34,16 +34,18 @@ case "${CALLOUT_NAME}" in
     lease4_expire)
         ADDR="${LEASE4_ADDRESS:-}"
         HOSTNAME="${LEASE4_HOSTNAME:-}"
+        HWADDR="${LEASE4_HWADDR:-}"
         if [ -n "${HOSTNAME}" ] && [ -n "${ADDR}" ]; then
-            _post "{\"event\":\"expire\",\"ip\":\"${ADDR}\",\"hostname\":\"${HOSTNAME}\",\"mac\":\"\",\"subnet_id\":${LEASE4_SUBNET_ID:-0}}"
+            _post "{\"event\":\"expire\",\"ip\":\"${ADDR}\",\"hostname\":\"${HOSTNAME}\",\"mac\":\"${HWADDR}\",\"subnet_id\":${LEASE4_SUBNET_ID:-0}}"
         fi
         ;;
     lease4_recover)
         # Lease recovered from expired-reclaimed — same treatment as active
         ADDR="${LEASE4_ADDRESS:-}"
         HOSTNAME="${LEASE4_HOSTNAME:-}"
+        HWADDR="${LEASE4_HWADDR:-}"
         if [ -n "${HOSTNAME}" ] && [ -n "${ADDR}" ]; then
-            _post "{\"event\":\"add\",\"ip\":\"${ADDR}\",\"hostname\":\"${HOSTNAME}\",\"mac\":\"\",\"subnet_id\":${LEASE4_SUBNET_ID:-0}}"
+            _post "{\"event\":\"add\",\"ip\":\"${ADDR}\",\"hostname\":\"${HOSTNAME}\",\"mac\":\"${HWADDR}\",\"subnet_id\":${LEASE4_SUBNET_ID:-0}}"
         fi
         ;;
 esac
