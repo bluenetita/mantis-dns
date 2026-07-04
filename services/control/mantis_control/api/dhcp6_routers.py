@@ -377,7 +377,7 @@ def list_leases6(
 async def manual_push6(
     db: Session = Depends(get_db),
     user: Any = Depends(require_role("operator")),
-) -> dict:
+) -> dict[str, Any]:
     """Re-push the full Kea DHCPv6 config from DB."""
     err = await try_push6(db)
     if err:

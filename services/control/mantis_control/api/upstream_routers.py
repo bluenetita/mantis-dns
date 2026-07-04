@@ -23,7 +23,7 @@ import ssl
 import struct
 import time
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -324,7 +324,10 @@ def _dot_connect(
             cert = tls.getpeercert()
             subject = None
             if cert:
-                for field in cert.get("subject", []):
+                subject_fields = cast(
+                    "tuple[tuple[tuple[str, str], ...], ...]", cert.get("subject", ())
+                )
+                for field in subject_fields:
                     for key, val in field:
                         if key == "commonName":
                             subject = val

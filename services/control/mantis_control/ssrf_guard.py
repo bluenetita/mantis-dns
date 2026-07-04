@@ -90,7 +90,7 @@ def check_probe_target_safe(host: str) -> None:
             )
 
 
-def _safe_resolved_ips(host: str) -> list[tuple[int, str]]:
+def _safe_resolved_ips(host: str) -> list[tuple[socket.AddressFamily, str]]:
     """Resolves *host*, returning (family, ip) pairs that pass the blocklist.
 
     Raises ValueError if resolution fails or every address is blocked.

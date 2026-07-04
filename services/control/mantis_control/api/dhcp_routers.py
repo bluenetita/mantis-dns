@@ -538,7 +538,7 @@ def list_leases(
 async def manual_push(
     db: Session = Depends(get_db),
     user: Any = Depends(require_role("operator")),
-) -> dict:
+) -> dict[str, Any]:
     """Re-push the full Kea DHCPv4 config from DB. Use after Kea restarts."""
     err = await try_push(db)
     if err:
@@ -576,7 +576,9 @@ def dhcp_stats(
     if not scopes:
         return []
 
-    subnet_map = {s.kea_subnet_id: s for s in scopes}
+    subnet_map: dict[int, DhcpScope] = {
+        s.kea_subnet_id: s for s in scopes if s.kea_subnet_id is not None
+    }
     subnet_ids = list(subnet_map.keys())
 
     try:
@@ -595,7 +597,7 @@ def dhcp_stats(
         log.warning("Could not query lease4 for stats: %s", exc)
         rows = []
 
-    counts: dict[int, dict] = {r["subnet_id"]: dict(r) for r in rows}
+    counts: dict[int, dict[str, Any]] = {r["subnet_id"]: dict(r) for r in rows}
 
     result = []
     for sid, scope in subnet_map.items():
@@ -617,7 +619,7 @@ def dhcp_stats(
 
 
 @router.get("/kea/status")
-async def kea_status(user: Any = Depends(require_role("viewer"))) -> dict:
+async def kea_status(user: Any = Depends(require_role("viewer"))) -> dict[str, Any]:
     """Query Kea daemon status via Control Agent."""
     try:
         result = await kea_command("version-get", service=["dhcp4"])

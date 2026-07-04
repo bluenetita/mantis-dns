@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone
+from typing import Any, cast
 
 import httpx
 from sqlalchemy.orm import Session
@@ -60,8 +61,8 @@ def _assign_unique_kea_ids(scopes: list[DhcpScope]) -> dict[str, int]:
     return assigned
 
 
-def _build_option_data(scope: DhcpScope, filter_node_ip: str) -> list[dict]:
-    opts: list[dict] = []
+def _build_option_data(scope: DhcpScope, filter_node_ip: str) -> list[dict[str, Any]]:
+    opts: list[dict[str, Any]] = []
 
     if scope.router_ip:
         opts.append({"name": "routers", "data": scope.router_ip})
@@ -89,12 +90,12 @@ def _build_option_data(scope: DhcpScope, filter_node_ip: str) -> list[dict]:
     return opts
 
 
-def _build_reservations(scope: DhcpScope) -> list[dict]:
+def _build_reservations(scope: DhcpScope) -> list[dict[str, Any]]:
     result = []
     for sl in scope.static_leases:
         if not sl.enabled:
             continue
-        r: dict = {"hw-address": sl.mac_address, "ip-address": sl.ip_address}
+        r: dict[str, Any] = {"hw-address": sl.mac_address, "ip-address": sl.ip_address}
         if sl.hostname:
             r["hostname"] = sl.hostname
         if sl.client_id:
@@ -102,7 +103,7 @@ def _build_reservations(scope: DhcpScope) -> list[dict]:
         if sl.next_server:
             r["next-server"] = sl.next_server
 
-        per_res_opts: list[dict] = []
+        per_res_opts: list[dict[str, Any]] = []
         if sl.boot_filename:
             per_res_opts.append({"name": "boot-file-name", "data": sl.boot_filename})
         for o in sl.options:
@@ -116,7 +117,7 @@ def _build_reservations(scope: DhcpScope) -> list[dict]:
 
 # ── HA hooks block builder ─────────────────────────────────────────────────────
 
-def _build_ha_hooks(ha: "DhcpHaConfig") -> list[dict]:
+def _build_ha_hooks(ha: "DhcpHaConfig") -> list[dict[str, Any]]:
     """Return the two Kea hook library entries needed for HA (lease_cmds + ha)."""
     return [
         {"library": "/usr/lib/kea/hooks/libdhcp_lease_cmds.so"},
@@ -150,12 +151,12 @@ def _build_ha_hooks(ha: "DhcpHaConfig") -> list[dict]:
 
 # ── Config builder ─────────────────────────────────────────────────────────────
 
-def build_dhcp4_config(db: Session, filter_node_ip: str = "") -> dict:
+def build_dhcp4_config(db: Session, filter_node_ip: str = "") -> dict[str, Any]:
     """Build the full Kea Dhcp4 config dict from Mantis DB state."""
     scopes = db.query(DhcpScope).filter(DhcpScope.enabled.is_(True)).all()
 
     # Collect enabled HA configs across all tenants represented in active scopes
-    ha_hooks: list[dict] = []
+    ha_hooks: list[dict[str, Any]] = []
     if scopes:
         tenant_ids = list({s.tenant_id for s in scopes})
         ha_cfg = (
@@ -173,7 +174,7 @@ def build_dhcp4_config(db: Session, filter_node_ip: str = "") -> dict:
     subnet4 = []
     for scope in scopes:
         kea_id = kea_ids[scope.id]
-        subnet: dict = {
+        subnet: dict[str, Any] = {
             "id": kea_id,
             "subnet": scope.subnet,
             "pools": [{"pool": f"{scope.range_start} - {scope.range_end}"}],
@@ -236,10 +237,10 @@ def build_dhcp4_config(db: Session, filter_node_ip: str = "") -> dict:
 async def kea_command(
     command: str,
     service: list[str] | None = None,
-    arguments: dict | None = None,
-) -> dict:
+    arguments: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Send a command to the Kea Control Agent and return the first result."""
-    payload: dict = {"command": command}
+    payload: dict[str, Any] = {"command": command}
     if service is not None:
         payload["service"] = service
     if arguments is not None:
@@ -247,8 +248,8 @@ async def kea_command(
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(KEA_CTRL_URL, json=payload)
         resp.raise_for_status()
-        results = resp.json()
-        return results[0] if isinstance(results, list) else results
+        results: Any = resp.json()
+        return cast(dict[str, Any], results[0] if isinstance(results, list) else results)
 
 
 async def push_full_config(db: Session) -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -48,8 +49,8 @@ def _assign_unique_kea_ids6(scopes: list[DhcpScope6]) -> dict[str, int]:
     return assigned
 
 
-def _build_option_data6(scope: DhcpScope6, filter_node_ip: str) -> list[dict]:
-    opts: list[dict] = []
+def _build_option_data6(scope: DhcpScope6, filter_node_ip: str) -> list[dict[str, Any]]:
+    opts: list[dict[str, Any]] = []
     dns = list(scope.dns_servers or [])
     if not dns and filter_node_ip:
         dns = [filter_node_ip]
@@ -60,19 +61,19 @@ def _build_option_data6(scope: DhcpScope6, filter_node_ip: str) -> list[dict]:
     return opts
 
 
-def _build_reservations6(scope: DhcpScope6) -> list[dict]:
+def _build_reservations6(scope: DhcpScope6) -> list[dict[str, Any]]:
     result = []
     for r in scope.reservations6:
         if not r.enabled:
             continue
-        entry: dict = {"duid": r.duid, "ip-addresses": [r.ip_address]}
+        entry: dict[str, Any] = {"duid": r.duid, "ip-addresses": [r.ip_address]}
         if r.hostname:
             entry["hostname"] = r.hostname
         result.append(entry)
     return result
 
 
-def build_dhcp6_config(db: Session, filter_node_ip: str = "") -> dict:
+def build_dhcp6_config(db: Session, filter_node_ip: str = "") -> dict[str, Any]:
     """Build the full Kea Dhcp6 config dict from Mantis DB state."""
     scopes = db.query(DhcpScope6).filter(DhcpScope6.enabled.is_(True)).all()
 
@@ -90,7 +91,7 @@ def build_dhcp6_config(db: Session, filter_node_ip: str = "") -> dict:
                 "delegated-len": scope.pd_prefix_len,
             })
 
-        sn: dict = {
+        sn: dict[str, Any] = {
             "id": kea_id,
             "subnet": scope.subnet,
             "pools": pools,
