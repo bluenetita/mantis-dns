@@ -1,0 +1,116 @@
+name: Release images
+
+# Builds and publishes multi-arch (amd64+arm64) images to GHCR whenever a
+# `v*` tag is pushed. All four images are versioned together on purpose: the
+# bloom-filter hashing scheme is duplicated between services/filter and
+# services/control and must stay in lockstep (see README "Cross-language
+# contract"), so mixing tags across services is unsupported.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: control
+            context: .
+            dockerfile: services/control/Dockerfile.prod
+          - image: ui
+            context: apps/ui
+            dockerfile: apps/ui/Dockerfile.prod
+          - image: filter
+            context: .
+            dockerfile: services/filter/Dockerfile
+          - image: kea
+            context: services/kea
+            dockerfile: services/kea/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/aegis-dns-${{ matrix.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # Standalone edge-node package: aegis-filter as a static musl binary + a
+  # .deb (systemd unit, env file) for hosts that don't run Docker. See
+  # packaging/filter/.
+  filter-package:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            deb_arch: amd64
+          - target: aarch64-unknown-linux-musl
+            deb_arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build static binary
+        run: cross build --release -p aegis-filter --target ${{ matrix.target }}
+
+      - name: Install nfpm
+        run: |
+          curl -sSLo /tmp/nfpm.deb \
+            https://github.com/goreleaser/nfpm/releases/download/v2.40.0/nfpm_2.40.0_amd64.deb
+          sudo dpkg -i /tmp/nfpm.deb
+
+      - name: Package .deb
+        working-directory: packaging/filter
+        env:
+          VERSION: ${{ github.ref_name }}
+          ARCH: ${{ matrix.deb_arch }}
+          BIN_PATH: ${{ github.workspace }}/target/${{ matrix.target }}/release/aegis-filter
+        run: |
+          # nfpm doesn't accept a leading "v" in semver-strict mode.
+          export VERSION="${VERSION#v}"
+          nfpm package -f nfpm.yaml -p deb -t "aegis-filter_${VERSION}_${ARCH}.deb"
+
+      - name: Rename binary for release (arch-unique asset name)
+        run: cp target/${{ matrix.target }}/release/aegis-filter aegis-filter-${{ matrix.target }}
+
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            packaging/filter/*.deb
+            aegis-filter-${{ matrix.target }}

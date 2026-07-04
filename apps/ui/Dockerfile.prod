@@ -1,0 +1,21 @@
+FROM node:24-slim AS build
+WORKDIR /app
+
+# --legacy-peer-deps: openapi-typescript@7 peer-depends on TS ^5.x; this repo
+# is on TS 6 (dev-only codegen tool, not part of the runtime bundle — safe).
+COPY package.json package-lock.json ./
+RUN npm ci --legacy-peer-deps
+
+COPY . .
+# Baked in at build time (Vite inlines VITE_* at build, not runtime). Relative
+# path only — nginx below proxies it to the control plane, so the same image
+# works behind any hostname without a rebuild.
+ENV VITE_API_URL=/api/v1
+RUN npm run build
+
+FROM nginx:1.27-alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+
+ENV CONTROL_UPSTREAM=control:8000
+EXPOSE 80

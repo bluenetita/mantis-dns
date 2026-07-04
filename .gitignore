@@ -27,6 +27,10 @@ Thumbs.db
 .env.*
 !.env.example
 
+# Generated cloud-init output (embeds CORS/registry choices — regenerate via
+# scripts/render-cloud-init.sh, don't hand-edit or commit)
+/infra/cloud-init/user-data.yaml
+
 # Dev-generated bundle artifacts (services/control/aegis_control/compiler/build_empty_bundle.py)
 services/control/bundle.bin
 services/control/bundle_pubkey.bin

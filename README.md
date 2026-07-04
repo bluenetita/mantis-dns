@@ -24,6 +24,103 @@ To customize ports, tokens, or CORS origins, copy [`.env.example`](.env.example)
 Deploying with `AEGIS_ENV=production` requires every secret in `.env.example`
 to be set to a strong value — the control plane refuses to boot otherwise.
 
+## Production deploy
+
+All release artifacts are built and published by
+[`.github/workflows/release.yml`](.github/workflows/release.yml) on every
+`v*` tag. Pick the option that matches your environment:
+
+| Option | What you get | Use when |
+| --- | --- | --- |
+| `docker-compose.prod.yml` | All 5 services, pre-built GHCR images, one host | Single-node install, VM/bare metal with Docker |
+| `packaging/filter/*.deb` | Standalone `aegis-filter` systemd service, no Docker | Edge DNS node separate from the control plane host |
+| `charts/aegis-dns/` (Helm) | Control + UI on Kubernetes | Control plane needs to scale/run in an existing k8s cluster |
+| `infra/cloud-init/` | Self-installing all-in-one VM image | Handing someone a single cloud/VM template to launch |
+
+Kea (DHCP) and `aegis-filter` are intentionally never scheduled onto a k8s pod
+network: Kea needs `NET_ADMIN` and L2 broadcast/relay reachability, and filter
+nodes belong at the network edge. Run them via compose or the `.deb` and
+point them at the control plane's address (`CONTROL_URL`/`AEGIS_CTRL_URL`),
+regardless of where control/UI itself runs.
+
+### Docker Compose (single host)
+
+No clone or build required on the target host:
+
+```
+./scripts/bootstrap.sh --prod      # Windows: .\scripts\bootstrap.ps1 -Prod
+```
+
+This pulls images and runs [`docker-compose.prod.yml`](docker-compose.prod.yml)
+instead of building from source — no bind-mounted source, no Vite dev server
+(the UI is a static build served by nginx, which also reverse-proxies `/api/`
+to the control plane). Set `CORS_ALLOW_ORIGINS` in `.env` to your public UI
+origin(s) before starting; override `IMAGE_PREFIX`/`AEGIS_VERSION` if you
+publish to your own registry/fork.
+
+### Standalone filter node (no Docker)
+
+Each `v*` release attaches `aegis-filter_<version>_<amd64|arm64>.deb` (systemd
+unit + env file at `/etc/aegis-filter/aegis-filter.env`) and a raw static
+binary. See [`packaging/filter/`](packaging/filter/) for the unit file and
+nfpm config, or build/package it yourself:
+
+```
+cargo build --release -p aegis-filter --target x86_64-unknown-linux-musl
+BIN_PATH=target/x86_64-unknown-linux-musl/release/aegis-filter VERSION=0.1.0 \
+  nfpm package -f packaging/filter/nfpm.yaml -p deb -t .
+```
+
+```
+sudo dpkg -i aegis-filter_0.1.0_amd64.deb
+sudo $EDITOR /etc/aegis-filter/aegis-filter.env   # set CONTROL_URL, AEGIS_SERVICE_TOKEN
+sudo systemctl enable --now aegis-filter
+```
+
+### Kubernetes (control plane + UI)
+
+```
+helm dependency update charts/aegis-dns
+kubectl create secret generic aegis-dns-secrets \
+  --from-literal=AEGIS_INTERNAL_TOKEN=$(openssl rand -hex 32) \
+  --from-literal=AEGIS_SERVICE_TOKEN=$(openssl rand -hex 32) \
+  --from-literal=AEGIS_JWT_SECRET=$(openssl rand -hex 32) \
+  --from-literal=AEGIS_WEBHOOK_SECRET_KEY=$(openssl rand -hex 32) \
+  --from-literal=ADMIN_PASSWORD=$(openssl rand -hex 16)
+helm install aegis-dns charts/aegis-dns \
+  --set secrets.existingSecret=aegis-dns-secrets \
+  --set control.corsAllowOrigins=https://dns.example.com \
+  --set image.registry=ghcr.io/<your-owner>/aegis-dns
+```
+
+See [`charts/aegis-dns/values.yaml`](charts/aegis-dns/values.yaml) for the
+embedded-vs-external Postgres toggle and ingress options.
+
+### VM / cloud-init appliance (all-in-one)
+
+For handing someone a single template to launch on any cloud/hypervisor that
+accepts cloud-init user-data (AWS, Hetzner, DigitalOcean, Proxmox, ...).
+Render it first — the template embeds the current
+`docker-compose.prod.yml` and `.env.example` so there's nothing to keep in
+sync by hand:
+
+```
+./scripts/render-cloud-init.sh --cors https://dns.example.com
+# Windows: .\scripts\render-cloud-init.ps1 -Cors https://dns.example.com
+```
+
+This writes `infra/cloud-init/user-data.yaml` — paste its contents into the
+provider's user-data field when launching a Debian/Ubuntu VM. On first boot
+it installs Docker, generates fresh per-instance secrets (never baked into
+the template), and runs `docker compose -f docker-compose.prod.yml up -d`.
+The generated `ADMIN_PASSWORD` is only ever written to
+`/opt/aegis-dns/.env` on the instance — retrieve it via
+`grep ADMIN_ /opt/aegis-dns/.env` over SSH, not the provider's console log.
+
+This appliance runs everything (including Kea and the filter node) on one
+box — fine for evaluation or small deployments. For the filter node at the
+edge on separate hardware, use the `.deb` above instead.
+
 ## Layout
 
 ```

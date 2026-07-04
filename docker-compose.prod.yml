@@ -1,0 +1,141 @@
+# Production overlay: pulls published images instead of building from source,
+# and drops the dev conveniences (source mounts, Vite dev server, exposed
+# non-standard ports). Requires every secret in .env.example to be set to a
+# strong value — AEGIS_ENV=production makes the control plane refuse to boot
+# otherwise.
+#
+# Usage:
+#   IMAGE_PREFIX=ghcr.io/<you>/aegis-dns AEGIS_VERSION=v0.1.0 \
+#     docker compose -f docker-compose.prod.yml up -d
+#
+# Or bake IMAGE_PREFIX / AEGIS_VERSION into .env instead of passing them
+# inline. Images are published as <IMAGE_PREFIX>-<service>:<AEGIS_VERSION>
+# by .github/workflows/release.yml on every `v*` tag.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-aegis}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aegis}
+      - POSTGRES_DB=${POSTGRES_DB:-aegis}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aegis"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  control:
+    image: ${IMAGE_PREFIX:-ghcr.io/aegis-dns/aegis-dns}-control:${AEGIS_VERSION:-latest}
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AEGIS_ENV=production
+      - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis}@postgres:5432/${POSTGRES_DB:-aegis}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:?set to your UI origin(s), e.g. https://dns.example.com}
+      - KEA_CTRL_URL=http://kea:8080/
+      - KEA6_CTRL_URL=http://kea:8080/
+      - AEGIS_INTERNAL_TOKEN=${AEGIS_INTERNAL_TOKEN:?required}
+      - AEGIS_SERVICE_TOKEN=${AEGIS_SERVICE_TOKEN:?required}
+      - AEGIS_JWT_SECRET=${AEGIS_JWT_SECRET:?required}
+      - AEGIS_WEBHOOK_SECRET_KEY=${AEGIS_WEBHOOK_SECRET_KEY:?required}
+      - AEGIS_FILTER_NODE_IP=${AEGIS_FILTER_NODE_IP:-}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@aegis.local}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?required}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-aegis}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aegis}
+      - POSTGRES_DB=${POSTGRES_DB:-aegis}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kea:
+        condition: service_started
+
+  ui:
+    image: ${IMAGE_PREFIX:-ghcr.io/aegis-dns/aegis-dns}-ui:${AEGIS_VERSION:-latest}
+    ports:
+      - "80:80"
+    environment:
+      - CONTROL_UPSTREAM=control:8000
+    restart: unless-stopped
+    depends_on:
+      - control
+
+  filter:
+    image: ${IMAGE_PREFIX:-ghcr.io/aegis-dns/aegis-dns}-filter:${AEGIS_VERSION:-latest}
+    ports:
+      - "53:1053/udp"
+      - "53:1053/tcp"
+    environment:
+      - RUST_LOG=info
+      - CONTROL_URL=http://control:8000
+      - GROUP_ID=${GROUP_ID:-}
+      - DNS_BIND_ADDR=0.0.0.0:1053
+      - AEGIS_SERVICE_TOKEN=${AEGIS_SERVICE_TOKEN:?required}
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+    depends_on:
+      - control
+
+  kea:
+    image: ${IMAGE_PREFIX:-ghcr.io/aegis-dns/aegis-dns}-kea:${AEGIS_VERSION:-latest}
+    ports:
+      - "67:67/udp"
+      - "547:547/udp"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-aegis}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aegis}
+      - POSTGRES_DB=${POSTGRES_DB:-aegis}
+      - AEGIS_CTRL_URL=http://control:8000
+      - AEGIS_INTERNAL_TOKEN=${AEGIS_INTERNAL_TOKEN:?required}
+      - KEA_ROLE=primary
+      - KEA_PEER_URL=http://kea-secondary:8080/
+    restart: unless-stopped
+    volumes:
+      - kea-primary-run:/run/kea
+    depends_on:
+      postgres:
+        condition: service_healthy
+    cap_add:
+      - NET_ADMIN
+
+  kea-secondary:
+    image: ${IMAGE_PREFIX:-ghcr.io/aegis-dns/aegis-dns}-kea:${AEGIS_VERSION:-latest}
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-aegis}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aegis}
+      - POSTGRES_DB=${POSTGRES_DB:-aegis}
+      - AEGIS_CTRL_URL=http://control:8000
+      - AEGIS_INTERNAL_TOKEN=${AEGIS_INTERNAL_TOKEN:?required}
+      - KEA_ROLE=secondary
+      - KEA_PEER_URL=http://kea:8080/
+    restart: unless-stopped
+    volumes:
+      - kea-secondary-run:/run/kea
+    depends_on:
+      postgres:
+        condition: service_healthy
+    cap_add:
+      - NET_ADMIN
+    profiles:
+      - ha
+
+volumes:
+  pgdata:
+  kea-primary-run:
+  kea-secondary-run:

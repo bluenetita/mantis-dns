@@ -1,8 +1,22 @@
 #!/usr/bin/env bash
-# One-shot local install: generates a .env with real secrets (if missing)
-# and brings the whole stack up via docker compose.
+# One-shot install: generates a .env with real secrets (if missing) and
+# brings the stack up via docker compose.
+#
+# Dev mode (default): builds images from source, Vite dev server on :5173.
+# Prod mode (--prod):  pulls published GHCR images (docker-compose.prod.yml),
+#                       generates a strong ADMIN_PASSWORD too, sets
+#                       AEGIS_ENV=production. You must still set
+#                       CORS_ALLOW_ORIGINS (and IMAGE_PREFIX/AEGIS_VERSION if
+#                       not using the default registry) in .env yourself.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+PROD=0
+for arg in "$@"; do
+  case "$arg" in
+    --prod) PROD=1 ;;
+  esac
+done
 
 if [ -f .env ]; then
   echo ".env already exists — leaving it as-is. Delete it to regenerate secrets."
@@ -22,13 +36,31 @@ else
     -e "s/^AEGIS_WEBHOOK_SECRET_KEY=.*/AEGIS_WEBHOOK_SECRET_KEY=${AEGIS_WEBHOOK_SECRET_KEY}/" \
     -e "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=${POSTGRES_PASSWORD}/" \
     .env
+
+  if [ "$PROD" -eq 1 ]; then
+    ADMIN_PASSWORD=$(openssl rand -hex 16)
+    sed -i.bak \
+      -e "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=${ADMIN_PASSWORD}/" \
+      -e "s/^AEGIS_ENV=.*/AEGIS_ENV=production/" \
+      .env
+    echo "Secrets generated, including ADMIN_PASSWORD (shown once): ${ADMIN_PASSWORD}"
+    echo "Before starting: set CORS_ALLOW_ORIGINS in .env to your UI's public origin(s)."
+  else
+    echo "Secrets generated. ADMIN_PASSWORD is still 'change-me-now' — change it after first login."
+  fi
   rm -f .env.bak
-  echo "Secrets generated. ADMIN_PASSWORD is still 'change-me-now' — change it after first login."
 fi
 
-echo "Starting stack (docker compose up --build -d)..."
-docker compose up --build -d
-
-echo
-echo "Done. UI: http://localhost:5173  API: http://localhost:8000"
+if [ "$PROD" -eq 1 ]; then
+  echo "Pulling images and starting stack (docker compose -f docker-compose.prod.yml up -d)..."
+  docker compose -f docker-compose.prod.yml pull
+  docker compose -f docker-compose.prod.yml up -d
+  echo
+  echo "Done. UI: http://localhost/  API: http://localhost:8000"
+else
+  echo "Starting stack (docker compose up --build -d)..."
+  docker compose up --build -d
+  echo
+  echo "Done. UI: http://localhost:5173  API: http://localhost:8000"
+fi
 echo "Log in with ADMIN_EMAIL / ADMIN_PASSWORD from .env, then rotate the password."
