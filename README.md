@@ -43,6 +43,10 @@ All release artifacts are built and published by
 | `packaging/filter/*.deb` | Standalone `mantis-filter` systemd service, no Docker | Edge DNS node separate from the control plane host |
 | `charts/mantis-dns/` (Helm) | Control + UI on Kubernetes | Control plane needs to scale/run in an existing k8s cluster |
 | `infra/cloud-init/` | Self-installing all-in-one VM image | Handing someone a single cloud/VM template to launch |
+| `infra/lxc/install.sh` | Native (no Docker) control+UI install, one host | Proxmox LXC or any Debian 12 host you don't want to run Docker on |
+
+See [`docs/deploy-lxc.md`](docs/deploy-lxc.md) for Proxmox LXC-specific
+recipes, including running the filter node standalone in its own container.
 
 Kea (DHCP) and `mantis-filter` are intentionally never scheduled onto a k8s pod
 network: Kea needs `NET_ADMIN` and L2 broadcast/relay reachability, and filter
