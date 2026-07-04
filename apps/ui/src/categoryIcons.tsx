@@ -20,12 +20,11 @@ import {
   IconShieldLock,
   IconSwords,
   IconVirus,
-  type Icon,
   type IconProps,
 } from "@tabler/icons-react";
 import type { ForwardRefExoticComponent, RefAttributes } from "react";
 
-type TablerIcon = ForwardRefExoticComponent<IconProps & RefAttributes<Icon>>;
+type TablerIcon = ForwardRefExoticComponent<IconProps & RefAttributes<SVGSVGElement>>;
 
 const CATEGORY_ICONS: Record<string, TablerIcon> = {
   Virus: IconVirus,

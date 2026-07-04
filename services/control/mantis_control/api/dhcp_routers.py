@@ -10,7 +10,6 @@ Lease read queries go directly to Kea's `lease4` table (shared Postgres DB).
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime
 from ipaddress import ip_network
 from typing import Any
@@ -21,7 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from mantis_control.audit import write_audit_log
-from mantis_control.auth import check_tenant_access, get_current_user, require_role, user_tenant_filter
+from mantis_control.auth import check_tenant_access, require_role, user_tenant_filter
 from mantis_control.db.models import DhcpHaConfig, DhcpOption, DhcpRelayConfig, DhcpScope, DhcpStaticLease
 from mantis_control.db.session import get_db
 from mantis_control.dhcp.kea_config import kea_command, try_push

@@ -32,8 +32,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from mantis_control.audit import write_audit_log
 from mantis_control.auth import check_tenant_access, get_current_user, require_role, require_service_token
-from mantis_control.compiler.keys import KEY_ID, load_or_create_signing_key
-from mantis_control.compiler.signing import public_key_raw_bytes
+from mantis_control.compiler.keys import load_or_create_signing_key
 from mantis_control.db import models
 from mantis_control.db.session import get_db
 from mantis_control.ssrf_guard import check_probe_target_safe

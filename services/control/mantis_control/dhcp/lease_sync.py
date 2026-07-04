@@ -72,9 +72,6 @@ def sync_dhcp_leases(db: Session) -> int:
 
         ip = _bigint_to_ip(row["address"])
         hostname = row["hostname"] or None
-        # hwaddr is bytea in Postgres, returned as memoryview or bytes
-        hwaddr = bytes(row["hwaddr"]) if row["hwaddr"] else None
-        mac = _mac_fmt(hwaddr)
 
         entry = (
             db.query(ClientEntry)

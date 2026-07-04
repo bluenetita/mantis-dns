@@ -493,7 +493,7 @@ function ReservationsTab({ scopeOptions }: { scopeOptions: { value: string; labe
             placeholder="Select scope"
             data={scopeOptions}
             value={scopeId}
-            onChange={setScopeId}
+            onChange={(v) => setScopeId(v ?? "")}
             clearable
             style={{ minWidth: 220 }}
           />
@@ -593,7 +593,7 @@ function LeasesTab({ scopeOptions }: { scopeOptions: { value: string; label: str
             placeholder="Select scope"
             data={scopeOptions}
             value={scopeId}
-            onChange={setScopeId}
+            onChange={(v) => setScopeId(v ?? "")}
             clearable
             style={{ minWidth: 220 }}
           />
@@ -1099,7 +1099,7 @@ function Dhcpv6Tab({ tenantOptions }: { tenantOptions: { value: string; label: s
             <Title order={5}>IPv6 Reservations</Title>
             <Group>
               <Select size="xs" placeholder="Select scope" data={scope6Options} value={scopeId}
-                onChange={setScopeId} clearable style={{ minWidth: 220 }} />
+                onChange={(v) => setScopeId(v ?? "")} clearable style={{ minWidth: 220 }} />
               <Button size="xs" leftSection={<IconPlus size={14} />} disabled={!scopeId}
                 onClick={() => { setEditingRes(null); openResModal(); }}>
                 Add
@@ -1149,7 +1149,7 @@ function Dhcpv6Tab({ tenantOptions }: { tenantOptions: { value: string; label: s
             <Title order={5}>Active IPv6 Leases</Title>
             <Group>
               <Select size="xs" placeholder="Select scope" data={scope6Options} value={scopeId}
-                onChange={setScopeId} clearable style={{ minWidth: 220 }} />
+                onChange={(v) => setScopeId(v ?? "")} clearable style={{ minWidth: 220 }} />
               <Tooltip label="Refresh">
                 <ActionIcon variant="default" size="sm" loading={leasesFetching} onClick={() => refetchLeases()}>
                   <IconRefresh size={14} />

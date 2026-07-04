@@ -14,7 +14,6 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone
-from ipaddress import ip_network
 
 import httpx
 from sqlalchemy.orm import Session

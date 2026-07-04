@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import patch
 
 from mantis_control.db.models import Feed
-from mantis_control.feeds.ingest import MUST_NEVER_BLOCK, fetch_and_ingest, load_domains, _sanity_check
+from mantis_control.feeds.ingest import fetch_and_ingest, load_domains, _sanity_check
 from mantis_control.feeds.parsers import parse_domain_list, parse_hostfile
 
 

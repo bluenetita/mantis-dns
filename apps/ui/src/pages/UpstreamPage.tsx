@@ -686,7 +686,7 @@ function RoutesTab() {
         placeholder="Select a tenant to manage routes"
         data={tenants.map((t) => ({ value: t.id, label: t.name }))}
         value={tenantId}
-        onChange={setTenantId}
+        onChange={(v) => setTenantId(v ?? "")}
         clearable
       />
 

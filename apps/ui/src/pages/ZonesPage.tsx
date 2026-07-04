@@ -343,7 +343,7 @@ export function ZonesPage() {
           clearable
           data={typeOptions}
           value={typeFilter}
-          onChange={setTypeFilter}
+          onChange={(v) => setTypeFilter(v ?? "")}
           style={{ width: 180 }}
         />
         <Select
@@ -354,7 +354,7 @@ export function ZonesPage() {
             { value: "disabled", label: "Disabled" },
           ]}
           value={statusFilter}
-          onChange={setStatusFilter}
+          onChange={(v) => setStatusFilter(v ?? "")}
           style={{ width: 150 }}
         />
       </Group>
