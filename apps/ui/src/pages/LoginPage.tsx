@@ -1,9 +1,9 @@
 import { Alert, Button, Card, Center, PasswordInput, Stack, Text, TextInput, Title } from "@mantine/core";
 import { useForm } from "@mantine/form";
-import { IconShieldLock } from "@tabler/icons-react";
 import { useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { BrandMark } from "../components/BrandMark";
 
 export function LoginPage() {
   const { user, login, loading } = useAuth();
@@ -43,7 +43,7 @@ export function LoginPage() {
     <Center h="100vh">
       <Card withBorder padding="xl" w={380}>
         <Stack align="center" mb="md">
-          <IconShieldLock size={32} aria-hidden="true" />
+          <BrandMark size={40} />
           <Title order={3}>Mantis-DNS</Title>
           <Text size="sm" c="dimmed">
             Sign in to the control plane

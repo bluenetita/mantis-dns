@@ -1,4 +1,7 @@
-# Mantis-DNS
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/logo-lockup-dark.svg">
+  <img alt="Mantis-DNS" src="docs/brand/logo-lockup-light.svg" height="60">
+</picture>
 
 Enterprise DNS filtering platform. See [`docs/`](docs/) for the full design and sprint plan.
 

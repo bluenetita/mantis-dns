@@ -8,7 +8,6 @@ import {
   IconSettings,
   IconSun,
   IconMoon,
-  IconShieldLock,
   IconLogout,
   IconWorld,
   IconChartBar,
@@ -20,6 +19,7 @@ import {
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { type Role, useAuth } from "../auth/AuthContext";
+import { BrandMark } from "../components/BrandMark";
 
 const NAV_ITEMS: { to: string; labelKey: string; icon: typeof IconRss; minRole?: Role }[] = [
   { to: "/dashboard", labelKey: "nav.dashboard", icon: IconLayoutDashboard },
@@ -88,8 +88,8 @@ export function Shell() {
         <Group h="100%" px="md" justify="space-between">
           <Group>
             <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
-            <IconShieldLock size={22} aria-hidden="true" />
-            <Text fw={500}>Mantis-DNS</Text>
+            <BrandMark size={22} />
+            <Text fw={600}>Mantis-DNS</Text>
           </Group>
           <Group>
             <ActionIcon
