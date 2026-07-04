@@ -1,14 +1,14 @@
 #cloud-config
-# All-in-one Aegis-DNS appliance: Docker Engine + docker-compose.prod.yml on
+# All-in-one Mantis-DNS appliance: Docker Engine + docker-compose.prod.yml on
 # first boot. Rendered from this template by scripts/render-cloud-init.sh
 # (or .ps1) — don't paste this file as-is into a cloud provider's user-data
 # field, the placeholders below need substituting first.
 #
 # NOT included: Kea (DHCP) needs L2 broadcast/relay reachability that varies
-# per network, and aegis-filter is meant to run at the edge, often on a
+# per network, and mantis-filter is meant to run at the edge, often on a
 # separate host. Both are still deployed by docker-compose.prod.yml on this
 # same box for a genuinely all-in-one appliance, but if you're putting the
-# filter node elsewhere, edit /opt/aegis-dns/docker-compose.prod.yml after
+# filter node elsewhere, edit /opt/mantis-dns/docker-compose.prod.yml after
 # boot to drop the `filter`/`kea`/`kea-secondary` services.
 
 package_update: true
@@ -19,13 +19,13 @@ packages:
   - openssl
 
 write_files:
-  - path: /opt/aegis-dns/docker-compose.prod.yml
+  - path: /opt/mantis-dns/docker-compose.prod.yml
     owner: root:root
     permissions: "0644"
     content: |
       __COMPOSE_FILE_CONTENT__
 
-  - path: /opt/aegis-dns/.env
+  - path: /opt/mantis-dns/.env
     owner: root:root
     permissions: "0600"
     content: |
@@ -47,11 +47,11 @@ runcmd:
 
   # --- Per-instance secrets (generated fresh at first boot, never baked
   #     into this template — printed once below via the boot console log) ---
-  - cd /opt/aegis-dns
-  - sed -i "s/^AEGIS_INTERNAL_TOKEN=.*/AEGIS_INTERNAL_TOKEN=$(openssl rand -hex 32)/" .env
-  - sed -i "s/^AEGIS_SERVICE_TOKEN=.*/AEGIS_SERVICE_TOKEN=$(openssl rand -hex 32)/" .env
-  - sed -i "s/^AEGIS_JWT_SECRET=.*/AEGIS_JWT_SECRET=$(openssl rand -hex 32)/" .env
-  - sed -i "s/^AEGIS_WEBHOOK_SECRET_KEY=.*/AEGIS_WEBHOOK_SECRET_KEY=$(openssl rand -hex 32)/" .env
+  - cd /opt/mantis-dns
+  - sed -i "s/^MANTIS_INTERNAL_TOKEN=.*/MANTIS_INTERNAL_TOKEN=$(openssl rand -hex 32)/" .env
+  - sed -i "s/^MANTIS_SERVICE_TOKEN=.*/MANTIS_SERVICE_TOKEN=$(openssl rand -hex 32)/" .env
+  - sed -i "s/^MANTIS_JWT_SECRET=.*/MANTIS_JWT_SECRET=$(openssl rand -hex 32)/" .env
+  - sed -i "s/^MANTIS_WEBHOOK_SECRET_KEY=.*/MANTIS_WEBHOOK_SECRET_KEY=$(openssl rand -hex 32)/" .env
   - sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
   - sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=$(openssl rand -hex 16)/" .env
 
@@ -59,6 +59,6 @@ runcmd:
   - docker compose -f docker-compose.prod.yml up -d
 
   - >-
-    echo "Aegis-DNS: log in with ADMIN_EMAIL / ADMIN_PASSWORD from
-    /opt/aegis-dns/.env (run: grep ADMIN_ /opt/aegis-dns/.env), then
+    echo "Mantis-DNS: log in with ADMIN_EMAIL / ADMIN_PASSWORD from
+    /opt/mantis-dns/.env (run: grep ADMIN_ /opt/mantis-dns/.env), then
     rotate the password."

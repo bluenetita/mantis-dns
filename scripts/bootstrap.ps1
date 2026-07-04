@@ -4,8 +4,8 @@
 # Dev mode (default): builds images from source, Vite dev server on :5173.
 # Prod mode (-Prod):   pulls published GHCR images (docker-compose.prod.yml),
 #                       generates a strong ADMIN_PASSWORD too, sets
-#                       AEGIS_ENV=production. You must still set
-#                       CORS_ALLOW_ORIGINS (and IMAGE_PREFIX/AEGIS_VERSION if
+#                       MANTIS_ENV=production. You must still set
+#                       CORS_ALLOW_ORIGINS (and IMAGE_PREFIX/MANTIS_VERSION if
 #                       not using the default registry) in .env yourself.
 param(
     [switch]$Prod
@@ -27,17 +27,17 @@ if (Test-Path .env) {
     Copy-Item .env.example .env
 
     $replacements = @{
-        "AEGIS_INTERNAL_TOKEN"     = New-Secret
-        "AEGIS_SERVICE_TOKEN"      = New-Secret
-        "AEGIS_JWT_SECRET"         = New-Secret
-        "AEGIS_WEBHOOK_SECRET_KEY" = New-Secret
+        "MANTIS_INTERNAL_TOKEN"     = New-Secret
+        "MANTIS_SERVICE_TOKEN"      = New-Secret
+        "MANTIS_JWT_SECRET"         = New-Secret
+        "MANTIS_WEBHOOK_SECRET_KEY" = New-Secret
         "POSTGRES_PASSWORD"        = New-Secret 16
     }
 
     if ($Prod) {
         $adminPassword = New-Secret 16
         $replacements["ADMIN_PASSWORD"] = $adminPassword
-        $replacements["AEGIS_ENV"] = "production"
+        $replacements["MANTIS_ENV"] = "production"
     }
 
     $content = Get-Content .env

@@ -6,7 +6,7 @@ from sqlalchemy import pool
 
 from alembic import context
 
-from aegis_control.db.models import Base
+from mantis_control.db.models import Base
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -17,11 +17,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# DATABASE_URL (same env var aegis_control.db.session reads) overrides
+# DATABASE_URL (same env var mantis_control.db.session reads) overrides
 # alembic.ini's placeholder so both the app and migrations point at the
 # same database without duplicating config.
 _database_url = os.environ.get(
-    "DATABASE_URL", "postgresql+psycopg://aegis:aegis@localhost:5432/aegis"
+    "DATABASE_URL", "postgresql+psycopg://mantis:mantis@localhost:5432/mantis"
 )
 config.set_main_option("sqlalchemy.url", _database_url)
 

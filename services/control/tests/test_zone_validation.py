@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from aegis_control.api.zone_routers import RecordIn, RecordUpdate, ZoneCreate, ZoneUpdate
+from mantis_control.api.zone_routers import RecordIn, RecordUpdate, ZoneCreate, ZoneUpdate
 
 
 def test_record_in_accepts_normal_values():

@@ -1,6 +1,6 @@
 import pytest
 
-from aegis_control.ssrf_guard import (
+from mantis_control.ssrf_guard import (
     check_host_safe,
     check_probe_target_safe,
     check_url_safe,

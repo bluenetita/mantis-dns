@@ -1,0 +1,12 @@
+[package]
+name = "mantis-policy"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+mantis-bundle = { path = "../mantis-bundle" }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

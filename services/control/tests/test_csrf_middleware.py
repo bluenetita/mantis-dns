@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from aegis_control.auth import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, SESSION_COOKIE_NAME, CsrfMiddleware
+from mantis_control.auth import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, SESSION_COOKIE_NAME, CsrfMiddleware
 
 
 def _make_app() -> FastAPI:

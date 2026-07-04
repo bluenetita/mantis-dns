@@ -3,54 +3,6 @@
 version = 4
 
 [[package]]
-name = "aegis-bundle"
-version = "0.1.0"
-dependencies = [
- "aegis-policy",
- "anyhow",
- "arc-swap",
- "ed25519-dalek",
- "prost",
- "prost-build",
- "protox",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "aegis-filter"
-version = "0.1.0"
-dependencies = [
- "aegis-bundle",
- "aegis-policy",
- "anyhow",
- "arc-swap",
- "async-trait",
- "base64",
- "ed25519-dalek",
- "hex",
- "hickory-proto",
- "hickory-resolver",
- "ipnet",
- "prost",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "aegis-policy"
-version = "0.1.0"
-dependencies = [
- "aegis-bundle",
- "anyhow",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -901,6 +853,54 @@ name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
+
+[[package]]
+name = "mantis-bundle"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "ed25519-dalek",
+ "mantis-policy",
+ "prost",
+ "prost-build",
+ "protox",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "mantis-filter"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "base64",
+ "ed25519-dalek",
+ "hex",
+ "hickory-proto",
+ "hickory-resolver",
+ "ipnet",
+ "mantis-bundle",
+ "mantis-policy",
+ "prost",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "mantis-policy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "mantis-bundle",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "memchr"

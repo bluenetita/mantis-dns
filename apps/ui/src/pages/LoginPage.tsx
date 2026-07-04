@@ -44,7 +44,7 @@ export function LoginPage() {
       <Card withBorder padding="xl" w={380}>
         <Stack align="center" mb="md">
           <IconShieldLock size={32} aria-hidden="true" />
-          <Title order={3}>Aegis-DNS</Title>
+          <Title order={3}>Mantis-DNS</Title>
           <Text size="sm" c="dimmed">
             Sign in to the control plane
           </Text>
@@ -59,7 +59,7 @@ export function LoginPage() {
             )}
             <TextInput
               label="Email"
-              placeholder="admin@aegis.local"
+              placeholder="admin@mantis.local"
               required
               {...form.getInputProps("email")}
             />

@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package aegis.bundle.v1;
+package mantis.bundle.v1;
 
 // Signed, immutable policy bundle distributed from control plane to filter nodes.
 // Built by the Python policy compiler, verified and loaded by the Rust filter node.

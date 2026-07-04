@@ -1,0 +1,79 @@
+# Default values for mantis-dns.
+# Kea (DHCP) and mantis-filter (edge DNS) are NOT part of this chart — Kea
+# needs L2 broadcast/relay reachability and filter nodes belong at the
+# network edge, both a poor fit for typical pod-network isolation. Deploy
+# them via docker-compose.prod.yml or the standalone .deb (packaging/filter/)
+# instead, pointed at this chart's control Service.
+
+image:
+  # Published by .github/workflows/release.yml as
+  # ghcr.io/<owner>/mantis-dns-<control|ui>:<tag> — same "<prefix>-<service>"
+  # naming as IMAGE_PREFIX in docker-compose.prod.yml. Set this to
+  # ghcr.io/<your-owner>/mantis-dns.
+  registry: ghcr.io/mantis-dns/mantis-dns
+  tag: latest
+  pullPolicy: IfNotPresent
+
+control:
+  replicaCount: 1
+  port: 8000
+  service:
+    type: ClusterIP
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  # Public origin(s) of the UI — required, no dev default in cluster.
+  corsAllowOrigins: ""
+  adminEmail: admin@mantis.local
+  filterNodeIp: ""
+  groupId: ""
+
+ui:
+  replicaCount: 1
+  port: 80
+  service:
+    type: ClusterIP
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+ingress:
+  enabled: false
+  className: ""
+  host: dns.example.com
+  tls:
+    enabled: false
+    secretName: ""
+
+# Secret containing: MANTIS_INTERNAL_TOKEN, MANTIS_SERVICE_TOKEN,
+# MANTIS_JWT_SECRET, MANTIS_WEBHOOK_SECRET_KEY, ADMIN_PASSWORD.
+# Generate with, e.g.:
+#   kubectl create secret generic mantis-dns-secrets \
+#     --from-literal=MANTIS_INTERNAL_TOKEN=$(openssl rand -hex 32) \
+#     --from-literal=MANTIS_SERVICE_TOKEN=$(openssl rand -hex 32) \
+#     --from-literal=MANTIS_JWT_SECRET=$(openssl rand -hex 32) \
+#     --from-literal=MANTIS_WEBHOOK_SECRET_KEY=$(openssl rand -hex 32) \
+#     --from-literal=ADMIN_PASSWORD=$(openssl rand -hex 16)
+secrets:
+  existingSecret: ""
+
+# Embedded Postgres (Bitnami subchart) — fine for small/single-cluster
+# installs. For managed/external Postgres, set enabled: false and
+# database.url below.
+postgresql:
+  enabled: true
+  auth:
+    username: mantis
+    database: mantis
+    # Bitnami subchart auto-generates a password into
+    # {{ .Release.Name }}-postgresql / key "password" if left unset here.
+
+# Only used when postgresql.enabled is false.
+database:
+  url: ""

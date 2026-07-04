@@ -1,6 +1,6 @@
 # Enterprise DNS Filtering Platform — Design Document
 
-**Codename:** Aegis-DNS
+**Codename:** Mantis-DNS
 **Status:** Draft v1.2
 **Date:** 2026-07-01
 **Audience:** Platform engineering, network security, SRE
@@ -355,7 +355,7 @@ Many deployments are not a cloud Kubernetes fleet but a **single Proxmox VE host
 ┌─────────────────────── Proxmox VE host ───────────────────────┐
 │                                                                │
 │  ┌────────────────┐   ┌────────────────┐  ┌────────────────┐  │
-│  │ CT: openvpn     │   │ CT: aegis-      │  │ CT: aegis-     │  │
+│  │ CT: openvpn     │   │ CT: mantis-      │  │ CT: mantis-     │  │
 │  │ (server)        │   │ filter          │  │ control        │  │
 │  │ pushes DNS =    │──▶│ CoreDNS chain   │◀─│ Postgres-lite  │  │
 │  │ filter CT IP    │   │ + policy engine │  │ compiler +     │  │
@@ -367,28 +367,28 @@ Many deployments are not a cloud Kubernetes fleet but a **single Proxmox VE host
 └────────────────────────────────────────────────────────────────┘
 ```
 
-- Run components as **LXC containers** (lightweight, recommended) or VMs. Minimum: 2 CTs — `aegis-filter` + `aegis-control` — plus the existing `openvpn` CT/host.
-- OpenVPN pushes `dhcp-option DNS <aegis-filter IP>` on the tunnel bridge. Add `block-outside-dns` (Windows) and route DNS through the tunnel to stop leaks.
+- Run components as **LXC containers** (lightweight, recommended) or VMs. Minimum: 2 CTs — `mantis-filter` + `mantis-control` — plus the existing `openvpn` CT/host.
+- OpenVPN pushes `dhcp-option DNS <mantis-filter IP>` on the tunnel bridge. Add `block-outside-dns` (Windows) and route DNS through the tunnel to stop leaks.
 - No anycast, no external LB needed on a single host. The filter CT IP is the resolver.
 
 ### 17.2 Collapsed control plane
 
-- Postgres runs as a small instance in the `aegis-control` CT. PostgreSQL 17 is the only supported database; it provides the ARRAY type, JSONB audit columns, and the pg_isready healthcheck used by all deployment configurations.
+- Postgres runs as a small instance in the `mantis-control` CT. PostgreSQL 17 is the only supported database; it provides the ARRAY type, JSONB audit columns, and the pg_isready healthcheck used by all deployment configurations.
 - Bundle distribution degenerates to a **shared volume / bind-mount** (or local HTTP) between control and filter CTs. The signed-bundle + version-pointer mechanism is unchanged; the "bus" is just the filesystem. Filter still verifies signature before applying.
 - Object store, Kafka, ClickHouse are **optional** at this scale: query logs can land in Postgres or a local ClickHouse CT only if analytics are wanted.
 
 ### 17.3 HA on a PVE cluster (optional)
 
-- For a **multi-node PVE cluster**, run `aegis-filter` as a CT on each node and use **PVE HA + a shared VIP** (keepalived/VRRP CT, or pfSense/CARP if present) so VPN clients hit a floating DNS IP.
-- `aegis-control` runs as a single HA-managed CT (PVE HA restarts it on another node on failure); it is **not** on the DNS hot path, so brief downtime only delays policy updates.
+- For a **multi-node PVE cluster**, run `mantis-filter` as a CT on each node and use **PVE HA + a shared VIP** (keepalived/VRRP CT, or pfSense/CARP if present) so VPN clients hit a floating DNS IP.
+- `mantis-control` runs as a single HA-managed CT (PVE HA restarts it on another node on failure); it is **not** on the DNS hot path, so brief downtime only delays policy updates.
 - Postgres replication optional; for most PVE sites, PVE HA failover of one control CT + ZFS replication of its disk is sufficient.
 
 ### 17.4 Resourcing (rule of thumb, single host)
 
 | CT | vCPU | RAM | Disk | Notes |
 |----|------|-----|------|-------|
-| aegis-filter | 2 | 1–2 GB | 4 GB | bloom filters + cache in RAM |
-| aegis-control | 2 | 2–4 GB | 20 GB+ | Postgres + feeds + UI |
+| mantis-filter | 2 | 1–2 GB | 4 GB | bloom filters + cache in RAM |
+| mantis-control | 2 | 2–4 GB | 20 GB+ | Postgres + feeds + UI |
 | (optional) clickhouse | 2 | 4 GB | size to retention | only if analytics wanted |
 
 ### 17.5 Provisioning
@@ -615,7 +615,7 @@ UI-0 is the unlock and should land before piling on features — every feature b
 
 ## 20. SIEM Integration
 
-Enterprise DNS filtering produces the highest-fidelity network telemetry available: every DNS query from every device, timestamped to the microsecond, with a policy decision attached. That data belongs in the SIEM, not siloed in Aegis. This section defines the integration architecture.
+Enterprise DNS filtering produces the highest-fidelity network telemetry available: every DNS query from every device, timestamped to the microsecond, with a policy decision attached. That data belongs in the SIEM, not siloed in Mantis. This section defines the integration architecture.
 
 ---
 
@@ -695,7 +695,7 @@ Response (JSON):
 
 Response (CEF, `format=cef`):
 ```
-CEF:0|AegisDNS|aegis-filter|1.0|DNS_QUERY|DNS query event|3|
+CEF:0|MantisDNS|mantis-filter|1.0|DNS_QUERY|DNS query event|3|
   start=1719830400000000 
   src=10.8.1.47 shost=fabio-laptop 
   dhost=casino.com
@@ -746,23 +746,23 @@ Each POST to the webhook URL:
 ```
 POST <url>
 Content-Type: application/json          (or text/plain for CEF)
-X-Aegis-Signature: sha256=<hex>         HMAC-SHA256 of raw body, keyed on secret
-X-Aegis-Delivery-Id: <uuid>             idempotency key for this batch
-X-Aegis-Timestamp: <unix_ms>
+X-Mantis-Signature: sha256=<hex>         HMAC-SHA256 of raw body, keyed on secret
+X-Mantis-Delivery-Id: <uuid>             idempotency key for this batch
+X-Mantis-Timestamp: <unix_ms>
 
 { "events": [...], "delivery_id": "...", "cursor": "..." }
 ```
 
 The receiving SIEM must return 2xx within 10 s. On failure:
 - Retry with exponential backoff: 5 s, 30 s, 2 min, 10 min, 1 h.
-- After 6 consecutive failures, mark webhook `enabled=false` and emit an alert to the Aegis audit log + (if configured) an operator notification.
+- After 6 consecutive failures, mark webhook `enabled=false` and emit an alert to the Mantis audit log + (if configured) an operator notification.
 - Backlog is bounded: if the webhook is disabled or consistently failing, events are still available via the pull API.
 
 #### HMAC verification (receiver side)
 ```python
 import hmac, hashlib
 expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
-received = request.headers["X-Aegis-Signature"].removeprefix("sha256=")
+received = request.headers["X-Mantis-Signature"].removeprefix("sha256=")
 assert hmac.compare_digest(expected, received)
 ```
 
@@ -770,7 +770,7 @@ assert hmac.compare_digest(expected, received)
 
 ### 20.5 Format details — CEF mapping
 
-| CEF field | Aegis field | Notes |
+| CEF field | Mantis field | Notes |
 |---|---|---|
 | `start` | `occurred_at` | epoch milliseconds |
 | `src` | `client_ip` | |
@@ -1067,7 +1067,7 @@ For `strict` mode to work, the resolver must be configured to validate DNSSEC an
 
 The route table (§21.2) is the primary mechanism for split-horizon. Additionally:
 
-**RPZ (Response Policy Zone) integration:** upstream resolvers that support RPZ (Unbound, BIND) can be configured with threat-intelligence zone feeds directly at the resolver layer. The Aegis filter node can optionally forward to an RPZ-capable resolver for categories that benefit from real-time threat data (e.g. `threat-intel` category) while using a faster public resolver for general queries.
+**RPZ (Response Policy Zone) integration:** upstream resolvers that support RPZ (Unbound, BIND) can be configured with threat-intelligence zone feeds directly at the resolver layer. The Mantis filter node can optionally forward to an RPZ-capable resolver for categories that benefit from real-time threat data (e.g. `threat-intel` category) while using a faster public resolver for general queries.
 
 **DNS64:** for IPv6-only client segments that need to reach IPv4-only destinations, a pool member can be a DNS64-capable resolver. The filter node routes `AAAA` queries from the tenant's IPv6 group to the DNS64 pool, where the resolver synthesizes `64:ff9b::/96` prefixes. Configuration:
 
@@ -1126,12 +1126,12 @@ A new **Resolvers** section under Settings:
 
 ## 22. DHCP — ISC Kea Integration
 
-Aegis-DNS provides enterprise DHCP management by integrating **ISC Kea DHCP** as a co-located sidecar rather than re-implementing the DHCP protocol stack. Kea is the industry-standard successor to ISC dhcpd: it handles the full RFC 2131/8415 wire protocol, conflict detection, relay agent processing, HA failover, and DNSSEC — all battle-tested and actively maintained. Aegis contributes what Kea lacks: a multi-tenant control plane, a UI, DDNS bridging into Aegis DNS Zones, client registry integration, and tenant-aware policy enforcement.
+Mantis-DNS provides enterprise DHCP management by integrating **ISC Kea DHCP** as a co-located sidecar rather than re-implementing the DHCP protocol stack. Kea is the industry-standard successor to ISC dhcpd: it handles the full RFC 2131/8415 wire protocol, conflict detection, relay agent processing, HA failover, and DNSSEC — all battle-tested and actively maintained. Mantis contributes what Kea lacks: a multi-tenant control plane, a UI, DDNS bridging into Mantis DNS Zones, client registry integration, and tenant-aware policy enforcement.
 
 **The result is the same operational outcome as a custom engine with a fraction of the implementation risk:**
 
-- A new device plugs into the VPN or network → Kea assigns an IP → Aegis DDNS bridge writes A + PTR into DNS Zones → device appears in the client registry → visible in SIEM export — all without operator action.
-- Scope/reservation/option changes made in the Aegis UI are immediately pushed to Kea's running config via the Kea Control Agent REST API; no daemon restart required.
+- A new device plugs into the VPN or network → Kea assigns an IP → Mantis DDNS bridge writes A + PTR into DNS Zones → device appears in the client registry → visible in SIEM export — all without operator action.
+- Scope/reservation/option changes made in the Mantis UI are immediately pushed to Kea's running config via the Kea Control Agent REST API; no daemon restart required.
 
 ---
 
@@ -1139,10 +1139,10 @@ Aegis-DNS provides enterprise DHCP management by integrating **ISC Kea DHCP** as
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  Aegis node (Docker Compose)                                  │
+│  Mantis node (Docker Compose)                                  │
 │                                                               │
 │  ┌──────────────┐   REST      ┌─────────────────────────┐   │
-│  │  aegis-ctrl  │ ──────────► │  kea-ctrl-agent :8080   │   │
+│  │  mantis-ctrl  │ ──────────► │  kea-ctrl-agent :8080   │   │
 │  │  (FastAPI)   │             └────────┬────────────────┘   │
 │  │              │                      │ commands            │
 │  │  config-gen  │             ┌────────▼────────────────┐   │
@@ -1152,7 +1152,7 @@ Aegis-DNS provides enterprise DHCP management by integrating **ISC Kea DHCP** as
 │         │                              │ leases              │
 │  ┌──────▼───────────────────────────────▼────────────────┐  │
 │  │  PostgreSQL 17                                         │  │
-│  │  schema: aegis.*   +   kea.dhcp4_leases               │  │
+│  │  schema: mantis.*   +   kea.dhcp4_leases               │  │
 │  └────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -1160,20 +1160,20 @@ Aegis-DNS provides enterprise DHCP management by integrating **ISC Kea DHCP** as
 **Kea services:**
 - `kea-dhcp4` — DHCPv4 server (UDP port 67); Postgres lease backend.
 - `kea-dhcp6` — DHCPv6 server (UDP port 547); same Postgres instance, separate schema.
-- `kea-ctrl-agent` — HTTP REST API (port 8080) that forwards JSON commands to the running daemons; used by Aegis config-gen for live config updates without restart.
+- `kea-ctrl-agent` — HTTP REST API (port 8080) that forwards JSON commands to the running daemons; used by Mantis config-gen for live config updates without restart.
 
-**Aegis components added for Kea integration:**
-- **`KeaConfigGenerator`** — Python class that translates Aegis DB models to Kea JSON config and pushes it via the Control Agent API (`config-set`, `subnet4-add`, `subnet4-del`, `reservation-add`).
-- **`DhcpLeaseSyncLoop`** — asyncio background task; reads `kea.dhcp4_leases` (Kea's native Postgres table) every 30 s and upserts `ClientEntry` records in the Aegis client registry.
-- **`DhcpDdnsBridge`** — called by Kea's `run_script` hook on DHCP4_LEASE_COMMITTED / DHCP4_LEASE_EXPIRED; writes/deletes A + PTR records in Aegis DNS Zones via the internal records API.
+**Mantis components added for Kea integration:**
+- **`KeaConfigGenerator`** — Python class that translates Mantis DB models to Kea JSON config and pushes it via the Control Agent API (`config-set`, `subnet4-add`, `subnet4-del`, `reservation-add`).
+- **`DhcpLeaseSyncLoop`** — asyncio background task; reads `kea.dhcp4_leases` (Kea's native Postgres table) every 30 s and upserts `ClientEntry` records in the Mantis client registry.
+- **`DhcpDdnsBridge`** — called by Kea's `run_script` hook on DHCP4_LEASE_COMMITTED / DHCP4_LEASE_EXPIRED; writes/deletes A + PTR records in Mantis DNS Zones via the internal records API.
 
 ---
 
-### 22.2 Aegis data model (shadow tables)
+### 22.2 Mantis data model (shadow tables)
 
-Aegis maintains its own shadow of the DHCP configuration. This decouples the UI and API from Kea's JSON format, enables tenant isolation (Kea has no tenant concept), and allows offline planning before pushing to Kea.
+Mantis maintains its own shadow of the DHCP configuration. This decouples the UI and API from Kea's JSON format, enables tenant isolation (Kea has no tenant concept), and allows offline planning before pushing to Kea.
 
-**Kea's lease table (`kea.dhcp4_leases`) is authoritative for live lease state.** Aegis does not maintain a duplicate `DhcpLease` table; it reads directly from the Kea schema.
+**Kea's lease table (`kea.dhcp4_leases`) is authoritative for live lease state.** Mantis does not maintain a duplicate `DhcpLease` table; it reads directly from the Kea schema.
 
 #### DhcpScope
 
@@ -1251,7 +1251,7 @@ DhcpOption {
 
 **Automatically injected options** (generated by `KeaConfigGenerator`, not stored in `DhcpOption`):
 - Option 1 (subnet mask) — from subnet CIDR.
-- Option 6 (DNS servers) — Aegis filter node IPs for the scope's tenant.
+- Option 6 (DNS servers) — Mantis filter node IPs for the scope's tenant.
 - Option 15 (domain name) — from `scope.domain_name`.
 - Option 28 (broadcast) — from subnet CIDR.
 - Options 51/58/59 — lease/T1/T2 from scope timing fields.
@@ -1296,7 +1296,7 @@ DhcpHaConfig {
 
 ```
 Push flow (on any DhcpScope / DhcpStaticLease / DhcpOption change):
-  1. Build full kea-dhcp4.conf JSON from Aegis DB:
+  1. Build full kea-dhcp4.conf JSON from Mantis DB:
        subnet4 array    ← DhcpScope (enabled only)
        reservations     ← DhcpStaticLease per scope
        option-data      ← DhcpOption per scope/reservation + auto-injected options
@@ -1319,21 +1319,21 @@ Alternative (incremental, for single-scope changes):
 
 ### 22.4 DDNS bridge
 
-Kea's `run_script` hook library calls a script on each lease event. The script POSTs to the Aegis control-plane internal endpoint, which then calls the DNS Zones records API.
+Kea's `run_script` hook library calls a script on each lease event. The script POSTs to the Mantis control-plane internal endpoint, which then calls the DNS Zones records API.
 
 ```
 Kea hook config (generated):
   "hooks-libraries": [{
     "library": "/usr/lib/kea/hooks/libdhcp_run_script.so",
     "parameters": {
-      "name": "/etc/kea/aegis-ddns-bridge.sh",
+      "name": "/etc/kea/mantis-ddns-bridge.sh",
       "sync": false
     }
   }]
 
-aegis-ddns-bridge.sh:
-  curl -s -X POST http://aegis-ctrl:8000/api/v1/internal/dhcp-event \
-       -H "Authorization: Bearer ${AEGIS_INTERNAL_TOKEN}" \
+mantis-ddns-bridge.sh:
+  curl -s -X POST http://mantis-ctrl:8000/api/v1/internal/dhcp-event \
+       -H "Authorization: Bearer ${MANTIS_INTERNAL_TOKEN}" \
        -H "Content-Type: application/json" \
        -d "{\"event\":\"${KEA_LEASE4_TYPE}\", \"ip\":\"${KEA_LEASE4_ADDRESS}\",
             \"mac\":\"${KEA_LEASE4_HWADDR}\", \"hostname\":\"${KEA_LEASE4_HOSTNAME}\"}"
@@ -1375,17 +1375,17 @@ Kea's built-in HA hook (`libdhcp_ha.so`) handles failover without VRRP:
 | `load-balancing` | Each peer owns roughly half the address range; failover is peer-triggered. |
 | `passive-backup` | Primary active; backup receives lease updates but never takes over autonomously. |
 
-Aegis generates the Kea HA config section from `DhcpHaConfig` and pushes it via `config-set`. No keepalived/VRRP configuration is required.
+Mantis generates the Kea HA config section from `DhcpHaConfig` and pushes it via `config-set`. No keepalived/VRRP configuration is required.
 
 ---
 
 ### 22.7 Option 82 / relay
 
-Kea handles relay agent (giaddr) processing natively. Aegis models relay configuration as `DhcpRelayConfig` rows and translates them to:
+Kea handles relay agent (giaddr) processing natively. Mantis models relay configuration as `DhcpRelayConfig` rows and translates them to:
 - `relay.ip-addresses` array in each subnet4 config (giaddr whitelist).
 - Kea `client-class` expressions for circuit-id / remote-id routing (option 82 sub-options).
 
-Unknown giaddr → Kea discards; `run_script` logs `DhcpRelayUnknownAgentEvent` to Aegis audit log.
+Unknown giaddr → Kea discards; `run_script` logs `DhcpRelayUnknownAgentEvent` to Mantis audit log.
 
 ---
 
@@ -1405,12 +1405,12 @@ PXE options are configured as `DhcpOption` rows (option code 66/67/17) at scope 
 
 ### 22.9 DHCPv6
 
-`kea-dhcp6` runs as a separate Docker Compose service alongside `kea-dhcp4`, sharing the same Postgres instance (separate Kea schema). Aegis shadow tables:
+`kea-dhcp6` runs as a separate Docker Compose service alongside `kea-dhcp4`, sharing the same Postgres instance (separate Kea schema). Mantis shadow tables:
 
 - `DhcpV6Scope` — maps to Kea `subnet6`; CIDR `/48`–`/128`, IA_NA address range, IA_PD prefix pool.
 - `DhcpV6StaticLease` — Kea DHCPv6 reservation (DUID-based).
 
-DDNS bridge: same `aegis-ddns-bridge.sh` script handles `DHCP6_LEASE_COMMITTED` events → AAAA + `ip6.arpa` PTR records via Aegis DNS Zones API.
+DDNS bridge: same `mantis-ddns-bridge.sh` script handles `DHCP6_LEASE_COMMITTED` events → AAAA + `ip6.arpa` PTR records via Mantis DNS Zones API.
 
 ---
 
@@ -1420,7 +1420,7 @@ A new **DHCP** section in the left nav:
 
 **Scopes** — table (subnet, range, utilization bar, DDNS badge, last-pushed); Add/Edit modal with CIDR validator, range picker, lease timing, DDNS zone selector, relay IPs; scope detail opens Options and Static leases sub-tables.
 
-**Leases** — live read from `kea.dhcp4_leases` via Aegis proxy API; state badge; filters by scope/state/MAC/hostname/expiry; "Convert to reservation" one-click; bulk delete-expired; CSV export; utilization gauge per scope (green <75%, amber 75–90%, red >90%).
+**Leases** — live read from `kea.dhcp4_leases` via Mantis proxy API; state badge; filters by scope/state/MAC/hostname/expiry; "Convert to reservation" one-click; bulk delete-expired; CSV export; utilization gauge per scope (green <75%, amber 75–90%, red >90%).
 
 **Reservations** — MAC/IP/hostname table; bulk CSV import; inline conflict detection (red badge if IP has active dynamic lease for a different MAC).
 
@@ -1432,26 +1432,26 @@ A new **DHCP** section in the left nav:
 
 ### 22.11 Observability
 
-Kea exposes statistics via the `stat_cmds` hook and its Prometheus exporter (Stork agent or `kea-exporter`). Aegis augments with tenant-scoped metrics:
+Kea exposes statistics via the `stat_cmds` hook and its Prometheus exporter (Stork agent or `kea-exporter`). Mantis augments with tenant-scoped metrics:
 
 | Source | Metric / Event |
 |---|---|
 | Kea stat_cmds | `pkt4-discover-received`, `pkt4-offer-sent`, `pkt4-ack-sent`, `pkt4-nak-sent` per subnet |
 | Kea stat_cmds | `declined-addresses`, `reclaimed-declined-addresses` per subnet |
-| Aegis lease sync | `dhcp_leases_active{scope_id}`, `dhcp_pool_utilization_pct{scope_id}` |
-| Aegis DDNS bridge | `dhcp_ddns_updates_total{scope_id, action, status}` |
-| Aegis | `DhcpPoolExhaustedEvent` — alert at 90% pool utilization |
-| Aegis audit log | Every config push, reservation add/del, HA state transition |
+| Mantis lease sync | `dhcp_leases_active{scope_id}`, `dhcp_pool_utilization_pct{scope_id}` |
+| Mantis DDNS bridge | `dhcp_ddns_updates_total{scope_id, action, status}` |
+| Mantis | `DhcpPoolExhaustedEvent` — alert at 90% pool utilization |
+| Mantis audit log | Every config push, reservation add/del, HA state transition |
 | Kea run_script | `DhcpRelayUnknownAgentEvent` logged on unrecognised giaddr |
 
 ---
 
 ### 22.13 Security
 
-- **Rogue DHCP prevention**: Aegis does not prevent rogue servers — that is a network-layer concern (DHCP snooping on managed switches). However, Aegis logs `DhcpUnknownServerEvent` if it receives a DHCP reply packet (not a request) on its listening interface, which may indicate a rogue server.
+- **Rogue DHCP prevention**: Mantis does not prevent rogue servers — that is a network-layer concern (DHCP snooping on managed switches). However, Mantis logs `DhcpUnknownServerEvent` if it receives a DHCP reply packet (not a request) on its listening interface, which may indicate a rogue server.
 - **Relay agent authentication**: giaddr whitelist validation (§22.5) prevents option 82 injection from untrusted relays.
 - **DDNS authentication**: TSIG keys are per-tenant, stored encrypted (same mechanism as §20.4 webhook secrets), never exposed in plaintext via the API.
 - **Lease data in audit log**: every DHCPACK, DHCPNAK, and DHCPRELEASE is appended to the audit log with actor=`dhcp-engine`, enabling forensic reconstruction of "who had IP 10.8.1.47 at 14:32 UTC on 2026-06-01".
-- **PXE security**: TFTP server address is operator-configured; Aegis does not run a TFTP server itself, only injects the option. UEFI HTTP boot URLs must be HTTPS.
+- **PXE security**: TFTP server address is operator-configured; Mantis does not run a TFTP server itself, only injects the option. UEFI HTTP boot URLs must be HTTPS.
 
 ---

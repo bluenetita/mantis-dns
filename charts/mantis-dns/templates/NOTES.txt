@@ -1,0 +1,14 @@
+Mantis-DNS control plane deployed.
+
+UI:      {{ include "mantis-dns.fullname" . }}-ui.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.ui.port }}
+Control: {{ include "mantis-dns.fullname" . }}-control.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.control.port }}
+{{- if .Values.ingress.enabled }}
+Ingress: {{ if .Values.ingress.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.host }}
+{{- end }}
+
+Remember: Kea (DHCP) and mantis-filter (edge DNS) are deployed separately —
+see README "Production deploy". Point them at the control Service above via
+MANTIS_CTRL_URL / CONTROL_URL.
+
+Log in with ADMIN_EMAIL / the ADMIN_PASSWORD from secret
+"{{ .Values.secrets.existingSecret }}", then rotate it.

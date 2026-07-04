@@ -7,7 +7,7 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$Cors,
-    [string]$ImagePrefix = "ghcr.io/aegis-dns/aegis-dns",
+    [string]$ImagePrefix = "ghcr.io/mantis-dns/mantis-dns",
     [string]$Version = "latest",
     [string]$Output = "infra/cloud-init/user-data.yaml"
 )
@@ -19,11 +19,11 @@ $composeLines = Get-Content "docker-compose.prod.yml"
 
 $envLines = (Get-Content ".env.example") | ForEach-Object {
     if ($_ -match "^CORS_ALLOW_ORIGINS=") { "CORS_ALLOW_ORIGINS=$Cors" }
-    elseif ($_ -match "^AEGIS_ENV=") { "AEGIS_ENV=production" }
+    elseif ($_ -match "^MANTIS_ENV=") { "MANTIS_ENV=production" }
     else { $_ }
 }
 $envLines += "IMAGE_PREFIX=$ImagePrefix"
-$envLines += "AEGIS_VERSION=$Version"
+$envLines += "MANTIS_VERSION=$Version"
 
 function Splice-Marker {
     param([string[]]$Lines, [string[]]$Content, [string]$Marker)

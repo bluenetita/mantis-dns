@@ -14,8 +14,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from aegis_control.api.dhcp_internal_routers import _delete_a_record, _upsert_a_record
-from aegis_control.db.models import Base, DnsRecord, DnsZone
+from mantis_control.api.dhcp_internal_routers import _delete_a_record, _upsert_a_record
+from mantis_control.db.models import Base, DnsRecord, DnsZone
 
 MAC_A = "aa:bb:cc:dd:ee:01"
 MAC_B = "aa:bb:cc:dd:ee:02"

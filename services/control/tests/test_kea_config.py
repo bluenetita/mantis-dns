@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from aegis_control.dhcp import kea_config, kea_config6
+from mantis_control.dhcp import kea_config, kea_config6
 
 
 def test_assign_unique_kea_ids_resolves_hash_collision(monkeypatch):

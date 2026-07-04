@@ -28,7 +28,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
       - run: ruff check .
-      - run: mypy aegis_control
+      - run: mypy mantis_control
       - run: pytest
 
   ui:

@@ -2,9 +2,9 @@ import httpx
 import pytest
 from unittest.mock import patch
 
-from aegis_control.db.models import Feed
-from aegis_control.feeds.ingest import MUST_NEVER_BLOCK, fetch_and_ingest, load_domains, _sanity_check
-from aegis_control.feeds.parsers import parse_domain_list, parse_hostfile
+from mantis_control.db.models import Feed
+from mantis_control.feeds.ingest import MUST_NEVER_BLOCK, fetch_and_ingest, load_domains, _sanity_check
+from mantis_control.feeds.parsers import parse_domain_list, parse_hostfile
 
 
 def test_parse_hostfile_basic():
@@ -64,7 +64,7 @@ async def test_fetch_and_ingest_updates_and_stores(tmp_path):
     feed = Feed(id="test-feed", category_id="malware", url="https://example.test/feed", format="hostfile")
 
     with patch(
-        "aegis_control.feeds.ingest.resolve_pinned_url",
+        "mantis_control.feeds.ingest.resolve_pinned_url",
         return_value=(feed.url, "example.test"),
     ):
         async with httpx.AsyncClient(transport=transport) as client:
@@ -85,7 +85,7 @@ async def test_fetch_and_ingest_rejects_poisoned_feed(tmp_path):
     feed = Feed(id="test-feed", category_id="malware", url="https://example.test/feed", format="hostfile")
 
     with patch(
-        "aegis_control.feeds.ingest.resolve_pinned_url",
+        "mantis_control.feeds.ingest.resolve_pinned_url",
         return_value=(feed.url, "example.test"),
     ):
         async with httpx.AsyncClient(transport=transport) as client:
@@ -112,7 +112,7 @@ async def test_fetch_and_ingest_unchanged_on_304(tmp_path):
     )
 
     with patch(
-        "aegis_control.feeds.ingest.resolve_pinned_url",
+        "mantis_control.feeds.ingest.resolve_pinned_url",
         return_value=(feed.url, "example.test"),
     ):
         async with httpx.AsyncClient(transport=transport) as client:

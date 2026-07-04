@@ -2,16 +2,16 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      - POSTGRES_USER=${POSTGRES_USER:-aegis}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aegis}
-      - POSTGRES_DB=${POSTGRES_DB:-aegis}
+      - POSTGRES_USER=${POSTGRES_USER:-mantis}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mantis}
+      - POSTGRES_DB=${POSTGRES_DB:-mantis}
     # No host port publish — only reached by other containers on the compose
     # network (service name `postgres`). Use `docker compose exec postgres
     # psql ...` for local inspection instead of exposing 5432 to the host.
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aegis"]
+      test: ["CMD-SHELL", "pg_isready -U mantis"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -26,18 +26,18 @@ services:
       - ./services/control:/app
     environment:
       - PYTHONUNBUFFERED=1
-      - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis}@postgres:5432/${POSTGRES_DB:-aegis}
+      - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-mantis}:${POSTGRES_PASSWORD:-mantis}@postgres:5432/${POSTGRES_DB:-mantis}
       - CORS_ALLOW_ORIGINS=http://localhost:5173,http://localhost:5174,http://localhost:59144
       - KEA_CTRL_URL=http://kea:8080/
       - KEA6_CTRL_URL=http://kea:8080/
-      - AEGIS_INTERNAL_TOKEN=${AEGIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
-      - AEGIS_SERVICE_TOKEN=${AEGIS_SERVICE_TOKEN:-}
-      - AEGIS_FILTER_NODE_IP=${AEGIS_FILTER_NODE_IP:-}
+      - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
+      - MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN:-}
+      - MANTIS_FILTER_NODE_IP=${MANTIS_FILTER_NODE_IP:-}
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_USER=${POSTGRES_USER:-aegis}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aegis}
-      - POSTGRES_DB=${POSTGRES_DB:-aegis}
+      - POSTGRES_USER=${POSTGRES_USER:-mantis}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mantis}
+      - POSTGRES_DB=${POSTGRES_DB:-mantis}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -69,7 +69,7 @@ services:
       - CONTROL_URL=http://control:8000
       - GROUP_ID=${GROUP_ID:-}
       - DNS_BIND_ADDR=0.0.0.0:1053
-      - AEGIS_SERVICE_TOKEN=${AEGIS_SERVICE_TOKEN:-}
+      - MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN:-}
     restart: unless-stopped
     deploy:
       resources:
@@ -91,11 +91,11 @@ services:
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_USER=${POSTGRES_USER:-aegis}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aegis}
-      - POSTGRES_DB=${POSTGRES_DB:-aegis}
-      - AEGIS_CTRL_URL=http://control:8000
-      - AEGIS_INTERNAL_TOKEN=${AEGIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
+      - POSTGRES_USER=${POSTGRES_USER:-mantis}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mantis}
+      - POSTGRES_DB=${POSTGRES_DB:-mantis}
+      - MANTIS_CTRL_URL=http://control:8000
+      - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
       - KEA_ROLE=primary
       - KEA_PEER_URL=http://kea-secondary:8080/
     restart: unless-stopped
@@ -116,11 +116,11 @@ services:
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_USER=${POSTGRES_USER:-aegis}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aegis}
-      - POSTGRES_DB=${POSTGRES_DB:-aegis}
-      - AEGIS_CTRL_URL=http://control:8000
-      - AEGIS_INTERNAL_TOKEN=${AEGIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
+      - POSTGRES_USER=${POSTGRES_USER:-mantis}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mantis}
+      - POSTGRES_DB=${POSTGRES_DB:-mantis}
+      - MANTIS_CTRL_URL=http://control:8000
+      - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
       - KEA_ROLE=secondary
       - KEA_PEER_URL=http://kea:8080/
     volumes:

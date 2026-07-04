@@ -6,9 +6,9 @@ rm -f /run/kea/*.pid
 
 PG_HOST="${POSTGRES_HOST:-postgres}"
 PG_PORT="${POSTGRES_PORT:-5432}"
-PG_USER="${POSTGRES_USER:-aegis}"
-PG_PASS="${POSTGRES_PASSWORD:-aegis}"
-PG_DB="${POSTGRES_DB:-aegis}"
+PG_USER="${POSTGRES_USER:-mantis}"
+PG_PASS="${POSTGRES_PASSWORD:-mantis}"
+PG_DB="${POSTGRES_DB:-mantis}"
 KEA_ROLE="${KEA_ROLE:-primary}"
 
 echo "Waiting for PostgreSQL at ${PG_HOST}:${PG_PORT}..."
@@ -35,9 +35,9 @@ fi
 # Resolve run_script hook library path (varies by arch / Kea version).
 RUN_SCRIPT_LIB=$(find /usr/lib -name 'libdhcp_run_script.so' 2>/dev/null | head -1)
 
-if [ -n "$RUN_SCRIPT_LIB" ] && [ -f /usr/local/bin/aegis-ddns-bridge.sh ]; then
+if [ -n "$RUN_SCRIPT_LIB" ] && [ -f /usr/local/bin/mantis-ddns-bridge.sh ]; then
     echo "run_script hook found at ${RUN_SCRIPT_LIB} — DDNS bridge active."
-    HOOKS_JSON="[{\"library\":\"${RUN_SCRIPT_LIB}\",\"parameters\":{\"name\":\"/usr/local/bin/aegis-ddns-bridge.sh\",\"sync\":false}}]"
+    HOOKS_JSON="[{\"library\":\"${RUN_SCRIPT_LIB}\",\"parameters\":{\"name\":\"/usr/local/bin/mantis-ddns-bridge.sh\",\"sync\":false}}]"
 else
     echo "run_script hook not found — DDNS bridge disabled."
     HOOKS_JSON="[]"

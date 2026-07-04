@@ -1,7 +1,7 @@
 [project]
-name = "aegis-control"
+name = "mantis-control"
 version = "0.1.0"
-description = "Aegis-DNS control plane: policy compiler, feed ingester, admin API"
+description = "Mantis-DNS control plane: policy compiler, feed ingester, admin API"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
@@ -33,7 +33,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["aegis_control*"]
+include = ["mantis_control*"]
 
 [tool.ruff]
 line-length = 100
@@ -44,7 +44,7 @@ python_version = "3.12"
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["aegis_control.gen.*"]
+module = ["mantis_control.gen.*"]
 ignore_errors = true
 
 [[tool.mypy.overrides]]

@@ -13,8 +13,8 @@ function readCookie(name: string): string | null {
  * mutating request must echo it back as a header so the server can confirm
  * the request originated from JS running on our own origin. */
 function csrfHeaders(): Record<string, string> {
-  const csrf = readCookie("aegis_csrf");
-  return csrf ? { "X-Aegis-CSRF-Token": csrf } : {};
+  const csrf = readCookie("mantis_csrf");
+  return csrf ? { "X-Mantis-CSRF-Token": csrf } : {};
 }
 
 function handleUnauthorized(status: number): void {

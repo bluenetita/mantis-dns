@@ -86,7 +86,7 @@ export interface paths {
          * Get Routing Table
          * @description Source-IP -> tenant routing table for filter nodes (design.md §7.3
          *     option 2). Polled machine-to-machine by Rust filter nodes — no user JWT
-         *     involved, so this uses the shared AEGIS_SERVICE_TOKEN instead (see
+         *     involved, so this uses the shared MANTIS_SERVICE_TOKEN instead (see
          *     require_service_token), like /public-key and the bundle GET endpoint.
          */
         get: operations["get_routing_table_api_v1_routing_table_get"];
@@ -126,7 +126,7 @@ export interface paths {
         /**
          * Get Public Key
          * @description Filter nodes fetch this once and pin it for bundle verification.
-         *     Machine-to-machine, guarded by AEGIS_SERVICE_TOKEN like /routing-table.
+         *     Machine-to-machine, guarded by MANTIS_SERVICE_TOKEN like /routing-table.
          */
         get: operations["get_public_key_api_v1_public_key_get"];
         put?: never;
@@ -147,7 +147,7 @@ export interface paths {
         /**
          * Get Latest Bundle
          * @description Fetched by filter nodes after they detect a new bundle_version.
-         *     Machine-to-machine traffic guarded by AEGIS_SERVICE_TOKEN like /routing-table.
+         *     Machine-to-machine traffic guarded by MANTIS_SERVICE_TOKEN like /routing-table.
          */
         get: operations["get_latest_bundle_api_v1_groups__group_id__bundle_get"];
         put?: never;
@@ -256,7 +256,7 @@ export interface paths {
          * Ingest Query Events
          * @description Fire-and-forget sink for filter-node query telemetry. Best-effort by
          *     design — the hot DNS path never blocks on this succeeding. Guarded by
-         *     AEGIS_SERVICE_TOKEN like /routing-table and /public-key: this is
+         *     MANTIS_SERVICE_TOKEN like /routing-table and /public-key: this is
          *     filter-node-to-control-plane traffic, not a user-facing endpoint.
          */
         post: operations["ingest_query_events_api_v1_query_events_post"];
@@ -871,12 +871,12 @@ export interface paths {
         /**
          * Get Upstream Bundle
          * @description Compiles a signed upstream config bundle for the given tenant.
-         *     Guarded by AEGIS_SERVICE_TOKEN like /api/v1/groups/{id}/bundle; integrity
+         *     Guarded by MANTIS_SERVICE_TOKEN like /api/v1/groups/{id}/bundle; integrity
          *     is additionally provided by the ed25519 signature.
          *
          *     Response body: canonical JSON bundle payload (sort_keys, no whitespace).
-         *     X-Aegis-Signature header: hex-encoded ed25519 signature over the body bytes.
-         *     X-Aegis-Bundle-Version: unix timestamp of compilation (for cache-busting).
+         *     X-Mantis-Signature header: hex-encoded ed25519 signature over the body bytes.
+         *     X-Mantis-Bundle-Version: unix timestamp of compilation (for cache-busting).
          */
         get: operations["get_upstream_bundle_api_v1_upstream_bundle__tenant_id__get"];
         put?: never;
@@ -3407,7 +3407,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "x-aegis-service-token"?: string | null;
+                "x-mantis-service-token"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -3504,7 +3504,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "x-aegis-service-token"?: string | null;
+                "x-mantis-service-token"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -3535,7 +3535,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "x-aegis-service-token"?: string | null;
+                "x-mantis-service-token"?: string | null;
             };
             path: {
                 group_id: string;
@@ -3782,7 +3782,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "x-aegis-service-token"?: string | null;
+                "x-mantis-service-token"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -5386,7 +5386,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "x-aegis-service-token"?: string | null;
+                "x-mantis-service-token"?: string | null;
             };
             path: {
                 tenant_id: string;

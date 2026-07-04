@@ -5,8 +5,8 @@
 # Dev mode (default): builds images from source, Vite dev server on :5173.
 # Prod mode (--prod):  pulls published GHCR images (docker-compose.prod.yml),
 #                       generates a strong ADMIN_PASSWORD too, sets
-#                       AEGIS_ENV=production. You must still set
-#                       CORS_ALLOW_ORIGINS (and IMAGE_PREFIX/AEGIS_VERSION if
+#                       MANTIS_ENV=production. You must still set
+#                       CORS_ALLOW_ORIGINS (and IMAGE_PREFIX/MANTIS_VERSION if
 #                       not using the default registry) in .env yourself.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -23,17 +23,17 @@ if [ -f .env ]; then
 else
   echo "Creating .env with generated secrets..."
   cp .env.example .env
-  AEGIS_INTERNAL_TOKEN=$(openssl rand -hex 32)
-  AEGIS_SERVICE_TOKEN=$(openssl rand -hex 32)
-  AEGIS_JWT_SECRET=$(openssl rand -hex 32)
-  AEGIS_WEBHOOK_SECRET_KEY=$(openssl rand -hex 32)
+  MANTIS_INTERNAL_TOKEN=$(openssl rand -hex 32)
+  MANTIS_SERVICE_TOKEN=$(openssl rand -hex 32)
+  MANTIS_JWT_SECRET=$(openssl rand -hex 32)
+  MANTIS_WEBHOOK_SECRET_KEY=$(openssl rand -hex 32)
   POSTGRES_PASSWORD=$(openssl rand -hex 16)
 
   sed -i.bak \
-    -e "s/^AEGIS_INTERNAL_TOKEN=.*/AEGIS_INTERNAL_TOKEN=${AEGIS_INTERNAL_TOKEN}/" \
-    -e "s/^AEGIS_SERVICE_TOKEN=.*/AEGIS_SERVICE_TOKEN=${AEGIS_SERVICE_TOKEN}/" \
-    -e "s/^AEGIS_JWT_SECRET=.*/AEGIS_JWT_SECRET=${AEGIS_JWT_SECRET}/" \
-    -e "s/^AEGIS_WEBHOOK_SECRET_KEY=.*/AEGIS_WEBHOOK_SECRET_KEY=${AEGIS_WEBHOOK_SECRET_KEY}/" \
+    -e "s/^MANTIS_INTERNAL_TOKEN=.*/MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN}/" \
+    -e "s/^MANTIS_SERVICE_TOKEN=.*/MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN}/" \
+    -e "s/^MANTIS_JWT_SECRET=.*/MANTIS_JWT_SECRET=${MANTIS_JWT_SECRET}/" \
+    -e "s/^MANTIS_WEBHOOK_SECRET_KEY=.*/MANTIS_WEBHOOK_SECRET_KEY=${MANTIS_WEBHOOK_SECRET_KEY}/" \
     -e "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=${POSTGRES_PASSWORD}/" \
     .env
 
@@ -41,7 +41,7 @@ else
     ADMIN_PASSWORD=$(openssl rand -hex 16)
     sed -i.bak \
       -e "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=${ADMIN_PASSWORD}/" \
-      -e "s/^AEGIS_ENV=.*/AEGIS_ENV=production/" \
+      -e "s/^MANTIS_ENV=.*/MANTIS_ENV=production/" \
       .env
     echo "Secrets generated, including ADMIN_PASSWORD (shown once): ${ADMIN_PASSWORD}"
     echo "Before starting: set CORS_ALLOW_ORIGINS in .env to your UI's public origin(s)."

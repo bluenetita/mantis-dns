@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from aegis_control import rate_limit
+from mantis_control import rate_limit
 
 
 def _make_request(client_host: str, xff: str | None) -> MagicMock:

@@ -1,4 +1,4 @@
-from aegis_control.compiler.bloom import BloomFilterBuilder, BloomParams, fnv1a
+from mantis_control.compiler.bloom import BloomFilterBuilder, BloomParams, fnv1a
 
 
 def test_fnv1a_known_vector() -> None:

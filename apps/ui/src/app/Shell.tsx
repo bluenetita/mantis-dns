@@ -89,7 +89,7 @@ export function Shell() {
           <Group>
             <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
             <IconShieldLock size={22} aria-hidden="true" />
-            <Text fw={500}>Aegis-DNS</Text>
+            <Text fw={500}>Mantis-DNS</Text>
           </Group>
           <Group>
             <ActionIcon

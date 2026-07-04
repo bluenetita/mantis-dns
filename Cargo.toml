@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "services/filter/aegis-filter",
-    "services/filter/aegis-bundle",
-    "services/filter/aegis-policy",
+    "services/filter/mantis-filter",
+    "services/filter/mantis-bundle",
+    "services/filter/mantis-policy",
 ]
 
 [workspace.package]

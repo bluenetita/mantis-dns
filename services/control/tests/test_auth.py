@@ -4,35 +4,35 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from aegis_control import auth
-from aegis_control.api.auth_routers import UserCreate, UserUpdate, create_user, update_user
-from aegis_control.db import models
+from mantis_control import auth
+from mantis_control.api.auth_routers import UserCreate, UserUpdate, create_user, update_user
+from mantis_control.db import models
 
 
 def test_require_service_token_open_when_unset(monkeypatch):
-    """Dev default: no AEGIS_SERVICE_TOKEN configured -> endpoint stays open."""
+    """Dev default: no MANTIS_SERVICE_TOKEN configured -> endpoint stays open."""
     monkeypatch.setattr(auth, "_SERVICE_TOKEN", "")
-    auth.require_service_token(x_aegis_service_token=None)
-    auth.require_service_token(x_aegis_service_token="anything")
+    auth.require_service_token(x_mantis_service_token=None)
+    auth.require_service_token(x_mantis_service_token="anything")
 
 
 def test_require_service_token_rejects_missing_header(monkeypatch):
     monkeypatch.setattr(auth, "_SERVICE_TOKEN", "s3cret")
     with pytest.raises(HTTPException) as exc:
-        auth.require_service_token(x_aegis_service_token=None)
+        auth.require_service_token(x_mantis_service_token=None)
     assert exc.value.status_code == 403
 
 
 def test_require_service_token_rejects_wrong_token(monkeypatch):
     monkeypatch.setattr(auth, "_SERVICE_TOKEN", "s3cret")
     with pytest.raises(HTTPException) as exc:
-        auth.require_service_token(x_aegis_service_token="wrong")
+        auth.require_service_token(x_mantis_service_token="wrong")
     assert exc.value.status_code == 403
 
 
 def test_require_service_token_accepts_correct_token(monkeypatch):
     monkeypatch.setattr(auth, "_SERVICE_TOKEN", "s3cret")
-    auth.require_service_token(x_aegis_service_token="s3cret")
+    auth.require_service_token(x_mantis_service_token="s3cret")
 
 
 def test_check_tenant_access_admin_unrestricted():

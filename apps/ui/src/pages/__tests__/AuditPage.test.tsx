@@ -16,7 +16,7 @@ function makeEntries(count: number): AuditLogEntry[] {
   return Array.from({ length: count }, (_, i) => ({
     id: `entry-${i}`,
     occurred_at: '2026-07-03T10:00:00Z',
-    actor: 'admin@aegis.local',
+    actor: 'admin@mantis.local',
     action: `tenant.create`,
     resource_type: 'tenant',
     resource_id: `res-${i}-uuid-here`,
@@ -45,7 +45,7 @@ describe('AuditPage', () => {
   it('renders table rows for each audit entry', () => {
     mockUseAuditLog.mockReturnValue({ data: makeEntries(3), isLoading: false, error: null } as never);
     renderWithProviders(<AuditPage />);
-    expect(screen.getAllByText('admin@aegis.local')).toHaveLength(3);
+    expect(screen.getAllByText('admin@mantis.local')).toHaveLength(3);
     expect(screen.getAllByText(/tenant\.create/i)).toHaveLength(3);
   });
 

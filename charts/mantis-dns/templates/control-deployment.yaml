@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mantis-dns.fullname" . }}-control
+  labels:
+    {{- include "mantis-dns.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control
+spec:
+  replicas: {{ .Values.control.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "mantis-dns.fullname" . }}
+      app.kubernetes.io/component: control
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "mantis-dns.fullname" . }}
+        app.kubernetes.io/component: control
+    spec:
+      containers:
+        - name: control
+          image: "{{ .Values.image.registry }}-control:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.control.port }}
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MANTIS_ENV
+              value: production
+            - name: CORS_ALLOW_ORIGINS
+              value: {{ required "control.corsAllowOrigins is required" .Values.control.corsAllowOrigins | quote }}
+            - name: KEA_CTRL_URL
+              value: "http://kea:8080/"
+            - name: KEA6_CTRL_URL
+              value: "http://kea:8080/"
+            - name: ADMIN_EMAIL
+              value: {{ .Values.control.adminEmail | quote }}
+            - name: MANTIS_FILTER_NODE_IP
+              value: {{ .Values.control.filterNodeIp | quote }}
+            - name: GROUP_ID
+              value: {{ .Values.control.groupId | quote }}
+            - name: MANTIS_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "secrets.existingSecret is required" .Values.secrets.existingSecret }}
+                  key: MANTIS_INTERNAL_TOKEN
+            - name: MANTIS_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: MANTIS_SERVICE_TOKEN
+            - name: MANTIS_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: MANTIS_JWT_SECRET
+            - name: MANTIS_WEBHOOK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: MANTIS_WEBHOOK_SECRET_KEY
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: ADMIN_PASSWORD
+            {{- if .Values.postgresql.enabled }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-postgresql
+                  key: password
+            {{- end }}
+            - name: DATABASE_URL
+              value: {{ include "mantis-dns.databaseUrl" . | quote }}
+          resources:
+            {{- toYaml .Values.control.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.control.port }}
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.control.port }}
+            initialDelaySeconds: 15

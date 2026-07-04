@@ -96,7 +96,7 @@ function AddWebhookForm({ onDone }: { onDone: () => void }) {
       <Stack>
         <TextInput label="Name" placeholder="Splunk HEC prod" required {...form.getInputProps("name")} />
         <TextInput label="Endpoint URL" placeholder="https://splunk.internal:8088/services/collector" required {...form.getInputProps("url")} />
-        <TextInput label="Signing secret" description="HMAC-signs the X-Aegis-Signature header — share with the SIEM side" required {...form.getInputProps("secret")} />
+        <TextInput label="Signing secret" description="HMAC-signs the X-Mantis-Signature header — share with the SIEM side" required {...form.getInputProps("secret")} />
         <SimpleGrid cols={2}>
           <Select label="Format" data={[{ value: "json", label: "JSON" }, { value: "cef", label: "CEF (ArcSight)" }]} {...form.getInputProps("format")} />
           <Select
@@ -337,9 +337,9 @@ export function SettingsPage() {
               </Group>
               <SimpleGrid cols={{ base: 1, sm: 3 }}>
                 {[
-                  { label: "Product",     value: "Aegis-DNS" },
+                  { label: "Product",     value: "Mantis-DNS" },
                   { label: "Control API", value: "FastAPI / Python" },
-                  { label: "Filter node", value: "Rust (aegis-filter)" },
+                  { label: "Filter node", value: "Rust (mantis-filter)" },
                   { label: "UI",          value: "React + Mantine 9" },
                   { label: "Auth",        value: "JWT (HS256)" },
                   { label: "Database",    value: "PostgreSQL 17 (psycopg3)" },
@@ -436,13 +436,13 @@ export function SettingsPage() {
 
               <Stack gap="sm" style={{ opacity: 0.45, pointerEvents: "none", userSelect: "none" }}>
                 <SimpleGrid cols={2}>
-                  <TextInput label="Issuer URL" placeholder="https://keycloak.corp.local/realms/aegis" disabled />
-                  <TextInput label="Client ID" placeholder="aegis-dns" disabled />
+                  <TextInput label="Issuer URL" placeholder="https://keycloak.corp.local/realms/mantis" disabled />
+                  <TextInput label="Client ID" placeholder="mantis-dns" disabled />
                 </SimpleGrid>
                 <TextInput label="Client secret" placeholder="••••••••••••••••" disabled />
                 <SimpleGrid cols={2}>
                   <TextInput label="Redirect URI" placeholder={`${window.location.origin}/auth/callback`} disabled />
-                  <Select label="Claim mapping (role)" data={["groups", "roles", "aegis_role"]} disabled />
+                  <Select label="Claim mapping (role)" data={["groups", "roles", "mantis_role"]} disabled />
                 </SimpleGrid>
                 <Group>
                   <Button size="sm" disabled leftSection={<IconLock size={14} />}>Save SSO configuration</Button>

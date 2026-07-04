@@ -175,7 +175,7 @@ function ScopeForm({
         <TextInput
           label="DNS servers (option 6)"
           placeholder="10.0.0.1, 8.8.8.8"
-          description="Comma-separated; empty = Aegis filter node"
+          description="Comma-separated; empty = Mantis filter node"
           {...form.getInputProps("dns_servers")}
         />
         <Group grow>

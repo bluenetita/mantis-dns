@@ -4,8 +4,8 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 
-from aegis_control.api import upstream_routers
-from aegis_control.api.upstream_routers import ProbeResult, probe_resolver
+from mantis_control.api import upstream_routers
+from mantis_control.api.upstream_routers import ProbeResult, probe_resolver
 
 
 def _fake_admin() -> SimpleNamespace:

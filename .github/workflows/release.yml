@@ -47,7 +47,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/aegis-dns-${{ matrix.image }}
+          images: ghcr.io/${{ github.repository_owner }}/mantis-dns-${{ matrix.image }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -62,7 +62,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  # Standalone edge-node package: aegis-filter as a static musl binary + a
+  # Standalone edge-node package: mantis-filter as a static musl binary + a
   # .deb (systemd unit, env file) for hosts that don't run Docker. See
   # packaging/filter/.
   filter-package:
@@ -86,7 +86,7 @@ jobs:
           tool: cross
 
       - name: Build static binary
-        run: cross build --release -p aegis-filter --target ${{ matrix.target }}
+        run: cross build --release -p mantis-filter --target ${{ matrix.target }}
 
       - name: Install nfpm
         run: |
@@ -99,18 +99,18 @@ jobs:
         env:
           VERSION: ${{ github.ref_name }}
           ARCH: ${{ matrix.deb_arch }}
-          BIN_PATH: ${{ github.workspace }}/target/${{ matrix.target }}/release/aegis-filter
+          BIN_PATH: ${{ github.workspace }}/target/${{ matrix.target }}/release/mantis-filter
         run: |
           # nfpm doesn't accept a leading "v" in semver-strict mode.
           export VERSION="${VERSION#v}"
-          nfpm package -f nfpm.yaml -p deb -t "aegis-filter_${VERSION}_${ARCH}.deb"
+          nfpm package -f nfpm.yaml -p deb -t "mantis-filter_${VERSION}_${ARCH}.deb"
 
       - name: Rename binary for release (arch-unique asset name)
-        run: cp target/${{ matrix.target }}/release/aegis-filter aegis-filter-${{ matrix.target }}
+        run: cp target/${{ matrix.target }}/release/mantis-filter mantis-filter-${{ matrix.target }}
 
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             packaging/filter/*.deb
-            aegis-filter-${{ matrix.target }}
+            mantis-filter-${{ matrix.target }}

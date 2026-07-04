@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mantis-dns.fullname" . }}-ui
+  labels:
+    {{- include "mantis-dns.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ui
+spec:
+  type: {{ .Values.ui.service.type }}
+  ports:
+    - port: {{ .Values.ui.port }}
+      targetPort: {{ .Values.ui.port }}
+  selector:
+    app.kubernetes.io/name: {{ include "mantis-dns.fullname" . }}
+    app.kubernetes.io/component: ui
