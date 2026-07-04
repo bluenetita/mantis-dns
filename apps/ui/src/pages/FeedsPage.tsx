@@ -2,6 +2,7 @@ import {
   ActionIcon,
   Badge,
   Button,
+  Checkbox,
   CopyButton,
   Flex,
   Group,
@@ -14,6 +15,7 @@ import {
   Switch,
   Table,
   Text,
+  Textarea,
   TextInput,
   Title,
   Tooltip,
@@ -28,6 +30,7 @@ import {
   IconCopy,
   IconEdit,
   IconExternalLink,
+  IconPlaylistAdd,
   IconPlus,
   IconRefresh,
   IconSearch,
@@ -173,6 +176,109 @@ function AddFeedModal({ opened, onClose }: { opened: boolean; onClose: () => voi
   );
 }
 
+// ─── Bulk Add Feed modal ────────────────────────────────────────────────────────
+
+function parseBulkLines(text: string): { id: string; url: string }[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [id, url] = line.split(",").map((s) => s.trim());
+      return { id: id ?? "", url: url ?? "" };
+    });
+}
+
+function BulkAddFeedModal({ opened, onClose }: { opened: boolean; onClose: () => void }) {
+  const createFeed = useCreateFeed();
+  const [submitting, setSubmitting] = useState(false);
+  const form = useForm({
+    initialValues: {
+      category_id: "",
+      format: "domain-list",
+      interval_seconds: 86400,
+      provider: "",
+      license: "",
+      lines: "",
+    },
+    validate: {
+      category_id: (v) => (v.trim().length < 2 ? "Required" : null),
+      lines: (v) => {
+        const entries = parseBulkLines(v);
+        if (entries.length === 0) return "Enter at least one feed";
+        const invalid = entries.filter((e) => !e.id || !e.url);
+        if (invalid.length > 0) return `${invalid.length} line(s) missing "id,url" — one feed per line`;
+        return null;
+      },
+    },
+  });
+
+  function handleClose() {
+    form.reset();
+    onClose();
+  }
+
+  async function handleSubmit(values: typeof form.values) {
+    const entries = parseBulkLines(values.lines);
+    setSubmitting(true);
+    const results = await Promise.allSettled(
+      entries.map((e) =>
+        createFeed.mutateAsync({
+          id: e.id,
+          category_id: values.category_id,
+          url: e.url,
+          format: values.format,
+          interval_seconds: values.interval_seconds,
+          provider: values.provider,
+          license: values.license,
+          enabled: true,
+        })
+      )
+    );
+    setSubmitting(false);
+    const ok = results.filter((r) => r.status === "fulfilled").length;
+    const failed = results.length - ok;
+    notifications.show({
+      message: `${ok} feed${ok === 1 ? "" : "s"} added${failed ? `, ${failed} failed (duplicate ID or bad URL?)` : ""}`,
+      color: failed ? "yellow" : "green",
+    });
+    if (failed === 0) handleClose();
+  }
+
+  return (
+    <Modal opened={opened} onClose={handleClose} title="Bulk add feeds" size="lg">
+      <form onSubmit={form.onSubmit(handleSubmit)}>
+        <Stack>
+          <Text size="sm" c="dimmed">
+            One feed per line, as <code>id,url</code>. Category, format, and schedule below apply to every line.
+          </Text>
+          <Textarea
+            placeholder={"acme-list-1,https://example.com/list1.txt\nacme-list-2,https://example.com/list2.txt"}
+            minRows={6}
+            maxRows={14}
+            autosize
+            required
+            {...form.getInputProps("lines")}
+          />
+          <SimpleGrid cols={2}>
+            <TextInput label="Category" placeholder="malware, adult, gambling …" required {...form.getInputProps("category_id")} />
+            <Select label="Format" data={FORMAT_OPTIONS} {...form.getInputProps("format")} />
+          </SimpleGrid>
+          <SimpleGrid cols={2}>
+            <NumberInput label="Refresh interval (seconds)" min={60} {...form.getInputProps("interval_seconds")} />
+            <TextInput label="Provider" placeholder="Acme Threat Intel" {...form.getInputProps("provider")} />
+          </SimpleGrid>
+          <TextInput label="License" placeholder="MIT, CC0, commercial …" {...form.getInputProps("license")} />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={handleClose}>Cancel</Button>
+            <Button type="submit" loading={submitting}>Add feeds</Button>
+          </Group>
+        </Stack>
+      </form>
+    </Modal>
+  );
+}
+
 // ─── Edit Feed modal ──────────────────────────────────────────────────────────
 
 function EditFeedModal({ feed, onClose }: { feed: Feed | null; onClose: () => void }) {
@@ -256,11 +362,13 @@ export function FeedsPage() {
   const deleteFeed = useDeleteFeed();
   const ingestNow = useIngestFeedNow();
   const [addOpened, { open: openAdd, close: closeAdd }] = useDisclosure(false);
+  const [bulkAddOpened, { open: openBulkAdd, close: closeBulkAdd }] = useDisclosure(false);
   const [editFeed, setEditFeed] = useState<Feed | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const { hasRole } = useAuth();
   const canWrite = hasRole("operator");
 
@@ -356,12 +464,73 @@ export function FeedsPage() {
     });
   }
 
+  function toggleSelected(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function setGroupSelected(ids: string[], select: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (select) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }
+
+  async function bulkSetEnabled(enabled: boolean) {
+    const ids = [...selected];
+    const results = await Promise.allSettled(
+      ids.map((id) => updateFeed.mutateAsync({ feedId: id, body: { enabled } }))
+    );
+    const ok = results.filter((r) => r.status === "fulfilled").length;
+    const failed = results.length - ok;
+    notifications.show({
+      message: `${ok} feed${ok === 1 ? "" : "s"} ${enabled ? "enabled" : "disabled"}${failed ? `, ${failed} failed` : ""}`,
+      color: failed ? "yellow" : "green",
+    });
+    setSelected(new Set());
+  }
+
+  function bulkDelete() {
+    const ids = [...selected];
+    modals.openConfirmModal({
+      title: "Delete feeds",
+      children: (
+        <Text size="sm">
+          Delete <strong>{ids.length}</strong> feed{ids.length === 1 ? "" : "s"}? This stops auto-updates for
+          each. Catalog-seeded feeds reappear on next control-plane restart.
+        </Text>
+      ),
+      labels: { confirm: `Delete ${ids.length}`, cancel: "Cancel" },
+      confirmProps: { color: "red" },
+      onConfirm: async () => {
+        const results = await Promise.allSettled(ids.map((id) => deleteFeed.mutateAsync(id)));
+        const ok = results.filter((r) => r.status === "fulfilled").length;
+        const failed = results.length - ok;
+        notifications.show({
+          message: `${ok} feed${ok === 1 ? "" : "s"} deleted${failed ? `, ${failed} failed` : ""}`,
+          color: failed ? "yellow" : "green",
+        });
+        setSelected(new Set());
+      },
+    });
+  }
+
   if (isLoading)
     return (
       <Flex justify="center" align="center" h={200}>
         <Loader />
       </Flex>
     );
+
+  const colCount = canWrite ? 6 : 5;
 
   return (
     <Stack gap="lg">
@@ -374,9 +543,14 @@ export function FeedsPage() {
           </Text>
         </Stack>
         {canWrite && (
-          <Button leftSection={<IconPlus size={16} />} onClick={openAdd}>
-            Add feed
-          </Button>
+          <Group gap="xs">
+            <Button variant="default" leftSection={<IconPlaylistAdd size={16} />} onClick={openBulkAdd}>
+              Bulk add
+            </Button>
+            <Button leftSection={<IconPlus size={16} />} onClick={openAdd}>
+              Add feed
+            </Button>
+          </Group>
         )}
       </Group>
 
@@ -442,10 +616,52 @@ export function FeedsPage() {
         })}
       </Group>
 
+      {/* Bulk action bar */}
+      {canWrite && selected.size > 0 && (
+        <Group
+          justify="space-between"
+          p="xs"
+          style={{ backgroundColor: "var(--mantine-color-blue-light)", borderRadius: 8 }}
+        >
+          <Text size="sm" fw={600}>
+            {selected.size} feed{selected.size === 1 ? "" : "s"} selected
+          </Text>
+          <Group gap={6}>
+            <Button size="xs" variant="light" color="green" onClick={() => bulkSetEnabled(true)}>
+              Enable
+            </Button>
+            <Button size="xs" variant="light" color="gray" onClick={() => bulkSetEnabled(false)}>
+              Disable
+            </Button>
+            <Button size="xs" variant="light" color="red" onClick={bulkDelete}>
+              Delete
+            </Button>
+            <Button size="xs" variant="subtle" onClick={() => setSelected(new Set())}>
+              Clear
+            </Button>
+          </Group>
+        </Group>
+      )}
+
       {/* Table */}
       <Table striped highlightOnHover withTableBorder withColumnBorders>
         <Table.Thead>
           <Table.Tr>
+            {canWrite && (
+              <Table.Th w={32}>
+                <Checkbox
+                  size="xs"
+                  checked={visible.length > 0 && visible.every((f) => selected.has(f.id))}
+                  indeterminate={visible.some((f) => selected.has(f.id)) && !visible.every((f) => selected.has(f.id))}
+                  onChange={() =>
+                    setGroupSelected(
+                      visible.map((f) => f.id),
+                      !visible.every((f) => selected.has(f.id))
+                    )
+                  }
+                />
+              </Table.Th>
+            )}
             <Table.Th>Feed</Table.Th>
             <Table.Th w={90} style={{ textAlign: "right" }}>Domains</Table.Th>
             <Table.Th w={95}>Last sync</Table.Th>
@@ -456,7 +672,7 @@ export function FeedsPage() {
         <Table.Tbody>
           {visible.length === 0 && (
             <Table.Tr>
-              <Table.Td colSpan={5}>
+              <Table.Td colSpan={colCount}>
                 <Text c="dimmed" ta="center" py="md">No feeds match the current filters</Text>
               </Table.Td>
             </Table.Tr>
@@ -465,11 +681,24 @@ export function FeedsPage() {
             const cat = categoryById.get(catId);
             const Icon = categoryIcon(cat?.icon ?? "");
             const catDomains = catFeeds.reduce((s, f) => s + (f.last_domain_count ?? 0), 0);
+            const catIds = catFeeds.map((f) => f.id);
+            const catAllSelected = catIds.length > 0 && catIds.every((id) => selected.has(id));
+            const catSomeSelected = catIds.some((id) => selected.has(id));
             return (
               <Fragment key={catId}>
                 {/* Category divider row */}
                 <Table.Tr style={{ backgroundColor: "var(--mantine-color-default-hover)" }}>
-                  <Table.Td colSpan={5} py={6}>
+                  {canWrite && (
+                    <Table.Td py={6}>
+                      <Checkbox
+                        size="xs"
+                        checked={catAllSelected}
+                        indeterminate={catSomeSelected && !catAllSelected}
+                        onChange={() => setGroupSelected(catIds, !catAllSelected)}
+                      />
+                    </Table.Td>
+                  )}
+                  <Table.Td colSpan={colCount - (canWrite ? 1 : 0)} py={6}>
                     <Group gap={8} wrap="nowrap">
                       <ActionIcon color={categoryColor(catId, categoryById)} variant="light" size="sm" radius="sm">
                         <Icon size={13} />
@@ -496,6 +725,11 @@ export function FeedsPage() {
                   const { label, color } = feedStatus(f);
                   return (
                     <Table.Tr key={f.id}>
+                      {canWrite && (
+                        <Table.Td>
+                          <Checkbox size="xs" checked={selected.has(f.id)} onChange={() => toggleSelected(f.id)} />
+                        </Table.Td>
+                      )}
                       {/* Feed cell */}
                       <Table.Td>
                         <Group gap={6} wrap="nowrap" align="flex-start">
@@ -608,6 +842,7 @@ export function FeedsPage() {
 
       {/* Modals */}
       <AddFeedModal opened={addOpened} onClose={closeAdd} />
+      <BulkAddFeedModal opened={bulkAddOpened} onClose={closeBulkAdd} />
       <EditFeedModal key={editFeed?.id ?? "none"} feed={editFeed} onClose={() => setEditFeed(null)} />
     </Stack>
   );
