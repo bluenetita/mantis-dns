@@ -117,9 +117,36 @@
     "provider": "The Block List Project"
   },
   {
-    "id": "blocklistproject-social",
+    "id": "blocklistproject-facebook",
     "category_id": "social",
-    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/social.txt",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/facebook.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  },
+  {
+    "id": "blocklistproject-tiktok",
+    "category_id": "social",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/tiktok.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  },
+  {
+    "id": "blocklistproject-twitter",
+    "category_id": "social",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/twitter.txt",
+    "format": "hostfile",
+    "interval_seconds": 86400,
+    "license": "MIT",
+    "provider": "The Block List Project"
+  },
+  {
+    "id": "blocklistproject-whatsapp",
+    "category_id": "social",
+    "url": "https://raw.githubusercontent.com/blocklistproject/Lists/master/whatsapp.txt",
     "format": "hostfile",
     "interval_seconds": 86400,
     "license": "MIT",
