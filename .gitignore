@@ -1,0 +1,39 @@
+# Rust
+/target/
+**/target/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node / TS
+node_modules/
+dist/
+.vite/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local env/secrets
+.env
+.env.*
+!.env.example
+
+# Generated cloud-init output (embeds CORS/registry choices — regenerate via
+# scripts/render-cloud-init.sh, don't hand-edit or commit)
+/infra/cloud-init/user-data.yaml
+
+# Dev-generated bundle artifacts (services/control/mantis_control/compiler/build_empty_bundle.py)
+services/control/bundle.bin
+services/control/bundle_pubkey.bin
+services/control/bundles/
+services/control/signing_key.bin
+services/control/feed_domains/

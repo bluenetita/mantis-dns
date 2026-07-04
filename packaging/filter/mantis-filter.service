@@ -1,0 +1,19 @@
+[Unit]
+Description=Mantis-DNS filter node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/mantis-filter/mantis-filter.env
+ExecStart=/usr/bin/mantis-filter
+Restart=on-failure
+RestartSec=2
+DynamicUser=yes
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

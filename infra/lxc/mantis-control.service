@@ -1,0 +1,22 @@
+[Unit]
+Description=Mantis-DNS control plane
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=mantis
+Group=mantis
+EnvironmentFile=/etc/mantis-control/mantis-control.env
+WorkingDirectory=/opt/mantis-dns/app
+ExecStart=/opt/mantis-dns/venv/bin/uvicorn mantis_control.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/mantis-dns
+
+[Install]
+WantedBy=multi-user.target

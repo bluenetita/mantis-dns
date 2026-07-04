@@ -1,0 +1,35 @@
+# nfpm config for the mantis-filter edge package. Built by
+# .github/workflows/release.yml (BIN_PATH and VERSION are set there); to
+# build locally:
+#
+#   cargo build --release -p mantis-filter --target x86_64-unknown-linux-musl
+#   BIN_PATH=target/x86_64-unknown-linux-musl/release/mantis-filter \
+#   VERSION=0.1.0 nfpm package -f packaging/filter/nfpm.yaml -p deb -t .
+name: mantis-filter
+version: ${VERSION}
+arch: ${ARCH}
+platform: linux
+section: net
+priority: optional
+maintainer: Mantis-DNS
+description: |
+  Mantis-DNS filter node — DNS resolver enforcing policy bundles pulled from
+  a Mantis-DNS control plane. Standalone edge deployment (no Docker/Python/
+  Node required).
+homepage: https://github.com/mantis-dns/mantis-dns
+license: Proprietary
+
+contents:
+  - src: ${BIN_PATH}
+    dst: /usr/bin/mantis-filter
+    file_info:
+      mode: 0755
+  - src: ./mantis-filter.service
+    dst: /lib/systemd/system/mantis-filter.service
+  - src: ./mantis-filter.env
+    dst: /etc/mantis-filter/mantis-filter.env
+    type: config|noreplace
+
+scripts:
+  postinstall: ./postinstall.sh
+  preremove: ./preremove.sh
