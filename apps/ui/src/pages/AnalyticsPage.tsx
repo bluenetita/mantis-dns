@@ -284,7 +284,7 @@ export function AnalyticsPage() {
                 <Table.Th>Domain</Table.Th>
                 <Table.Th w={100}>Decision</Table.Th>
                 <Table.Th w={80} style={{ textAlign: "right" }}>Count</Table.Th>
-                <Table.Th w={160}>% of blocked</Table.Th>
+                <Table.Th w={160}>Share of total blocks</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>

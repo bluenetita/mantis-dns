@@ -70,6 +70,7 @@ services:
       - GROUP_ID=${GROUP_ID:-}
       - DNS_BIND_ADDR=0.0.0.0:1053
       - MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN:-}
+      - UPSTREAM_BUNDLE_TENANT=${UPSTREAM_BUNDLE_TENANT:-*}
     restart: unless-stopped
     deploy:
       resources:

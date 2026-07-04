@@ -222,7 +222,10 @@ pub async fn fetch_and_publish_bundle(
     control_url: &str,
     group_id: &str,
 ) -> Result<()> {
-    let resp = reqwest::get(format!("{control_url}/api/v1/groups/{group_id}/bundle")).await?;
+    let client = reqwest::Client::new();
+    let resp = with_service_token(client.get(format!("{control_url}/api/v1/groups/{group_id}/bundle")))
+        .send()
+        .await?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         debug!("no bundle compiled yet for group {group_id}");
         return Ok(());
@@ -505,19 +508,24 @@ async fn resolve_records(
             }
         }
         Err(e) => {
-            // hickory surfaces both NXDOMAIN and NODATA as NoRecordsFound;
-            // the embedded response_code field distinguishes them.
-            let err_str = format!("{e:?}");
-            if err_str.contains("NoRecordsFound") {
-                if err_str.contains("NXDomain") {
+            // hickory surfaces both NXDOMAIN and NODATA as a "no records found"
+            // error; is_nx_domain() reads the embedded response_code to tell
+            // them apart. Downcast rather than string-match: the Debug/Display
+            // text for this error doesn't reliably contain "NXDomain"/
+            // "NoRecordsFound" substrings across hickory versions.
+            let resolve_err = e.downcast_ref::<hickory_resolver::ResolveError>();
+            match resolve_err {
+                Some(re) if re.is_nx_domain() => {
                     response.set_response_code(ResponseCode::NXDomain);
-                } else {
+                }
+                Some(re) if re.is_no_records_found() => {
                     // NODATA: name exists, no records of this type.
                     response.set_response_code(ResponseCode::NoError);
                 }
-            } else {
-                debug!("upstream resolution failed for {qname} ({qtype:?}): {e}");
-                response.set_response_code(ResponseCode::ServFail);
+                _ => {
+                    debug!("upstream resolution failed for {qname} ({qtype:?}): {e}");
+                    response.set_response_code(ResponseCode::ServFail);
+                }
             }
         }
     }
