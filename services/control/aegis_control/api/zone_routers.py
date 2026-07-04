@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -16,6 +17,17 @@ router = APIRouter(tags=["dns-zones"])
 
 _RECORD_TYPES = {"A", "AAAA", "CNAME", "MX", "TXT", "NS", "PTR", "SRV", "CAA"}
 _ZONE_TYPES = {"local", "forward", "passthrough"}
+
+# Zone names are single labels ("lan") or dotted FQDNs ("corp.example.com").
+# export_zone() below writes z.name verbatim into $ORIGIN/SOA/NS lines of a
+# file handed to a real nameserver — this regex is what stops a name like
+# "ok\n$INCLUDE /etc/passwd" (no dot/newline validation existed before) from
+# smuggling a BIND control directive or CRLF into that file or the
+# Content-Disposition header.
+_ZONE_NAME_RE = re.compile(
+    r"^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?)*$",
+    re.IGNORECASE,
+)
 
 
 def _validate_record_field(v: str, label: str) -> str:
@@ -55,6 +67,8 @@ class ZoneCreate(BaseModel):
         v = v.strip().lower().rstrip(".")
         if not v:
             raise ValueError("Zone name must not be empty")
+        if not _ZONE_NAME_RE.match(v):
+            raise ValueError("Zone name must be a valid hostname/domain label sequence")
         return v
 
     @field_validator("zone_type")
@@ -79,6 +93,18 @@ class ZoneUpdate(BaseModel):
     enabled: bool | None = None
     ttl_default: int | None = None
     forwarder: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip().lower().rstrip(".")
+        if not v:
+            raise ValueError("Zone name must not be empty")
+        if not _ZONE_NAME_RE.match(v):
+            raise ValueError("Zone name must be a valid hostname/domain label sequence")
+        return v
 
 
 class ZoneOut(BaseModel):
@@ -281,19 +307,22 @@ def export_zone(
     user: models.User = Depends(get_current_user),
 ) -> Response:
     z = _get_zone_or_403(zone_id, db, user)
+    # Defense in depth for rows written before _ZONE_NAME_RE existed: strip
+    # anything that could smuggle a BIND directive or break the header.
+    zone_name = z.name.replace("\n", "").replace("\r", "").replace("$", "")
     serial = date.today().strftime("%Y%m%d") + "01"
     lines = [
-        f"; Zone file for {z.name} — exported by Aegis-DNS",
-        f"$ORIGIN {z.name}.",
+        f"; Zone file for {zone_name} — exported by Aegis-DNS",
+        f"$ORIGIN {zone_name}.",
         f"$TTL {z.ttl_default}",
-        f"@\tIN\tSOA\tns1.{z.name}. hostmaster.{z.name}. (",
+        f"@\tIN\tSOA\tns1.{zone_name}. hostmaster.{zone_name}. (",
         f"\t\t{serial}\t; serial",
         f"\t\t3600\t\t; refresh",
         f"\t\t900\t\t; retry",
         f"\t\t604800\t\t; expire",
         f"\t\t{z.ttl_default}\t\t; minimum",
         f")",
-        f"@\tIN\tNS\tns1.{z.name}.",
+        f"@\tIN\tNS\tns1.{zone_name}.",
         "",
     ]
     for rec in sorted(z.records, key=lambda r: (r.record_type, r.name)):
@@ -308,7 +337,7 @@ def export_zone(
     return Response(
         content=content,
         media_type="text/plain; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{z.name}.zone"'},
+        headers={"Content-Disposition": f'attachment; filename="{zone_name}.zone"'},
     )
 
 

@@ -461,6 +461,12 @@ async def probe_resolver(
     r = _get_resolver_or_404(db, resolver_id)
     try:
         check_probe_target_safe(r.address)
+        # _probe_doh dials `tls_hostname or address`, not `address` — if
+        # tls_hostname differs it's the real connect target and must be
+        # checked too, or an admin could point address at a public IP
+        # while tls_hostname aims the actual connection at an internal host.
+        if r.protocol == "doh" and r.tls_hostname:
+            check_probe_target_safe(r.tls_hostname)
     except ValueError as e:
         raise HTTPException(422, f"resolver probe rejected: {e}") from e
     if r.protocol == "do53":

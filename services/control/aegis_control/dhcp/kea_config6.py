@@ -31,6 +31,23 @@ def _scope_kea_id6(scope_uuid: str) -> int:
     return int(scope_uuid.replace("-", "")[7:14], 16) % (2 ** 30)
 
 
+def _assign_unique_kea_ids6(scopes: list[DhcpScope6]) -> dict[str, int]:
+    """Resolves collisions from `_scope_kea_id6`'s truncated hash by linear-
+    probing to the next free slot — see kea_config.py's `_assign_unique_kea_ids`
+    for why an unresolved collision is a real problem (Kea rejects duplicate
+    subnet ids; lease-read queries key on kea_subnet_id)."""
+    assigned: dict[str, int] = {}
+    used: set[int] = set()
+    modulus = 2 ** 30
+    for scope in scopes:
+        candidate = _scope_kea_id6(scope.id)
+        while candidate in used:
+            candidate = (candidate + 1) % modulus
+        used.add(candidate)
+        assigned[scope.id] = candidate
+    return assigned
+
+
 def _build_option_data6(scope: DhcpScope6, filter_node_ip: str) -> list[dict]:
     opts: list[dict] = []
     dns = list(scope.dns_servers or [])
@@ -59,9 +76,10 @@ def build_dhcp6_config(db: Session, filter_node_ip: str = "") -> dict:
     """Build the full Kea Dhcp6 config dict from Aegis DB state."""
     scopes = db.query(DhcpScope6).filter(DhcpScope6.enabled.is_(True)).all()
 
+    kea_ids = _assign_unique_kea_ids6(scopes)
     subnet6 = []
     for scope in scopes:
-        kea_id = _scope_kea_id6(scope.id)
+        kea_id = kea_ids[scope.id]
         pools = [{"pool": f"{scope.pool_start} - {scope.pool_end}"}]
 
         pd_pools = []

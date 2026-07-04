@@ -41,6 +41,26 @@ def _scope_kea_id(scope_uuid: str) -> int:
     return int(scope_uuid.replace("-", "")[:7], 16) % (2 ** 30)
 
 
+def _assign_unique_kea_ids(scopes: list[DhcpScope]) -> dict[str, int]:
+    """Maps scope.id -> kea_subnet_id, resolving collisions from `_scope_kea_id`'s
+    truncated hash (28 bits — a real collision risk once there are thousands of
+    scopes) by linear-probing to the next free slot. Without this, two scopes
+    (possibly different tenants) could be pushed to Kea with the same
+    subnet4.id, which Kea would reject outright, or worse, would cause
+    /dhcp/leases and lease-sync queries (which key on kea_subnet_id) to
+    mis-attribute one tenant's leases to another."""
+    assigned: dict[str, int] = {}
+    used: set[int] = set()
+    modulus = 2 ** 30
+    for scope in scopes:
+        candidate = _scope_kea_id(scope.id)
+        while candidate in used:
+            candidate = (candidate + 1) % modulus
+        used.add(candidate)
+        assigned[scope.id] = candidate
+    return assigned
+
+
 def _build_option_data(scope: DhcpScope, filter_node_ip: str) -> list[dict]:
     opts: list[dict] = []
 
@@ -150,9 +170,10 @@ def build_dhcp4_config(db: Session, filter_node_ip: str = "") -> dict:
         if ha_cfg:
             ha_hooks = _build_ha_hooks(ha_cfg)
 
+    kea_ids = _assign_unique_kea_ids(scopes)
     subnet4 = []
     for scope in scopes:
-        kea_id = _scope_kea_id(scope.id)
+        kea_id = kea_ids[scope.id]
         subnet: dict = {
             "id": kea_id,
             "subnet": scope.subnet,

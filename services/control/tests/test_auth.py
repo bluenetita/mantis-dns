@@ -1,9 +1,12 @@
+from unittest.mock import MagicMock
+
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
 from aegis_control import auth
-from aegis_control.api.auth_routers import UserCreate
+from aegis_control.api.auth_routers import UserCreate, UserUpdate, create_user, update_user
+from aegis_control.db import models
 
 
 def test_require_service_token_open_when_unset(monkeypatch):
@@ -86,3 +89,54 @@ def test_user_create_accepts_password_at_72_bytes():
 def test_user_create_rejects_password_under_12_chars():
     with pytest.raises(ValidationError):
         UserCreate(email="a@b.com", password="short")
+
+
+def _fake_admin() -> models.User:
+    u = models.User(email="admin@x.com", password_hash="x", role="admin", tenant_id=None)
+    u.id = "admin-1"
+    return u
+
+
+def _db_with_no_existing_user() -> MagicMock:
+    db = MagicMock()
+    db.query.return_value.filter.return_value.one_or_none.return_value = None
+    return db
+
+
+def test_create_user_rejects_non_admin_without_tenant():
+    """A non-admin user with tenant_id=None is treated as globally
+    unrestricted by check_tenant_access/user_tenant_filter — creation must
+    require an explicit tenant for operator/viewer roles."""
+    payload = UserCreate(email="viewer@x.com", password="a-strong-password-1", role="viewer", tenant_id=None)
+    with pytest.raises(HTTPException) as exc:
+        create_user(payload, _db_with_no_existing_user(), _fake_admin())
+    assert exc.value.status_code == 422
+
+
+def test_create_user_allows_non_admin_with_tenant():
+    payload = UserCreate(email="viewer@x.com", password="a-strong-password-1", role="viewer", tenant_id="tenant-a")
+    user = create_user(payload, _db_with_no_existing_user(), _fake_admin())
+    assert user.tenant_id == "tenant-a"
+
+
+def test_create_user_allows_admin_without_tenant():
+    payload = UserCreate(email="admin2@x.com", password="a-strong-password-1", role="admin", tenant_id=None)
+    user = create_user(payload, _db_with_no_existing_user(), _fake_admin())
+    assert user.tenant_id is None
+
+
+def test_update_user_rejects_non_admin_without_tenant():
+    payload = UserUpdate(role="operator", tenant_id=None)
+    db = MagicMock()
+    db.get.return_value = models.User(email="x@y.com", password_hash="x", role="viewer", tenant_id="tenant-a")
+    with pytest.raises(HTTPException) as exc:
+        update_user("user-1", payload, db, _fake_admin())
+    assert exc.value.status_code == 422
+
+
+def test_update_user_allows_admin_without_tenant():
+    payload = UserUpdate(role="admin", tenant_id=None)
+    db = MagicMock()
+    db.get.return_value = models.User(email="x@y.com", password_hash="x", role="viewer", tenant_id="tenant-a")
+    updated = update_user("user-1", payload, db, _fake_admin())
+    assert updated.role == "admin"

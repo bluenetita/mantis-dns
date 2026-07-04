@@ -24,12 +24,16 @@ _TRUSTED_PROXY_IPS = {
 }
 
 
+_SWEEP_EVERY_N_CALLS = 1000
+
+
 class _SlidingWindowLimiter:
     def __init__(self, max_requests: int, window_secs: int) -> None:
         self._max = max_requests
         self._window = window_secs
         self._timestamps: dict[str, list[float]] = defaultdict(list)
         self._lock = Lock()
+        self._calls_since_sweep = 0
 
     def check(self, key: str) -> None:
         now = time.monotonic()
@@ -41,6 +45,18 @@ class _SlidingWindowLimiter:
             if len(ts) >= self._max:
                 raise HTTPException(429, "too many login attempts — please wait before trying again")
             ts.append(now)
+
+            # An IP's entry only gets pruned when *that same IP* calls check()
+            # again, so one that stops attacking (or a fixed set of scanner
+            # IPs, then never again) leaves a dead dict entry forever —
+            # unbounded growth keyed on every distinct source IP ever seen.
+            # Periodically sweep every key, not just the current one.
+            self._calls_since_sweep += 1
+            if self._calls_since_sweep >= _SWEEP_EVERY_N_CALLS:
+                self._calls_since_sweep = 0
+                stale = [k for k, v in self._timestamps.items() if not v or v[-1] < cutoff]
+                for k in stale:
+                    del self._timestamps[k]
 
 
 _login_limiter = _SlidingWindowLimiter(max_requests=10, window_secs=60)

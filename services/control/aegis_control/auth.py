@@ -127,7 +127,11 @@ def get_current_user(
     except jwt.PyJWTError as e:
         raise HTTPException(401, "invalid token") from e
 
-    user = db.get(models.User, payload["sub"])
+    sub = payload.get("sub")
+    if sub is None:
+        raise HTTPException(401, "invalid token")
+
+    user = db.get(models.User, sub)
     if user is None:
         raise HTTPException(401, "user no longer exists")
     return user

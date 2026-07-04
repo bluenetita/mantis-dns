@@ -140,6 +140,11 @@ def create_user(
 ) -> models.User:
     if payload.role not in ("admin", "operator", "viewer"):
         raise HTTPException(422, "role must be admin, operator, or viewer")
+    if payload.role != "admin" and payload.tenant_id is None:
+        # check_tenant_access/user_tenant_filter treat tenant_id=None as
+        # "unrestricted" for any role, admin or not — a non-admin user
+        # created without a tenant would silently see every tenant's data.
+        raise HTTPException(422, "tenant_id is required for operator/viewer users")
     if db.query(models.User).filter(models.User.email == payload.email).one_or_none() is not None:
         raise HTTPException(409, "a user with this email already exists")
     user = models.User(email=payload.email, password_hash=hash_password(payload.password), role=payload.role, tenant_id=payload.tenant_id)
@@ -169,6 +174,8 @@ def update_user(
 ) -> models.User:
     if payload.role not in ("admin", "operator", "viewer"):
         raise HTTPException(422, "role must be admin, operator, or viewer")
+    if payload.role != "admin" and payload.tenant_id is None:
+        raise HTTPException(422, "tenant_id is required for operator/viewer users")
     user = db.get(models.User, user_id)
     if user is None:
         raise HTTPException(404, "user not found")
