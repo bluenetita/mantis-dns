@@ -30,7 +30,7 @@ from ipaddress import ip_network
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -123,8 +123,7 @@ class ScopeOut(BaseModel):
     updated_at: datetime
     kea_push_error: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ReservationCreate(BaseModel):
@@ -165,8 +164,7 @@ class ReservationOut(BaseModel):
     updated_at: datetime
     kea_push_error: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class OptionCreate(BaseModel):
@@ -185,8 +183,7 @@ class OptionOut(BaseModel):
     value: str
     always_send: bool
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RelayCreate(BaseModel):
@@ -204,8 +201,7 @@ class RelayOut(BaseModel):
     circuit_id_hex: str | None
     remote_id_hex: str | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LeaseOut(BaseModel):
@@ -677,8 +673,7 @@ class HaConfigOut(BaseModel):
     updated_at: datetime
     kea_push_error: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 @router.get("/ha/{tenant_id}", response_model=HaConfigOut)

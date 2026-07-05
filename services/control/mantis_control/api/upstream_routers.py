@@ -42,7 +42,7 @@ from typing import Any, Literal, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session, selectinload
 
 from mantis_control.audit import write_audit_log
@@ -53,8 +53,6 @@ from mantis_control.db.session import get_db
 from mantis_control.ssrf_guard import check_probe_target_safe
 
 router = APIRouter()
-
-_SIGNING_KEY = load_or_create_signing_key()
 
 # ── Pydantic schemas ───────────────────────────────────────────────────────────
 
@@ -117,8 +115,7 @@ class ResolverOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PoolMemberIn(BaseModel):
@@ -134,8 +131,7 @@ class PoolMemberOut(BaseModel):
     weight: int
     priority: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PoolCreate(BaseModel):
@@ -181,8 +177,7 @@ class PoolOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RouteCreate(BaseModel):
@@ -224,8 +219,7 @@ class RouteOut(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TenantPolicyIn(BaseModel):
@@ -248,8 +242,7 @@ class TenantPolicyOut(BaseModel):
     max_ttl_s: int
     negative_ttl_s: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ProbeResult(BaseModel):
@@ -392,7 +385,7 @@ async def _probe_doh(
 def _sign_bundle_body(payload: dict[str, Any]) -> tuple[bytes, str]:
     """Serialize payload as canonical JSON; sign with ed25519. Returns (body_bytes, hex_sig)."""
     body = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
-    sig = _SIGNING_KEY.sign(body)
+    sig = load_or_create_signing_key().sign(body)
     return body, sig.hex()
 
 

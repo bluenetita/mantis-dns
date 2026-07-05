@@ -19,18 +19,19 @@ Vault/KMS before HA hardening (design.md §9, sprint-plan.md Sprint 9)."""
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
+from functools import lru_cache
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from mantis_control.compiler.signing import public_key_raw_bytes
+from mantis_control.config import settings
 
-KEY_PATH = Path(os.environ.get("MANTIS_SIGNING_KEY_PATH", "signing_key.bin"))
-KEY_ID = os.environ.get("MANTIS_SIGNING_KEY_ID", "control-key-1")
+KEY_PATH = settings.MANTIS_SIGNING_KEY_PATH
+KEY_ID = settings.MANTIS_SIGNING_KEY_ID
 
 
+@lru_cache(maxsize=1)
 def load_or_create_signing_key() -> Ed25519PrivateKey:
     if KEY_PATH.exists():
         return Ed25519PrivateKey.from_private_bytes(KEY_PATH.read_bytes())

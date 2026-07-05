@@ -23,7 +23,6 @@ a real identity instead of "unauthenticated".
 from __future__ import annotations
 
 import hmac
-import os
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -35,11 +34,12 @@ from fastapi import Depends, Header, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from mantis_control.config import settings
 from mantis_control.db import models
 from mantis_control.db.session import get_db
 
 # Dev default — set MANTIS_JWT_SECRET before any non-dev deployment.
-_JWT_SECRET = os.environ.get("MANTIS_JWT_SECRET", "dev-insecure-secret-change-me")
+_JWT_SECRET = settings.MANTIS_JWT_SECRET
 _JWT_ALGORITHM = "HS256"
 _ACCESS_TOKEN_TTL = timedelta(hours=12)
 
@@ -61,7 +61,7 @@ CSRF_HEADER_NAME = "x-mantis-csrf-token"
 
 
 def _cookies_secure() -> bool:
-    return os.environ.get("MANTIS_ENV", "").lower() == "production"
+    return settings.is_production
 
 
 def generate_csrf_token() -> str:
@@ -89,7 +89,7 @@ def clear_auth_cookies(response: Response) -> None:
 # /query-events). Empty by default: these endpoints predate auth and stay open
 # in dev unless MANTIS_SERVICE_TOKEN is set. Production startup (main.py)
 # refuses to boot with MANTIS_ENV=production unless it's configured.
-_SERVICE_TOKEN = os.environ.get("MANTIS_SERVICE_TOKEN", "")
+_SERVICE_TOKEN = settings.MANTIS_SERVICE_TOKEN
 
 
 def require_service_token(authorization: str | None = Header(None)) -> None:

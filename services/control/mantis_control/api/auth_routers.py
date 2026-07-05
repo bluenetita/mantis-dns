@@ -21,7 +21,7 @@ from typing import Annotated
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.exc import IntegrityError
-from pydantic import AfterValidator, BaseModel, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, field_validator
 from sqlalchemy.orm import Session
 
 from mantis_control.audit import write_audit_log
@@ -78,8 +78,7 @@ class UserOut(BaseModel):
     role: str
     tenant_id: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LoginResponse(BaseModel):

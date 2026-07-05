@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import datetime
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from mantis_control.audit import write_audit_log
@@ -72,8 +72,7 @@ class FeedOut(BaseModel):
     last_version: str | None
     last_fetched_at: datetime | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class IngestOut(BaseModel):

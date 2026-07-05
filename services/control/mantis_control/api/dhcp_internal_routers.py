@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import hmac
 import logging
-import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException
@@ -31,13 +30,14 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from fastapi import Depends
 
+from mantis_control.config import settings
 from mantis_control.db.models import ClientEntry, DhcpScope, DnsRecord, DnsZone
 from mantis_control.db.session import get_db
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 log = logging.getLogger(__name__)
 
-_INTERNAL_TOKEN = os.getenv("MANTIS_INTERNAL_TOKEN", "dev-insecure-internal-token")
+_INTERNAL_TOKEN = settings.MANTIS_INTERNAL_TOKEN
 
 
 def _verify_internal(x_internal_token: str | None = Header(None)) -> None:

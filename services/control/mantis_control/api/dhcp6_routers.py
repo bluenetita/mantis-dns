@@ -26,7 +26,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -111,8 +111,7 @@ class Scope6Out(BaseModel):
     updated_at: datetime
     kea_push_error: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class Reservation6Create(BaseModel):
@@ -144,8 +143,7 @@ class Reservation6Out(BaseModel):
     updated_at: datetime
     kea_push_error: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class Lease6Out(BaseModel):

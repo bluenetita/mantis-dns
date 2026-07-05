@@ -25,7 +25,7 @@ import ipaddress
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from mantis_control.audit import write_audit_log
@@ -49,8 +49,7 @@ class ClientOut(BaseModel):
     registered_at: datetime | None
     registered_by: str | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ClientUpsert(BaseModel):

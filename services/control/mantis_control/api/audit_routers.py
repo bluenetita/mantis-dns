@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
@@ -39,8 +39,7 @@ class AuditLogEntry(BaseModel):
     detail: str
     tenant_id: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 @router.get("/audit-log", response_model=list[AuditLogEntry])

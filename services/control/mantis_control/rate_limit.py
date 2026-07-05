@@ -22,21 +22,20 @@ Replace with Redis-backed slowapi when horizontal scaling lands.
 
 from __future__ import annotations
 
-import os
 import time
 from collections import defaultdict
 from threading import Lock
 
 from fastapi import HTTPException, Request
 
+from mantis_control.config import settings
+
 # X-Forwarded-For is attacker-controlled unless it's overwritten by a proxy
 # we trust — set this to the reverse proxy's IP(s) so the login rate limiter
 # keys on the real client IP rather than a header any client can rotate to
 # dodge the limit. Empty by default: no reverse proxy in the compose
 # deployment, so XFF is never trusted (falls back to the direct peer IP).
-_TRUSTED_PROXY_IPS = {
-    ip.strip() for ip in os.environ.get("MANTIS_TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
-}
+_TRUSTED_PROXY_IPS = settings.trusted_proxy_ips
 
 
 _SWEEP_EVERY_N_CALLS = 1000

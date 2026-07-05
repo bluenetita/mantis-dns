@@ -26,22 +26,20 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import os
 
 from cryptography.fernet import Fernet
 
-_KEY_ENV = "MANTIS_WEBHOOK_SECRET_KEY"
-_DEV_DEFAULT_MATERIAL = b"dev-insecure-webhook-key-change-me"
+from mantis_control.config import WEBHOOK_DEV_KEY_MATERIAL, settings
 
 
 def _fernet() -> Fernet:
-    raw = os.environ.get(_KEY_ENV)
+    raw = settings.MANTIS_WEBHOOK_SECRET_KEY
     if raw:
         key = raw.encode()
     else:
         # Deterministic (not random) so restarts can still decrypt existing
         # secrets without MANTIS_WEBHOOK_SECRET_KEY set — dev convenience only.
-        key = base64.urlsafe_b64encode(hashlib.sha256(_DEV_DEFAULT_MATERIAL).digest())
+        key = base64.urlsafe_b64encode(hashlib.sha256(WEBHOOK_DEV_KEY_MATERIAL.encode()).digest())
     return Fernet(key)
 
 

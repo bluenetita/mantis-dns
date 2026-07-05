@@ -35,7 +35,6 @@ from mantis_control.db.session import get_db
 from mantis_control.feeds.ingest import load_domains
 
 router = APIRouter()
-_signing_key = load_or_create_signing_key()
 
 
 @router.get("/categories", response_model=list[schemas.CategoryOut])
@@ -229,7 +228,7 @@ def get_public_key(_: None = Depends(require_service_token)) -> Response:
     """Filter nodes fetch this once and pin it for bundle verification.
     Machine-to-machine, guarded by MANTIS_SERVICE_TOKEN like /routing-table."""
     return Response(
-        content=public_key_bytes_for(_signing_key),
+        content=public_key_bytes_for(load_or_create_signing_key()),
         media_type="application/octet-stream",
         headers={"X-Key-Id": KEY_ID},
     )
@@ -250,7 +249,7 @@ def compile_bundle(
 
     next_version = policy.bundle_version + 1
     bundle_path = compile_and_store(
-        policy, next_version, _signing_key, KEY_ID, BUNDLE_STORAGE_DIR, db
+        policy, next_version, load_or_create_signing_key(), KEY_ID, BUNDLE_STORAGE_DIR, db
     )
     policy.bundle_version = next_version
     write_audit_log(db, "bundle.compile", "policy", policy.id, detail=f"version={next_version}", actor=user.email, tenant_id=group.tenant_id)

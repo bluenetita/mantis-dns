@@ -15,15 +15,14 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Generator
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql+psycopg://mantis:mantis@localhost:5432/mantis"
-)
+from mantis_control.config import settings
+
+DATABASE_URL = settings.DATABASE_URL
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
