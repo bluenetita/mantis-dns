@@ -71,6 +71,49 @@ ENV_DIR=/etc/mantis-control
 ENV_FILE="$ENV_DIR/mantis-control.env"
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 
+wait_for_control() {
+  for _ in $(seq 1 30); do
+    if "$INSTALL_DIR/venv/bin/python" -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=2).read()' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
+parse_database_url() {
+  eval "$(
+    DATABASE_URL="$DATABASE_URL" python3 - <<'PY'
+from urllib.parse import urlparse
+import os
+import shlex
+
+url = urlparse(os.environ["DATABASE_URL"])
+print(f"POSTGRES_USER={shlex.quote(url.username or '')}")
+print(f"POSTGRES_PASSWORD={shlex.quote(url.password or '')}")
+print(f"POSTGRES_DB={shlex.quote((url.path or '/').lstrip('/'))}")
+PY
+  )"
+}
+
+sync_postgres_role() {
+  runuser -u postgres -- psql -v ON_ERROR_STOP=1 \
+    -v role_name="$POSTGRES_USER" \
+    -v role_password="$POSTGRES_PASSWORD" <<'SQL'
+SELECT CASE
+  WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role_name')
+    THEN format('ALTER ROLE %I WITH LOGIN PASSWORD %L', :'role_name', :'role_password')
+  ELSE format('CREATE ROLE %I LOGIN PASSWORD %L', :'role_name', :'role_password')
+END
+\gexec
+SQL
+
+  if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'" | grep -q 1; then
+    runuser -u postgres -- createdb -O "$POSTGRES_USER" "$POSTGRES_DB"
+  fi
+}
+
 echo "==> Enabling CRB + EPEL (needed for some AppStream/devel packages)..."
 dnf -y install dnf-plugins-core epel-release
 dnf config-manager --set-enabled crb 2>/dev/null || dnf config-manager --set-enabled powertools 2>/dev/null || true
@@ -118,6 +161,9 @@ if [ -f "$ENV_FILE" ]; then
     chmod 600 "$ENV_FILE"
     CORS_ALLOW_ORIGINS="$REQUESTED_CORS_ALLOW_ORIGINS"
   fi
+
+  parse_database_url
+  sync_postgres_role
 else
   echo "==> First install — provisioning Postgres role and generating secrets..."
   POSTGRES_DB=mantis
@@ -130,10 +176,7 @@ else
   ADMIN_EMAIL=${ADMIN_EMAIL:-admin@mantis.local}
   ADMIN_PASSWORD=$(openssl rand -hex 16)
 
-  sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='${POSTGRES_USER}'" | grep -q 1 \
-    || sudo -u postgres psql -c "CREATE ROLE ${POSTGRES_USER} LOGIN PASSWORD '${POSTGRES_PASSWORD}';"
-  sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'" | grep -q 1 \
-    || sudo -u postgres psql -c "CREATE DATABASE ${POSTGRES_DB} OWNER ${POSTGRES_USER};"
+  sync_postgres_role
 
   cat > "$ENV_FILE" <<EOF
 MANTIS_ENV=production
@@ -168,8 +211,14 @@ chown -R mantis:mantis "$INSTALL_DIR"
 echo "==> Installing systemd unit for control plane..."
 cp infra/lxc/mantis-control.service /etc/systemd/system/mantis-control.service
 systemctl daemon-reload
-systemctl enable --now mantis-control
-systemctl restart mantis-control
+systemctl enable mantis-control
+
+if ! systemctl restart mantis-control || ! wait_for_control; then
+  echo "mantis-control failed to become healthy. Service status and recent logs:"
+  systemctl status mantis-control --no-pager || true
+  journalctl -u mantis-control -n 120 --no-pager || true
+  exit 1
+fi
 
 echo "==> Building UI static assets (requires Node from dnf above)..."
 ( cd apps/ui && npm ci --legacy-peer-deps && VITE_API_URL=/api/v1 npm run build )
