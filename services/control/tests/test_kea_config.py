@@ -99,3 +99,18 @@ async def test_dhcp4_command_routes_without_service_wrapper(monkeypatch):
     assert _FakeAsyncClient.calls == [
         {"url": "http://kea:8004/", "json": {"command": "version-get"}}
     ]
+
+
+async def test_blank_kea_url_is_reported_before_http_call(monkeypatch):
+    _FakeAsyncClient.calls = []
+    monkeypatch.setattr(kea_config.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(kea_config, "KEA4_CTRL_URL", "")
+
+    try:
+        await kea_config.kea_command("version-get", service=["dhcp4"])
+    except RuntimeError as exc:
+        assert str(exc) == "Kea DHCPv4 management URL is not configured"
+    else:
+        raise AssertionError("expected RuntimeError")
+
+    assert _FakeAsyncClient.calls == []

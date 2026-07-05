@@ -97,7 +97,7 @@ refresh_kea_env_var() {
   current="$(env_value "$key")"
   if [ -n "$requested" ]; then
     set_env_var "$key" "$requested"
-  elif [ -z "$current" ] || [ "$current" = "http://kea:8080/" ] || [ "$current" = "http://kea:8004/" ] || [ "$current" = "http://kea:8006/" ]; then
+  elif [ -z "$current" ] || [ "$current" = "http://kea:8080/" ] || [ "$current" = "http://kea:8004/" ] || [ "$current" = "http://kea:8006/" ] || [ "$current" = "http://127.0.0.1:8004/" ] || [ "$current" = "http://127.0.0.1:8006/" ]; then
     set_env_var "$key" "$default"
   fi
 }
@@ -136,9 +136,9 @@ MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN}
 MANTIS_JWT_SECRET=${MANTIS_JWT_SECRET}
 MANTIS_WEBHOOK_SECRET_KEY=${MANTIS_WEBHOOK_SECRET_KEY}
 MANTIS_FILTER_NODE_IP=${MANTIS_FILTER_NODE_IP:-}
-KEA_CTRL_URL=${KEA_CTRL_URL:-http://127.0.0.1:8004/}
-KEA4_CTRL_URL=${KEA4_CTRL_URL:-http://127.0.0.1:8004/}
-KEA6_CTRL_URL=${KEA6_CTRL_URL:-http://127.0.0.1:8006/}
+KEA_CTRL_URL=${KEA_CTRL_URL:-}
+KEA4_CTRL_URL=${KEA4_CTRL_URL:-}
+KEA6_CTRL_URL=${KEA6_CTRL_URL:-}
 KEA_HOOKS_DIR=${KEA_HOOKS_DIR:-/usr/lib/kea/hooks}
 ADMIN_EMAIL=${ADMIN_EMAIL}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
@@ -146,13 +146,13 @@ EOF
   chmod 600 "$ENV_FILE"
   echo "Generated ADMIN_PASSWORD (shown once): ${ADMIN_PASSWORD}"
 fi
-ensure_env_var KEA_CTRL_URL "${KEA_CTRL_URL:-http://127.0.0.1:8004/}"
-ensure_env_var KEA4_CTRL_URL "${KEA4_CTRL_URL:-http://127.0.0.1:8004/}"
-ensure_env_var KEA6_CTRL_URL "${KEA6_CTRL_URL:-http://127.0.0.1:8006/}"
+ensure_env_var KEA_CTRL_URL "${KEA_CTRL_URL:-}"
+ensure_env_var KEA4_CTRL_URL "${KEA4_CTRL_URL:-}"
+ensure_env_var KEA6_CTRL_URL "${KEA6_CTRL_URL:-}"
 ensure_env_var KEA_HOOKS_DIR "${KEA_HOOKS_DIR:-/usr/lib/kea/hooks}"
-refresh_kea_env_var KEA_CTRL_URL "$REQUESTED_KEA_CTRL_URL" "http://127.0.0.1:8004/"
-refresh_kea_env_var KEA4_CTRL_URL "$REQUESTED_KEA4_CTRL_URL" "http://127.0.0.1:8004/"
-refresh_kea_env_var KEA6_CTRL_URL "$REQUESTED_KEA6_CTRL_URL" "http://127.0.0.1:8006/"
+refresh_kea_env_var KEA_CTRL_URL "$REQUESTED_KEA_CTRL_URL" ""
+refresh_kea_env_var KEA4_CTRL_URL "$REQUESTED_KEA4_CTRL_URL" ""
+refresh_kea_env_var KEA6_CTRL_URL "$REQUESTED_KEA6_CTRL_URL" ""
 refresh_kea_env_var KEA_HOOKS_DIR "$REQUESTED_KEA_HOOKS_DIR" "/usr/lib/kea/hooks"
 chmod 600 "$ENV_FILE"
 
@@ -196,5 +196,5 @@ systemctl reload nginx || systemctl restart nginx
 echo
 echo "Done. UI: http://$(hostname -I | awk '{print $1}')/  API: http://127.0.0.1:8000"
 echo "Kea DHCPv4 management URL: $(env_value KEA4_CTRL_URL)"
-echo "If this is 127.0.0.1 but Kea is not running inside this same LXC, set KEA4_CTRL_URL/KEA6_CTRL_URL to the Kea host IP and restart mantis-control."
+echo "Set KEA4_CTRL_URL/KEA6_CTRL_URL to the Kea host IP when Kea runs outside this LXC."
 echo "Log in with ADMIN_EMAIL/ADMIN_PASSWORD from ${ENV_FILE}, then rotate the password."

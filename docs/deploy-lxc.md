@@ -5,22 +5,25 @@ appliances) runs heavily on Proxmox, where LXC — not a full VM — is the
 default way to stand up a service. This page covers four ways to get
 Mantis-DNS running in an LXC container, cheapest/fastest first.
 
-Kea (DHCP) is out of scope for all options below — it needs
-`NET_ADMIN` and L2 broadcast/relay reachability that varies per network (see
-[`ARCHITECTURE.md`](../ARCHITECTURE.md)). Run it via
-[`docker-compose.prod.yml`](../docker-compose.prod.yml) on a host that can
-give it that access, pointed at whichever control plane you deploy below.
-Kea 3.x should be reached through the direct daemon HTTP control sockets:
-DHCPv4 on `http://<kea-host>:8004/` and DHCPv6 on
-`http://<kea-host>:8006/`.
+Kea (DHCP) needs `NET_ADMIN`/`NET_RAW` and L2 broadcast/relay reachability
+that varies per network (see [`ARCHITECTURE.md`](../ARCHITECTURE.md)). Run it
+via [`docker-compose.prod.yml`](../docker-compose.prod.yml), on its own host,
+or with the Rocky native installer's `INSTALL_KEA=1` option when this LXC is
+meant to serve DHCP directly. Kea 3.x should be reached through the direct
+daemon HTTP control sockets: DHCPv4 on `http://<kea-host>:8004/` and DHCPv6
+on `http://<kea-host>:8006/`.
 
-When Kea runs from `docker-compose.prod.yml`, those management ports are
-published on `127.0.0.1` by default. That is reachable only from the same
-network namespace as Docker's host. If the UI shows
-`http://127.0.0.1:8004/` from a native Rocky/Debian LXC, the control plane is
-trying to call the LXC itself. Unless Kea is installed inside that exact LXC,
-change `KEA4_CTRL_URL` / `KEA6_CTRL_URL` to the Kea host's management IP and
-publish the Kea ports on that IP.
+The native Debian installer, and the Rocky installer without `INSTALL_KEA=1`,
+leave `KEA4_CTRL_URL` / `KEA6_CTRL_URL` blank unless you provide them. If the
+UI shows `http://127.0.0.1:8004/`, the control plane is trying to call the
+same LXC. That is correct only when local Kea is installed in that exact LXC;
+otherwise change `KEA4_CTRL_URL` / `KEA6_CTRL_URL` to the Kea host's
+management IP and publish the Kea ports on that IP.
+
+When Kea runs from `docker-compose.prod.yml`, its management ports are
+published on `127.0.0.1` by default. That is reachable only from Docker's host,
+not from a separate LXC. For a separate LXC, set `KEA_CTRL_PUBLISH_ADDR` to the
+Kea host's management IP before starting the Kea compose stack.
 
 ## Option A — full stack, Docker Compose inside LXC
 
@@ -133,9 +136,9 @@ pct exec <vmid> -- bash -c 'cd /opt/mantis-dns-src && git fetch --tags && git ch
 [`infra/lxc/install-rocky.sh`](../infra/lxc/install-rocky.sh) is the `dnf`
 sibling of Option C's script, extended to also build and install
 `mantis-filter` from source (no `.rpm` is published — CI only ships a
-`.deb`), so a single Rocky 10 LXC ends up running the whole stack except
-Kea: Postgres, control plane, UI, and the DNS filter listening on `:53`.
-Works on a plain **unprivileged** container:
+`.deb`). By default a single Rocky 10 LXC runs Postgres, the control plane,
+UI, and the DNS filter listening on `:53`. Kea DHCP is available as an
+explicit opt-in because it needs additional network capabilities:
 
 ```
 pct create <vmid> <rocky-10-template> --unprivileged 1 --cores 2 --memory 1024 ...
@@ -157,6 +160,20 @@ replace `/etc/pki/tls/certs/mantis-dns.crt` and
 Set `INSTALL_FILTER=0` in the environment to skip the `mantis-filter` build
 and get management-plane-only behavior equivalent to Option C, e.g. if edge
 DNS nodes live on separate hosts.
+
+Set `INSTALL_KEA=1` to install ISC Kea 3.x from ISC's RPM repository, create
+`mantis-kea-dhcp4.service` / `mantis-kea-dhcp6.service`, initialize the Kea
+PostgreSQL schema, and point Mantis at local management sockets:
+
+```
+CORS_ALLOW_ORIGINS=https://<this-host-hostname-or-ip> INSTALL_KEA=1 ./infra/lxc/install-rocky.sh
+systemctl status mantis-kea-dhcp4 --no-pager
+ss -ltnp | grep ':8004'
+```
+
+If the Kea services fail with permission or socket errors, the LXC does not
+have the network capabilities needed to serve DHCP. Use a privileged LXC, a VM,
+or run Kea on a network host that can receive DHCP broadcasts/relay traffic.
 
 Same idempotency as Option C: re-running after `git pull` redeploys code and
 restarts services, reusing the existing Postgres role/secrets in

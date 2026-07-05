@@ -288,11 +288,16 @@ async def kea_command(
     arguments: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Send a command to Kea and return the first result."""
+    url = _command_url(service)
+    if not url:
+        target = "DHCPv6" if service and service[0] == "dhcp6" else "DHCPv4"
+        raise RuntimeError(f"Kea {target} management URL is not configured")
+
     payload: dict[str, Any] = {"command": command}
     if arguments is not None:
         payload["arguments"] = arguments
     async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(_command_url(service), json=payload)
+        resp = await client.post(url, json=payload)
         resp.raise_for_status()
         results: Any = resp.json()
         return cast(dict[str, Any], results[0] if isinstance(results, list) else results)
