@@ -146,14 +146,28 @@ sed -i "s#root /usr/share/nginx/html;#root ${UI_ROOT};#" /etc/nginx/conf.d/manti
 rm -f /etc/nginx/conf.d/default.conf
 
 echo "==> SELinux + firewalld (Rocky ships both enforcing/active by default; Debian's install.sh needs neither)..."
-setsebool -P httpd_can_network_connect 1
-restorecon -Rv "$UI_ROOT" >/dev/null
+# Best-effort: plenty of unprivileged LXC containers report SELinux as
+# enforcing (inherited from the host) but can't write the policy store
+# themselves ("Cannot set persistent booleans without managed policy"), and
+# some minimal templates don't ship firewalld at all. Neither should abort
+# the rest of the install — if setsebool/firewalld aren't usable here, nginx
+# still needs to come up.
+if command -v getenforce >/dev/null && [ "$(getenforce)" != "Disabled" ]; then
+  setsebool -P httpd_can_network_connect 1 2>/dev/null \
+    || setsebool httpd_can_network_connect 1 2>/dev/null \
+    || echo "    could not set httpd_can_network_connect — if nginx's proxy_pass to the control plane gets denied, check 'ausearch -m avc -ts recent'"
+  restorecon -Rv "$UI_ROOT" >/dev/null 2>&1 || true
+fi
 nginx -t
 systemctl enable --now nginx
 systemctl reload nginx || systemctl restart nginx
-systemctl enable --now firewalld
-firewall-cmd --add-service=http --permanent
-firewall-cmd --reload
+if command -v firewall-cmd >/dev/null; then
+  systemctl enable --now firewalld
+  firewall-cmd --add-service=http --permanent
+  firewall-cmd --reload
+else
+  echo "    firewalld not installed — skipping (open port 80 some other way if this host has its own firewall)"
+fi
 
 if [ "$INSTALL_FILTER" = "1" ]; then
   echo "==> Building mantis-filter (Rust, release profile — this takes a few minutes)..."
