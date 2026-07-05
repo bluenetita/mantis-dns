@@ -116,6 +116,13 @@ pct exec <vmid> -- bash -c '
 '
 ```
 
+When `CORS_ALLOW_ORIGINS` starts with `https://`, the Rocky installer
+configures nginx on port `443` and generates a local self-signed certificate
+with the LXC's primary IP address in its Subject Alternative Name. Browsers
+will still warn until that certificate is trusted by the client, or until you
+replace `/etc/pki/tls/certs/mantis-dns.crt` and
+`/etc/pki/tls/private/mantis-dns.key` with a CA-issued certificate.
+
 Set `INSTALL_FILTER=0` in the environment to skip the `mantis-filter` build
 and get management-plane-only behavior equivalent to Option C, e.g. if edge
 DNS nodes live on separate hosts.

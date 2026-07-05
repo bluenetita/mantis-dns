@@ -28,6 +28,11 @@
 #   git clone <repo> /opt/mantis-dns-src && cd /opt/mantis-dns-src
 #   CORS_ALLOW_ORIGINS=https://dns.example.com ./infra/lxc/install-rocky.sh
 #
+# Useful options:
+#   ENABLE_HTTPS=1          Generate/use a local self-signed cert and listen on 443
+#   INSTALL_FILTER=0        Skip mantis-filter
+#   MANTIS_SERVER_NAME=_    nginx server_name value
+#
 # Re-running this script (e.g. after `git pull` to a new tag) redeploys the
 # code and restarts services but reuses the existing Postgres role/secrets in
 # /etc/mantis-control/mantis-control.env — delete that file to regenerate.
@@ -47,12 +52,24 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 : "${CORS_ALLOW_ORIGINS:?set CORS_ALLOW_ORIGINS to the public UI origin for this host, e.g. https://dns.example.com}"
+REQUESTED_CORS_ALLOW_ORIGINS="$CORS_ALLOW_ORIGINS"
 INSTALL_FILTER=${INSTALL_FILTER:-1}
+MANTIS_SERVER_NAME=${MANTIS_SERVER_NAME:-_}
+TLS_CERT_FILE=${TLS_CERT_FILE:-/etc/pki/tls/certs/mantis-dns.crt}
+TLS_KEY_FILE=${TLS_KEY_FILE:-/etc/pki/tls/private/mantis-dns.key}
+
+if [ -z "${ENABLE_HTTPS:-}" ]; then
+  case "$REQUESTED_CORS_ALLOW_ORIGINS" in
+    https://*) ENABLE_HTTPS=1 ;;
+    *) ENABLE_HTTPS=0 ;;
+  esac
+fi
 
 INSTALL_DIR=/opt/mantis-dns
 UI_ROOT=/var/www/mantis-dns
 ENV_DIR=/etc/mantis-control
 ENV_FILE="$ENV_DIR/mantis-control.env"
+HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 
 echo "==> Enabling CRB + EPEL (needed for some AppStream/devel packages)..."
 dnf -y install dnf-plugins-core epel-release
@@ -78,6 +95,29 @@ if [ -f "$ENV_FILE" ]; then
   echo "==> $ENV_FILE exists — reusing secrets/DB credentials, redeploying code only."
   # shellcheck disable=SC1090
   source "$ENV_FILE"
+
+  if [ "${CORS_ALLOW_ORIGINS:-}" != "$REQUESTED_CORS_ALLOW_ORIGINS" ]; then
+    echo "==> Updating CORS_ALLOW_ORIGINS in $ENV_FILE."
+    tmp_env="$(mktemp)"
+    awk -v value="$REQUESTED_CORS_ALLOW_ORIGINS" '
+      BEGIN { updated = 0 }
+      /^CORS_ALLOW_ORIGINS=/ {
+        print "CORS_ALLOW_ORIGINS=" value
+        updated = 1
+        next
+      }
+      { print }
+      END {
+        if (!updated) {
+          print "CORS_ALLOW_ORIGINS=" value
+        }
+      }
+    ' "$ENV_FILE" > "$tmp_env"
+    cat "$tmp_env" > "$ENV_FILE"
+    rm -f "$tmp_env"
+    chmod 600 "$ENV_FILE"
+    CORS_ALLOW_ORIGINS="$REQUESTED_CORS_ALLOW_ORIGINS"
+  fi
 else
   echo "==> First install — provisioning Postgres role and generating secrets..."
   POSTGRES_DB=mantis
@@ -138,11 +178,46 @@ mkdir -p "$UI_ROOT"
 cp -r apps/ui/dist/. "$UI_ROOT/"
 
 echo "==> Configuring nginx..."
-CONTROL_UPSTREAM=127.0.0.1:8000 envsubst '${CONTROL_UPSTREAM}' \
-  < apps/ui/nginx.conf.template > /etc/nginx/conf.d/mantis-dns.conf
-# The upstream template hardcodes /usr/share/nginx/html as root; point it at
-# the native build output instead.
-sed -i "s#root /usr/share/nginx/html;#root ${UI_ROOT};#" /etc/nginx/conf.d/mantis-dns.conf
+if [ "$ENABLE_HTTPS" = "1" ]; then
+  echo "    HTTPS enabled; configuring nginx for port 443."
+  mkdir -p "$(dirname "$TLS_CERT_FILE")" "$(dirname "$TLS_KEY_FILE")"
+
+  if [ ! -s "$TLS_CERT_FILE" ] || [ ! -s "$TLS_KEY_FILE" ]; then
+    CERT_CN="$MANTIS_SERVER_NAME"
+    if [ "$CERT_CN" = "_" ]; then
+      CERT_CN="${HOST_IP:-mantis-dns.local}"
+    fi
+
+    SAN_ENTRIES="IP:${HOST_IP:-127.0.0.1}"
+    if [ "$MANTIS_SERVER_NAME" != "_" ]; then
+      SAN_ENTRIES="${SAN_ENTRIES},DNS:${MANTIS_SERVER_NAME}"
+    fi
+
+    openssl req -x509 -nodes -days 825 -newkey rsa:2048 \
+      -keyout "$TLS_KEY_FILE" \
+      -out "$TLS_CERT_FILE" \
+      -subj "/CN=${CERT_CN}" \
+      -addext "subjectAltName=${SAN_ENTRIES}"
+    chmod 600 "$TLS_KEY_FILE"
+  else
+    echo "    existing TLS certificate/key found; leaving them untouched."
+  fi
+
+  CONTROL_UPSTREAM=127.0.0.1:8000 \
+  UI_ROOT="$UI_ROOT" \
+  MANTIS_SERVER_NAME="$MANTIS_SERVER_NAME" \
+  TLS_CERT_FILE="$TLS_CERT_FILE" \
+  TLS_KEY_FILE="$TLS_KEY_FILE" \
+    envsubst '${CONTROL_UPSTREAM} ${UI_ROOT} ${MANTIS_SERVER_NAME} ${TLS_CERT_FILE} ${TLS_KEY_FILE}' \
+    < apps/ui/nginx.https.conf.template > /etc/nginx/conf.d/mantis-dns.conf
+else
+  CONTROL_UPSTREAM=127.0.0.1:8000 envsubst '${CONTROL_UPSTREAM}' \
+    < apps/ui/nginx.conf.template > /etc/nginx/conf.d/mantis-dns.conf
+  # The upstream template hardcodes /usr/share/nginx/html as root; point it at
+  # the native build output instead.
+  sed -i "s#root /usr/share/nginx/html;#root ${UI_ROOT};#" /etc/nginx/conf.d/mantis-dns.conf
+  sed -i "s#server_name _;#server_name ${MANTIS_SERVER_NAME};#" /etc/nginx/conf.d/mantis-dns.conf
+fi
 rm -f /etc/nginx/conf.d/default.conf
 
 echo "==> SELinux + firewalld (Rocky ships both enforcing/active by default; Debian's install.sh needs neither)..."
@@ -164,9 +239,16 @@ systemctl reload nginx || systemctl restart nginx
 if command -v firewall-cmd >/dev/null; then
   systemctl enable --now firewalld
   firewall-cmd --add-service=http --permanent
+  if [ "$ENABLE_HTTPS" = "1" ]; then
+    firewall-cmd --add-service=https --permanent
+  fi
   firewall-cmd --reload
 else
-  echo "    firewalld not installed — skipping (open port 80 some other way if this host has its own firewall)"
+  if [ "$ENABLE_HTTPS" = "1" ]; then
+    echo "    firewalld not installed — skipping (open ports 80 and 443 some other way if this host has its own firewall)"
+  else
+    echo "    firewalld not installed — skipping (open port 80 some other way if this host has its own firewall)"
+  fi
 fi
 
 if [ "$INSTALL_FILTER" = "1" ]; then
@@ -198,7 +280,12 @@ else
 fi
 
 echo
-echo "Done. UI: http://$(hostname -I | awk '{print $1}')/  API: http://127.0.0.1:8000"
+if [ "$ENABLE_HTTPS" = "1" ]; then
+  echo "Done. UI: https://${HOST_IP:-127.0.0.1}/  API: http://127.0.0.1:8000"
+  echo "The generated certificate is self-signed; trust ${TLS_CERT_FILE} on clients or replace it with a CA-issued certificate."
+else
+  echo "Done. UI: http://${HOST_IP:-127.0.0.1}/  API: http://127.0.0.1:8000"
+fi
 if [ "$INSTALL_FILTER" = "1" ]; then
   echo "DNS filter listening on :53 (mantis-filter) — point clients/DHCP at this host's IP."
 fi
