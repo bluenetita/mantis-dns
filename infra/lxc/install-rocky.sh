@@ -149,6 +149,15 @@ env_value() {
   grep -E "^${key}=" "$ENV_FILE" | tail -1 | cut -d= -f2-
 }
 
+ensure_firewalld_service() {
+  service="$1"
+  if firewall-cmd --permanent --query-service="$service" >/dev/null 2>&1; then
+    echo "    firewalld service already enabled: ${service}"
+  else
+    firewall-cmd --add-service="$service" --permanent
+  fi
+}
+
 refresh_kea_env_var() {
   key="$1"
   requested="$2"
@@ -571,13 +580,13 @@ systemctl enable --now nginx
 systemctl reload nginx || systemctl restart nginx
 if command -v firewall-cmd >/dev/null; then
   systemctl enable --now firewalld
-  firewall-cmd --add-service=http --permanent
+  ensure_firewalld_service http
   if [ "$ENABLE_HTTPS" = "1" ]; then
-    firewall-cmd --add-service=https --permanent
+    ensure_firewalld_service https
   fi
   if [ "$INSTALL_KEA" = "1" ]; then
-    firewall-cmd --add-service=dhcp --permanent || true
-    firewall-cmd --add-service=dhcpv6 --permanent || true
+    ensure_firewalld_service dhcp || true
+    ensure_firewalld_service dhcpv6 || true
   fi
   firewall-cmd --reload
 else
