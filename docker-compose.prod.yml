@@ -94,6 +94,12 @@ services:
     ports:
       - "67:67/udp"
       - "547:547/udp"
+      # Direct Kea management HTTP sockets. Bound to loopback by default so a
+      # native/LXC control plane on the same host can reach them without
+      # exposing config-write APIs to the LAN. Set KEA_CTRL_PUBLISH_ADDR to a
+      # specific management IP when the control plane runs on another host.
+      - "${KEA_CTRL_PUBLISH_ADDR:-127.0.0.1}:8004:8004"
+      - "${KEA_CTRL_PUBLISH_ADDR:-127.0.0.1}:8006:8006"
     environment:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432

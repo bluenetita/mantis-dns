@@ -943,7 +943,14 @@ export function useDhcpStats() {
 export function useKeasStatus() {
   return useQuery({
     queryKey: ["kea-status"],
-    queryFn: () => rawGet<{ ok: boolean; version: string | null; result: number | null; error?: string }>("/api/v1/dhcp/kea/status"),
+    queryFn: () =>
+      rawGet<{
+        ok: boolean;
+        url: string;
+        version: string | null;
+        result: number | null;
+        error?: string;
+      }>("/api/v1/dhcp/kea/status"),
     refetchInterval: 30_000,
   });
 }

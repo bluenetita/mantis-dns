@@ -53,6 +53,10 @@ fi
 
 : "${CORS_ALLOW_ORIGINS:?set CORS_ALLOW_ORIGINS to the public UI origin for this host, e.g. https://dns.example.com}"
 REQUESTED_CORS_ALLOW_ORIGINS="$CORS_ALLOW_ORIGINS"
+REQUESTED_KEA_CTRL_URL=${KEA_CTRL_URL:-}
+REQUESTED_KEA4_CTRL_URL=${KEA4_CTRL_URL:-}
+REQUESTED_KEA6_CTRL_URL=${KEA6_CTRL_URL:-}
+REQUESTED_KEA_HOOKS_DIR=${KEA_HOOKS_DIR:-}
 INSTALL_FILTER=${INSTALL_FILTER:-1}
 MANTIS_SERVER_NAME=${MANTIS_SERVER_NAME:-_}
 TLS_CERT_FILE=${TLS_CERT_FILE:-/etc/pki/tls/certs/mantis-dns.crt}
@@ -94,6 +98,45 @@ ensure_env_var() {
   value="$2"
   if ! grep -q "^${key}=" "$ENV_FILE"; then
     printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+  fi
+}
+
+set_env_var() {
+  key="$1"
+  value="$2"
+  tmp_env="$(mktemp)"
+  awk -v key="$key" -v value="$value" '
+    BEGIN { updated = 0 }
+    index($0, key "=") == 1 {
+      print key "=" value
+      updated = 1
+      next
+    }
+    { print }
+    END {
+      if (!updated) {
+        print key "=" value
+      }
+    }
+  ' "$ENV_FILE" > "$tmp_env"
+  cat "$tmp_env" > "$ENV_FILE"
+  rm -f "$tmp_env"
+}
+
+env_value() {
+  key="$1"
+  grep -E "^${key}=" "$ENV_FILE" | tail -1 | cut -d= -f2-
+}
+
+refresh_kea_env_var() {
+  key="$1"
+  requested="$2"
+  default="$3"
+  current="$(env_value "$key")"
+  if [ -n "$requested" ]; then
+    set_env_var "$key" "$requested"
+  elif [ -z "$current" ] || [ "$current" = "http://kea:8080/" ] || [ "$current" = "http://kea:8004/" ] || [ "$current" = "http://kea:8006/" ]; then
+    set_env_var "$key" "$default"
   fi
 }
 
@@ -264,6 +307,10 @@ ensure_env_var KEA_CTRL_URL "${KEA_CTRL_URL:-http://127.0.0.1:8004/}"
 ensure_env_var KEA4_CTRL_URL "${KEA4_CTRL_URL:-http://127.0.0.1:8004/}"
 ensure_env_var KEA6_CTRL_URL "${KEA6_CTRL_URL:-http://127.0.0.1:8006/}"
 ensure_env_var KEA_HOOKS_DIR "${KEA_HOOKS_DIR:-/usr/lib/kea/hooks}"
+refresh_kea_env_var KEA_CTRL_URL "$REQUESTED_KEA_CTRL_URL" "http://127.0.0.1:8004/"
+refresh_kea_env_var KEA4_CTRL_URL "$REQUESTED_KEA4_CTRL_URL" "http://127.0.0.1:8004/"
+refresh_kea_env_var KEA6_CTRL_URL "$REQUESTED_KEA6_CTRL_URL" "http://127.0.0.1:8006/"
+refresh_kea_env_var KEA_HOOKS_DIR "$REQUESTED_KEA_HOOKS_DIR" "/usr/lib/kea/hooks"
 chmod 600 "$ENV_FILE"
 
 load_control_env

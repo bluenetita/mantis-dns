@@ -672,15 +672,21 @@ function StatusTab() {
         {statusLoading ? (
           <Loader size="xs" />
         ) : status?.ok ? (
-          <Group gap="xs">
-            <Badge color="green" size="sm">Running</Badge>
-            <Text size="sm" c="dimmed">{status.version ?? "version unknown"}</Text>
-          </Group>
+          <Stack gap={4}>
+            <Group gap="xs">
+              <Badge color="green" size="sm">Running</Badge>
+              <Text size="sm" c="dimmed">{status.version ?? "version unknown"}</Text>
+            </Group>
+            <Text size="xs" c="dimmed">{status.url}</Text>
+          </Stack>
         ) : (
-          <Group gap="xs">
-            <Badge color="red" size="sm">Unreachable</Badge>
-            {status?.error && <Text size="xs" c="dimmed">{status.error}</Text>}
-          </Group>
+          <Stack gap={4}>
+            <Group gap="xs">
+              <Badge color="red" size="sm">Unreachable</Badge>
+              {status?.error && <Text size="xs" c="dimmed">{status.error}</Text>}
+            </Group>
+            {status?.url && <Text size="xs" c="dimmed">{status.url}</Text>}
+          </Stack>
         )}
       </Card>
 

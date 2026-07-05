@@ -38,7 +38,7 @@ from mantis_control.audit import write_audit_log
 from mantis_control.auth import check_tenant_access, require_role, user_tenant_filter
 from mantis_control.db.models import DhcpHaConfig, DhcpOption, DhcpRelayConfig, DhcpScope, DhcpStaticLease
 from mantis_control.db.session import get_db
-from mantis_control.dhcp.kea_config import kea_command, try_push
+from mantis_control.dhcp.kea_config import KEA4_CTRL_URL, kea_command, try_push
 
 router = APIRouter(prefix="/dhcp", tags=["dhcp"])
 log = logging.getLogger(__name__)
@@ -634,9 +634,14 @@ async def kea_status(user: Any = Depends(require_role("viewer"))) -> dict[str, A
     """Query Kea DHCPv4 daemon status via the management API."""
     try:
         result = await kea_command("version-get", service=["dhcp4"])
-        return {"ok": True, "version": result.get("text"), "result": result.get("result")}
+        return {
+            "ok": True,
+            "url": KEA4_CTRL_URL,
+            "version": result.get("text"),
+            "result": result.get("result"),
+        }
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "url": KEA4_CTRL_URL, "error": str(exc)}
 
 
 # ── HA configuration ───────────────────────────────────────────────────────────

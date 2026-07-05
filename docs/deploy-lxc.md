@@ -14,6 +14,14 @@ Kea 3.x should be reached through the direct daemon HTTP control sockets:
 DHCPv4 on `http://<kea-host>:8004/` and DHCPv6 on
 `http://<kea-host>:8006/`.
 
+When Kea runs from `docker-compose.prod.yml`, those management ports are
+published on `127.0.0.1` by default. That is correct when the native LXC
+control plane and Docker Kea run on the same host. If the Rocky/Debian LXC is
+on a different host, set `KEA_CTRL_PUBLISH_ADDR` to the Kea host's management
+IP (or another tightly firewalled address) before starting the Kea compose
+stack, then use that same host/IP in the control-plane `KEA*_CTRL_URL`
+settings.
+
 ## Option A — full stack, Docker Compose inside LXC
 
 Fastest path if you're fine with Docker-in-LXC. Requires a **privileged**
@@ -100,6 +108,16 @@ KEA4_CTRL_URL=http://<kea-host>:8004/
 KEA6_CTRL_URL=http://<kea-host>:8006/
 KEA_HOOKS_DIR=/usr/lib/kea/hooks
 ```
+
+If that Kea host is Docker Compose based, expose the management sockets to the
+control-plane LXC before starting it:
+
+```
+KEA_CTRL_PUBLISH_ADDR=<kea-host-management-ip> docker compose -f docker-compose.prod.yml up -d kea
+```
+
+Keep the management ports private to the control plane; they accept
+configuration-write commands.
 
 Combine with Option B: point one or more edge `mantis-filter` LXCs at this
 container's address as `CONTROL_URL`.
