@@ -18,7 +18,26 @@
 import createClient, { type Middleware } from "openapi-fetch";
 import type { paths } from "./schema";
 
-const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+function sameOriginBase(): string {
+  return typeof window === "undefined" ? "" : window.location.origin;
+}
+
+function normalizeApiBase(value: string | undefined): string {
+  if (value === "") return sameOriginBase();
+  if (value === undefined) return "http://localhost:8000";
+
+  const trimmed = value.replace(/\/+$/, "");
+  if (trimmed.endsWith("/api/v1")) {
+    return trimmed.slice(0, -"/api/v1".length) || sameOriginBase();
+  }
+  return trimmed;
+}
+
+export const API_BASE = normalizeApiBase(import.meta.env.VITE_API_URL);
+
+export function apiUrl(path: string): string {
+  return new URL(`${API_BASE}${path}`, sameOriginBase()).toString();
+}
 
 function readCookie(name: string): string | null {
   const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
@@ -84,7 +103,7 @@ export async function rawGet<T>(
   path: string,
   params?: Record<string, string | number | boolean | undefined>,
 ): Promise<T> {
-  const url = new URL(`${API_BASE}${path}`);
+  const url = new URL(apiUrl(path));
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined) url.searchParams.set(k, String(v));
@@ -95,22 +114,22 @@ export async function rawGet<T>(
 
 /** Typed POST for endpoints not yet in the OpenAPI schema. */
 export async function rawPost<T>(path: string, body: unknown): Promise<T> {
-  return rawRequest<T>("POST", `${API_BASE}${path}`, body);
+  return rawRequest<T>("POST", apiUrl(path), body);
 }
 
 /** PATCH for endpoints not yet in the OpenAPI schema. */
 export async function rawPatch<T>(path: string, body: unknown): Promise<T> {
-  return rawRequest<T>("PATCH", `${API_BASE}${path}`, body);
+  return rawRequest<T>("PATCH", apiUrl(path), body);
 }
 
 /** PUT for endpoints not yet in the OpenAPI schema. */
 export async function rawPut<T>(path: string, body: unknown): Promise<T> {
-  return rawRequest<T>("PUT", `${API_BASE}${path}`, body);
+  return rawRequest<T>("PUT", apiUrl(path), body);
 }
 
 /** DELETE for endpoints not yet in the OpenAPI schema. */
 export async function rawDelete(path: string): Promise<void> {
-  await rawRequest<void>("DELETE", `${API_BASE}${path}`);
+  await rawRequest<void>("DELETE", apiUrl(path));
 }
 
 /** Throws with a readable message on non-2xx instead of returning `{error}`. */

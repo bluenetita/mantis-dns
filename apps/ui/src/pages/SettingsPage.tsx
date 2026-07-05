@@ -68,9 +68,8 @@ import {
   useTestSiemWebhook,
   useUpdateSiemWebhook,
 } from "../api/hooks";
+import { API_BASE, apiUrl } from "../api/client";
 import type { components } from "../api/schema";
-
-const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 type SiemWebhook = components["schemas"]["SiemWebhookOut"];
 
@@ -380,8 +379,8 @@ export function SettingsPage() {
               <Stack gap={0} style={{ borderTop: "1px solid var(--mantine-color-dark-4)" }}>
                 {[
                   { label: "Control plane API",  url: API_BASE,             description: "FastAPI REST API — all management operations" },
-                  { label: "OpenAPI / Swagger",  url: `${API_BASE}/docs`,   description: "Interactive API documentation" },
-                  { label: "ReDoc reference",    url: `${API_BASE}/redoc`,  description: "Structured API reference" },
+                  { label: "OpenAPI / Swagger",  url: apiUrl("/docs"),      description: "Interactive API documentation" },
+                  { label: "ReDoc reference",    url: apiUrl("/redoc"),     description: "Structured API reference" },
                 ].map((ep, i, arr) => (
                   <div key={ep.label} style={{ borderBottom: i < arr.length - 1 ? "1px solid var(--mantine-color-dark-4)" : undefined }}>
                     <EndpointRow {...ep} />
@@ -532,8 +531,8 @@ export function SettingsPage() {
                 </Stack>
                 <Stack gap={2}>
                   <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: "0.05em" }}>Docs</Text>
-                  <Anchor href={`${API_BASE}/docs`} size="sm" target="_blank" rel="noreferrer">
-                    {API_BASE}/docs
+                  <Anchor href={apiUrl("/docs")} size="sm" target="_blank" rel="noreferrer">
+                    {apiUrl("/docs")}
                   </Anchor>
                 </Stack>
               </Group>

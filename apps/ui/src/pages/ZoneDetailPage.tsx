@@ -56,6 +56,7 @@ import {
   useUpdateZone,
   useZone,
 } from "../api/hooks";
+import { apiUrl } from "../api/client";
 import type { components } from "../api/schema";
 import { useAuth } from "../auth/AuthContext";
 
@@ -244,8 +245,7 @@ function RecordsTab({ zone, canWrite }: { zone: Zone; canWrite: boolean }) {
   }
 
   async function handleExport() {
-    const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-    const res = await fetch(`${API_BASE}/api/v1/dns-zones/${zone.id}/export`, {
+    const res = await fetch(apiUrl(`/api/v1/dns-zones/${zone.id}/export`), {
       credentials: "include",
     });
     if (!res.ok) {

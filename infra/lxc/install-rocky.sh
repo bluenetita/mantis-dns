@@ -285,7 +285,7 @@ if ! systemctl restart mantis-control || ! wait_for_control; then
 fi
 
 echo "==> Building UI static assets (requires Node from dnf above)..."
-( cd apps/ui && npm ci --legacy-peer-deps && VITE_API_URL=/api/v1 npm run build )
+( cd apps/ui && npm ci --legacy-peer-deps && VITE_API_URL= npm run build )
 rm -rf "$UI_ROOT"
 mkdir -p "$UI_ROOT"
 cp -r apps/ui/dist/. "$UI_ROOT/"

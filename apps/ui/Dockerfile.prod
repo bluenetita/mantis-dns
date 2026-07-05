@@ -7,10 +7,10 @@ COPY package.json package-lock.json ./
 RUN npm ci --legacy-peer-deps
 
 COPY . .
-# Baked in at build time (Vite inlines VITE_* at build, not runtime). Relative
-# path only — nginx below proxies it to the control plane, so the same image
-# works behind any hostname without a rebuild.
-ENV VITE_API_URL=/api/v1
+# Baked in at build time (Vite inlines VITE_* at build, not runtime). Empty
+# means same-origin API paths; nginx below proxies them to the control plane,
+# so the same image works behind any hostname without a rebuild.
+ENV VITE_API_URL=
 RUN npm run build
 
 FROM nginx:1.27-alpine
