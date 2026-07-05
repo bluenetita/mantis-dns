@@ -82,6 +82,32 @@ wait_for_control() {
   return 1
 }
 
+load_control_env() {
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+}
+
+check_control_startup() {
+  (
+    cd "$INSTALL_DIR/app"
+    runuser -u mantis --preserve-environment -- "$INSTALL_DIR/venv/bin/python" - <<'PY'
+import asyncio
+
+from mantis_control.main import app, _lifespan
+
+
+async def main() -> None:
+    async with _lifespan(app):
+        pass
+
+
+asyncio.run(main())
+PY
+  )
+}
+
 parse_database_url() {
   eval "$(
     DATABASE_URL="$DATABASE_URL" python3 - <<'PY'
@@ -194,6 +220,8 @@ EOF
   echo "Generated ADMIN_PASSWORD (shown once): ${ADMIN_PASSWORD}"
 fi
 
+load_control_env
+
 id -u mantis >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --shell /sbin/nologin mantis
 
 echo "==> Deploying control plane..."
@@ -212,6 +240,13 @@ echo "==> Installing systemd unit for control plane..."
 cp infra/lxc/mantis-control.service /etc/systemd/system/mantis-control.service
 systemctl daemon-reload
 systemctl enable mantis-control
+systemctl stop mantis-control >/dev/null 2>&1 || true
+
+echo "==> Checking control plane startup..."
+if ! check_control_startup; then
+  echo "mantis-control startup check failed; see the Python traceback above."
+  exit 1
+fi
 
 if ! systemctl restart mantis-control || ! wait_for_control; then
   echo "mantis-control failed to become healthy. Service status and recent logs:"
