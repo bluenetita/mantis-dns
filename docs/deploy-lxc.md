@@ -15,12 +15,12 @@ DHCPv4 on `http://<kea-host>:8004/` and DHCPv6 on
 `http://<kea-host>:8006/`.
 
 When Kea runs from `docker-compose.prod.yml`, those management ports are
-published on `127.0.0.1` by default. That is correct when the native LXC
-control plane and Docker Kea run on the same host. If the Rocky/Debian LXC is
-on a different host, set `KEA_CTRL_PUBLISH_ADDR` to the Kea host's management
-IP (or another tightly firewalled address) before starting the Kea compose
-stack, then use that same host/IP in the control-plane `KEA*_CTRL_URL`
-settings.
+published on `127.0.0.1` by default. That is reachable only from the same
+network namespace as Docker's host. If the UI shows
+`http://127.0.0.1:8004/` from a native Rocky/Debian LXC, the control plane is
+trying to call the LXC itself. Unless Kea is installed inside that exact LXC,
+change `KEA4_CTRL_URL` / `KEA6_CTRL_URL` to the Kea host's management IP and
+publish the Kea ports on that IP.
 
 ## Option A — full stack, Docker Compose inside LXC
 

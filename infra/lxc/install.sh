@@ -195,4 +195,6 @@ systemctl reload nginx || systemctl restart nginx
 
 echo
 echo "Done. UI: http://$(hostname -I | awk '{print $1}')/  API: http://127.0.0.1:8000"
+echo "Kea DHCPv4 management URL: $(env_value KEA4_CTRL_URL)"
+echo "If this is 127.0.0.1 but Kea is not running inside this same LXC, set KEA4_CTRL_URL/KEA6_CTRL_URL to the Kea host IP and restart mantis-control."
 echo "Log in with ADMIN_EMAIL/ADMIN_PASSWORD from ${ENV_FILE}, then rotate the password."

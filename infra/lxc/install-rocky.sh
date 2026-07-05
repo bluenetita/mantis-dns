@@ -466,4 +466,6 @@ fi
 if [ "$INSTALL_FILTER" = "1" ]; then
   echo "DNS filter listening on :53 (mantis-filter) — point clients/DHCP at this host's IP."
 fi
+echo "Kea DHCPv4 management URL: $(env_value KEA4_CTRL_URL)"
+echo "If this is 127.0.0.1 but Kea is not running inside this same LXC, set KEA4_CTRL_URL/KEA6_CTRL_URL to the Kea host IP and restart mantis-control."
 echo "Log in with ADMIN_EMAIL/ADMIN_PASSWORD from ${ENV_FILE}, then rotate the password."
