@@ -127,6 +127,7 @@ sync_postgres_role() {
   runuser -u postgres -- psql -v ON_ERROR_STOP=1 \
     -v role_name="$POSTGRES_USER" \
     -v role_password="$POSTGRES_PASSWORD" <<'SQL'
+SET password_encryption = 'scram-sha-256';
 SELECT CASE
   WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role_name')
     THEN format('ALTER ROLE %I WITH LOGIN PASSWORD %L', :'role_name', :'role_password')
@@ -138,6 +139,32 @@ SQL
   if ! runuser -u postgres -- psql -tAc "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'" | grep -q 1; then
     runuser -u postgres -- createdb -O "$POSTGRES_USER" "$POSTGRES_DB"
   fi
+}
+
+configure_postgres_password_auth() {
+  pg_hba="/var/lib/pgsql/data/pg_hba.conf"
+  if [ ! -f "$pg_hba" ]; then
+    echo "Postgres pg_hba.conf not found at $pg_hba" >&2
+    return 1
+  fi
+
+  tmp_hba="$(mktemp)"
+  awk '
+    /^# BEGIN mantis-dns$/ { skip = 1; next }
+    /^# END mantis-dns$/ { skip = 0; next }
+    !skip { print }
+  ' "$pg_hba" > "$tmp_hba"
+
+  {
+    echo "# BEGIN mantis-dns"
+    echo "host    ${POSTGRES_DB}    ${POSTGRES_USER}    127.0.0.1/32    scram-sha-256"
+    echo "host    ${POSTGRES_DB}    ${POSTGRES_USER}    ::1/128         scram-sha-256"
+    echo "# END mantis-dns"
+    cat "$tmp_hba"
+  } > "$pg_hba"
+  rm -f "$tmp_hba"
+
+  systemctl reload postgresql
 }
 
 echo "==> Enabling CRB + EPEL (needed for some AppStream/devel packages)..."
@@ -190,6 +217,7 @@ if [ -f "$ENV_FILE" ]; then
 
   parse_database_url
   sync_postgres_role
+  configure_postgres_password_auth
 else
   echo "==> First install — provisioning Postgres role and generating secrets..."
   POSTGRES_DB=mantis
@@ -203,6 +231,7 @@ else
   ADMIN_PASSWORD=$(openssl rand -hex 16)
 
   sync_postgres_role
+  configure_postgres_password_auth
 
   cat > "$ENV_FILE" <<EOF
 MANTIS_ENV=production
