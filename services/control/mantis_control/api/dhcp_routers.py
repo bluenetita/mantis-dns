@@ -631,7 +631,7 @@ def dhcp_stats(
 
 @router.get("/kea/status")
 async def kea_status(user: Any = Depends(require_role("viewer"))) -> dict[str, Any]:
-    """Query Kea daemon status via Control Agent."""
+    """Query Kea DHCPv4 daemon status via the management API."""
     try:
         result = await kea_command("version-get", service=["dhcp4"])
         return {"ok": True, "version": result.get("text"), "result": result.get("result")}
@@ -645,9 +645,9 @@ class HaConfigIn(BaseModel):
     enabled: bool = False
     mode: str = "hot-standby"
     this_server_name: str = "primary"
-    this_server_url: str = "http://kea-primary:8080/"
+    this_server_url: str = "http://kea:8004/"
     peer_name: str = "secondary"
-    peer_url: str = "http://kea-secondary:8080/"
+    peer_url: str = "http://kea-secondary:8004/"
     peer_role: str = "standby"
     max_unacked_clients: int | None = 10
     max_ack_delay_ms: int | None = 10000

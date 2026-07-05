@@ -1119,7 +1119,7 @@ export interface paths {
         };
         /**
          * Kea Status
-         * @description Query Kea daemon status via Control Agent.
+         * @description Query Kea DHCPv4 daemon status via the management API.
          */
         get: operations["kea_status_api_v1_dhcp_kea_status_get"];
         put?: never;
@@ -1596,7 +1596,7 @@ export interface components {
             this_server_name: string;
             /**
              * This Server Url
-             * @default http://kea-primary:8080/
+             * @default http://kea:8004/
              */
             this_server_url: string;
             /**
@@ -1606,7 +1606,7 @@ export interface components {
             peer_name: string;
             /**
              * Peer Url
-             * @default http://kea-secondary:8080/
+             * @default http://kea-secondary:8004/
              */
             peer_url: string;
             /**

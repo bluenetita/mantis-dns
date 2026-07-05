@@ -26,6 +26,9 @@ PG_USER="${POSTGRES_USER:-mantis}"
 PG_PASS="${POSTGRES_PASSWORD:-mantis}"
 PG_DB="${POSTGRES_DB:-mantis}"
 KEA_ROLE="${KEA_ROLE:-primary}"
+KEA_CTRL_BIND_ADDRESS="${KEA_CTRL_BIND_ADDRESS:-0.0.0.0}"
+KEA4_CTRL_PORT="${KEA4_CTRL_PORT:-8004}"
+KEA6_CTRL_PORT="${KEA6_CTRL_PORT:-8006}"
 
 echo "Waiting for PostgreSQL at ${PG_HOST}:${PG_PORT}..."
 until pg_isready -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" 2>/dev/null; do
@@ -66,6 +69,8 @@ sed \
     -e "s/__PG_USER__/${PG_USER}/g" \
     -e "s/__PG_PASS__/${PG_PASS}/g" \
     -e "s/__PG_DB__/${PG_DB}/g" \
+    -e "s/__KEA_CTRL_BIND_ADDRESS__/${KEA_CTRL_BIND_ADDRESS}/g" \
+    -e "s/__KEA4_CTRL_PORT__/${KEA4_CTRL_PORT}/g" \
     /etc/kea/kea-dhcp4.conf \
     | sed "s|__HOOKS_LIBRARIES__|${HOOKS_JSON}|g" \
     > /run/kea/kea-dhcp4-runtime.conf
@@ -77,13 +82,12 @@ sed \
     -e "s/__PG_USER__/${PG_USER}/g" \
     -e "s/__PG_PASS__/${PG_PASS}/g" \
     -e "s/__PG_DB__/${PG_DB}/g" \
+    -e "s/__KEA_CTRL_BIND_ADDRESS__/${KEA_CTRL_BIND_ADDRESS}/g" \
+    -e "s/__KEA6_CTRL_PORT__/${KEA6_CTRL_PORT}/g" \
     /etc/kea/kea-dhcp6.conf \
     > /run/kea/kea-dhcp6-runtime.conf
 
 echo "Starting Kea as role: ${KEA_ROLE}"
-
-# Start Control Agent in background (exposes REST API on :8080).
-kea-ctrl-agent -c /etc/kea/kea-ctrl-agent.conf &
 
 # Start DHCPv6 daemon in background (secondary nodes skip DHCPv4/v6 port binding
 # to avoid conflict — HA handles failover via lease sync, not dual listeners).

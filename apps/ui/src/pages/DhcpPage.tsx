@@ -751,9 +751,9 @@ function HaTab({ tenantOptions }: { tenantOptions: { value: string; label: strin
       enabled: false,
       mode: "hot-standby",
       this_server_name: "primary",
-      this_server_url: "http://kea-primary:8080/",
+      this_server_url: "http://kea:8004/",
       peer_name: "secondary",
-      peer_url: "http://kea-secondary:8080/",
+      peer_url: "http://kea-secondary:8004/",
       peer_role: "standby",
       max_unacked_clients: 10,
       max_ack_delay_ms: 10000,
@@ -846,12 +846,12 @@ function HaTab({ tenantOptions }: { tenantOptions: { value: string; label: strin
                 <Title order={6} mt="xs">This server</Title>
                 <Group grow>
                   <TextInput label="Name" {...form.getInputProps("this_server_name")} />
-                  <TextInput label="Control Agent URL" {...form.getInputProps("this_server_url")} />
+                  <TextInput label="Kea management URL" {...form.getInputProps("this_server_url")} />
                 </Group>
                 <Title order={6} mt="xs">Peer server</Title>
                 <Group grow>
                   <TextInput label="Name" {...form.getInputProps("peer_name")} />
-                  <TextInput label="Control Agent URL" {...form.getInputProps("peer_url")} />
+                  <TextInput label="Kea management URL" {...form.getInputProps("peer_url")} />
                   <Select
                     label="Role"
                     data={[

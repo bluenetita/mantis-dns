@@ -28,8 +28,9 @@ services:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-mantis}:${POSTGRES_PASSWORD:-mantis}@postgres:5432/${POSTGRES_DB:-mantis}
       - CORS_ALLOW_ORIGINS=http://localhost:5173,http://localhost:5174,http://localhost:59144
-      - KEA_CTRL_URL=http://kea:8080/
-      - KEA6_CTRL_URL=http://kea:8080/
+      - KEA_CTRL_URL=http://kea:8004/
+      - KEA4_CTRL_URL=http://kea:8004/
+      - KEA6_CTRL_URL=http://kea:8006/
       - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
       - MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN:-}
       - MANTIS_FILTER_NODE_IP=${MANTIS_FILTER_NODE_IP:-}
@@ -85,7 +86,7 @@ services:
       context: services/kea
       dockerfile: Dockerfile
     ports:
-      # Control Agent REST API (8080) is deliberately not published — it's
+      # Kea management HTTP sockets are deliberately not published — they are
       # only reached by the `control` container over the compose network.
       - "67:67/udp"    # DHCPv4
       - "547:547/udp"  # DHCPv6
@@ -98,7 +99,7 @@ services:
       - MANTIS_CTRL_URL=http://control:8000
       - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
       - KEA_ROLE=primary
-      - KEA_PEER_URL=http://kea-secondary:8080/
+      - KEA_PEER_URL=http://kea-secondary:8004/
     restart: unless-stopped
     volumes:
       - kea-primary-run:/run/kea
@@ -112,7 +113,7 @@ services:
     build:
       context: services/kea
       dockerfile: Dockerfile
-    # Control Agent REST API (8080) is deliberately not published — same
+    # Kea management HTTP sockets are deliberately not published — same
     # reasoning as the primary `kea` service above.
     environment:
       - POSTGRES_HOST=postgres
@@ -123,7 +124,7 @@ services:
       - MANTIS_CTRL_URL=http://control:8000
       - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
       - KEA_ROLE=secondary
-      - KEA_PEER_URL=http://kea:8080/
+      - KEA_PEER_URL=http://kea:8004/
     volumes:
       - kea-secondary-run:/run/kea
     depends_on:

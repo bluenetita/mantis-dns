@@ -15,9 +15,9 @@
 
 """ISC Kea DHCPv6 configuration generator (Sprint 22).
 
-Mirrors kea_config.py for DHCPv4 but targets kea-dhcp6 via the same Control
-Agent (service=["dhcp6"]).  `build_dhcp6_config()` translates `DhcpScope6`
-rows to a full Kea Dhcp6 JSON and `push_full_config6()` ships it atomically.
+Mirrors kea_config.py for DHCPv4 but targets kea-dhcp6. `build_dhcp6_config()`
+translates `DhcpScope6` rows to a full Kea Dhcp6 JSON and
+`push_full_config6()` ships it atomically.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from mantis_control.dhcp.kea_config import kea_command
+from mantis_control.dhcp.kea_config import _control_sockets, kea_command
 from mantis_control.db.models import DhcpScope6
 
 log = logging.getLogger(__name__)
@@ -133,10 +133,7 @@ def build_dhcp6_config(db: Session, filter_node_ip: str = "") -> dict[str, Any]:
         "Dhcp6": {
             "interfaces-config": {"interfaces": ["*"]},
             "lease-database": {"type": "postgresql", **_PG_CFG},
-            "control-socket": {
-                "socket-type": "unix",
-                "socket-name": "/run/kea/kea6-ctrl-socket",
-            },
+            "control-sockets": _control_sockets("dhcp6"),
             "expired-leases-processing": {
                 "reclaim-timer-wait-time": 10,
                 "flush-reclaimed-timer-wait-time": 25,

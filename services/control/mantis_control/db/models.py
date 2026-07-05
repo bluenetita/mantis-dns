@@ -549,11 +549,11 @@ class DhcpHaConfig(Base):
 
     # This server's identity within the HA pair
     this_server_name: Mapped[str] = mapped_column(String(128), default="primary")
-    this_server_url: Mapped[str] = mapped_column(String(255), default="http://kea-primary:8080/")
+    this_server_url: Mapped[str] = mapped_column(String(255), default="http://kea:8004/")
 
     # Peer (the other Kea instance)
     peer_name: Mapped[str] = mapped_column(String(128), default="secondary")
-    peer_url: Mapped[str] = mapped_column(String(255), default="http://kea-secondary:8080/")
+    peer_url: Mapped[str] = mapped_column(String(255), default="http://kea-secondary:8004/")
     peer_role: Mapped[str] = mapped_column(String(32), default="standby")  # "standby" or "primary"
 
     # Thresholds (Kea defaults shown)

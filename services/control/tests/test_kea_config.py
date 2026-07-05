@@ -18,6 +18,31 @@ from types import SimpleNamespace
 from mantis_control.dhcp import kea_config, kea_config6
 
 
+class _FakeResponse:
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return [{"result": 0, "text": "ok"}]
+
+
+class _FakeAsyncClient:
+    calls = []
+
+    def __init__(self, timeout):
+        self.timeout = timeout
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def post(self, url, json):
+        self.calls.append({"url": url, "json": json})
+        return _FakeResponse()
+
+
 def test_assign_unique_kea_ids_resolves_hash_collision(monkeypatch):
     """Two scopes whose truncated-hash subnet id collides (28 bits — a real
     risk at scale) must still get distinct ids, or Kea would reject the
@@ -49,3 +74,28 @@ def test_assign_unique_kea_ids6_resolves_hash_collision(monkeypatch):
     assert len(set(assigned.values())) == 2
     assert assigned["scope-a"] == 7
     assert assigned["scope-b"] == 8
+
+
+async def test_direct_kea_command_routes_to_dhcp6_without_service(monkeypatch):
+    _FakeAsyncClient.calls = []
+    monkeypatch.setattr(kea_config.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(kea_config, "KEA6_CTRL_URL", "http://kea:8006/")
+
+    result = await kea_config.kea_command("version-get", service=["dhcp6"])
+
+    assert result == {"result": 0, "text": "ok"}
+    assert _FakeAsyncClient.calls == [
+        {"url": "http://kea:8006/", "json": {"command": "version-get"}}
+    ]
+
+
+async def test_dhcp4_command_routes_without_service_wrapper(monkeypatch):
+    _FakeAsyncClient.calls = []
+    monkeypatch.setattr(kea_config.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(kea_config, "KEA4_CTRL_URL", "http://kea:8004/")
+
+    await kea_config.kea_command("version-get", service=["dhcp4"])
+
+    assert _FakeAsyncClient.calls == [
+        {"url": "http://kea:8004/", "json": {"command": "version-get"}}
+    ]

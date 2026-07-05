@@ -37,8 +37,9 @@ services:
       - MANTIS_ENV=production
       - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-mantis}:${POSTGRES_PASSWORD:-mantis}@postgres:5432/${POSTGRES_DB:-mantis}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:?set to your UI origin(s), e.g. https://dns.example.com}
-      - KEA_CTRL_URL=http://kea:8080/
-      - KEA6_CTRL_URL=http://kea:8080/
+      - KEA_CTRL_URL=http://kea:8004/
+      - KEA4_CTRL_URL=http://kea:8004/
+      - KEA6_CTRL_URL=http://kea:8006/
       - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:?required}
       - MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN:?required}
       - MANTIS_JWT_SECRET=${MANTIS_JWT_SECRET:?required}
@@ -102,7 +103,7 @@ services:
       - MANTIS_CTRL_URL=http://control:8000
       - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:?required}
       - KEA_ROLE=primary
-      - KEA_PEER_URL=http://kea-secondary:8080/
+      - KEA_PEER_URL=http://kea-secondary:8004/
     restart: unless-stopped
     volumes:
       - kea-primary-run:/run/kea
@@ -123,7 +124,7 @@ services:
       - MANTIS_CTRL_URL=http://control:8000
       - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:?required}
       - KEA_ROLE=secondary
-      - KEA_PEER_URL=http://kea:8080/
+      - KEA_PEER_URL=http://kea:8004/
     restart: unless-stopped
     volumes:
       - kea-secondary-run:/run/kea

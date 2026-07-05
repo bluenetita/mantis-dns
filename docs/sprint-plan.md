@@ -260,20 +260,20 @@ Replace the single static upstream resolver with an enterprise-grade upstream ma
 
 Full architecture and integration model: **design.md §22**.
 
-Mantis integrates **ISC Kea DHCP** as a co-located sidecar rather than building a DHCP engine from scratch. Kea handles the full RFC 2131/8415 wire protocol, conflict detection, relay agent processing, HA failover, and all edge cases. Mantis contributes multi-tenant config management (shadow DB → `KeaConfigGenerator` → Kea Control Agent REST API), a DDNS bridge (Kea `run_script` hook → Mantis DNS Zones API), lease-to-client-registry sync, and the management UI.
+Mantis integrates **ISC Kea DHCP** as a co-located sidecar rather than building a DHCP engine from scratch. Kea handles the full RFC 2131/8415 wire protocol, conflict detection, relay agent processing, HA failover, and all edge cases. Mantis contributes multi-tenant config management (shadow DB → `KeaConfigGenerator` → Kea direct management API), a DDNS bridge (Kea `run_script` hook → Mantis DNS Zones API), lease-to-client-registry sync, and the management UI.
 
 ### Sprint 19 — Kea deployment, config management, scope and reservation CRUD
 
-- [ ] **Docker Compose**: add `kea-dhcp4`, `kea-dhcp6`, `kea-ctrl-agent` services; Postgres backend (`libdhcp_pgsql.so`); mount generated config volumes; `kea-exporter` or Stork agent for Prometheus metrics; `restart: unless-stopped`.
-- [ ] **Kea startup config**: minimal `kea-dhcp4.conf` / `kea-dhcp6.conf` with `lease_cmds`, `host_cmds`, `stat_cmds`, `run_script` hooks enabled; `kea-ctrl-agent.conf` pointing at the FastAPI control-plane network.
+- [ ] **Docker Compose**: add `kea-dhcp4` and `kea-dhcp6` services with direct HTTP control sockets; Postgres backend (`libdhcp_pgsql.so`); mount generated config volumes; `kea-exporter` or Stork agent for Prometheus metrics; `restart: unless-stopped`.
+- [ ] **Kea startup config**: minimal `kea-dhcp4.conf` / `kea-dhcp6.conf` with HTTP `control-sockets`, `lease_cmds`, `host_cmds`, `stat_cmds`, and `run_script` hooks enabled.
 - [ ] **DB models**: `DhcpScope` (cidr/inet columns), `DhcpStaticLease`, `DhcpOption`, `DhcpRelayConfig`, `DhcpScopeGroupBinding` — see design.md §22.2. No `DhcpLease` table; Kea's `kea.dhcp4_leases` is authoritative.
-- [ ] **`KeaConfigGenerator`** (Python class in `mantis_control/dhcp/`): translates Mantis DB models to full Kea `Dhcp4` JSON; pushes via `POST http://kea-ctrl-agent:8080/ {"command":"config-set", ...}`; falls back to incremental `subnet4-add` / `reservation-add` commands for single-scope changes.
+- [ ] **`KeaConfigGenerator`** (Python class in `mantis_control/dhcp/`): translates Mantis DB models to full Kea `Dhcp4` JSON; pushes via `POST http://kea:8004/ {"command":"config-set", ...}`; falls back to incremental `subnet4-add` / `reservation-add` commands for single-scope changes.
 - [ ] **Scope CRUD API**: `GET/POST/PATCH/DELETE /api/v1/tenants/{tid}/dhcp/scopes`; on write → `KeaConfigGenerator.push_scope(scope_id)`; auto-injects DNS option 6 (filter node IPs for tenant), subnet mask, broadcast, lease timing options.
 - [ ] **Static reservation CRUD**: `GET/POST/PATCH/DELETE /api/v1/tenants/{tid}/dhcp/scopes/{sid}/reservations`; on write → `reservation-add` / `reservation-del` Kea command.
 - [ ] **Option CRUD**: per-scope and per-reservation; pushed inside `subnet4` config on next scope push.
 - [ ] **Lease read API**: `GET /api/v1/tenants/{tid}/dhcp/leases` — proxies a `SELECT` from `kea.dhcp4_leases` filtered by known `kea_subnet_id` values for the tenant; supports `?scope_id=`, `?state=`, `?mac=`, `?hostname=` query params.
 
-**Exit criteria:** `docker compose up kea-dhcp4 kea-ctrl-agent`; configure a scope via Mantis API; test client on same L2 → receives DHCPACK with correct IP, subnet mask, gateway, DNS option 6 pointing at Mantis filter node; lease visible via lease read API.
+**Exit criteria:** `docker compose up kea`; configure a scope via Mantis API; test client on same L2 → receives DHCPACK with correct IP, subnet mask, gateway, DNS option 6 pointing at Mantis filter node; lease visible via lease read API.
 
 ---
 
@@ -292,8 +292,8 @@ Mantis integrates **ISC Kea DHCP** as a co-located sidecar rather than building 
 
 ### Sprint 21 — HA, DHCPv6, UI, observability
 
-- [ ] **Kea HA**: `DhcpHaConfig` CRUD (`hot-standby` / `load-balancing` modes); `KeaConfigGenerator` emits `hooks-libraries` entry for `libdhcp_ha.so` with peer list; pushed to both Kea nodes; live HA state exposed via `ha-heartbeat` Control Agent command at `GET /api/v1/dhcp/ha-status`.
-- [ ] **DHCPv6**: `DhcpV6Scope`, `DhcpV6StaticLease` models; `KeaConfigGenerator` generates `kea-dhcp6.conf` (`subnet6` array, IA_NA pools, IA_PD prefix pools); pushes to `kea-dhcp6` via ctrl-agent `service:["dhcp6"]`; DDNS bridge fires AAAA + `ip6.arpa` PTR on DHCPv6 lease events.
+- [ ] **Kea HA**: `DhcpHaConfig` CRUD (`hot-standby` / `load-balancing` modes); `KeaConfigGenerator` emits `hooks-libraries` entry for `libdhcp_ha.so` with peer list; pushed to both Kea nodes; live HA state exposed via `ha-heartbeat` management API command at `GET /api/v1/dhcp/ha-status`.
+- [ ] **DHCPv6**: `DhcpV6Scope`, `DhcpV6StaticLease` models; `KeaConfigGenerator` generates `kea-dhcp6.conf` (`subnet6` array, IA_NA pools, IA_PD prefix pools); pushes directly to `kea-dhcp6` on `:8006`; DDNS bridge fires AAAA + `ip6.arpa` PTR on DHCPv6 lease events.
 - [ ] **DHCP management UI** (`/dhcp` route, new Shell nav entry):
   - **Scopes tab**: table (subnet, range, utilization bar, DDNS badge, sync status); Add/Edit modal with CIDR validator, range picker, lease timing, DDNS zone selector, relay IPs.
   - **Leases tab**: live table from lease API (IP, MAC, hostname, state badge, lease start/end, scope); filters by scope/state/MAC/hostname; bulk delete-expired; "Convert to reservation" action; CSV export; utilization gauge per scope (green <75%, amber 75–90%, red >90%).

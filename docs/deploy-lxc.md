@@ -10,6 +10,9 @@ Kea (DHCP) is out of scope for all options below — it needs
 [`ARCHITECTURE.md`](../ARCHITECTURE.md)). Run it via
 [`docker-compose.prod.yml`](../docker-compose.prod.yml) on a host that can
 give it that access, pointed at whichever control plane you deploy below.
+Kea 3.x should be reached through the direct daemon HTTP control sockets:
+DHCPv4 on `http://<kea-host>:8004/` and DHCPv6 on
+`http://<kea-host>:8006/`.
 
 ## Option A — full stack, Docker Compose inside LXC
 
@@ -87,6 +90,16 @@ The script generates and stores secrets in
 `ADMIN_PASSWORD`, printed once) and is safe to re-run after `git pull` to
 redeploy a new version — it reuses the existing Postgres role and secrets
 rather than regenerating them.
+
+For a separate Kea host, set these before the first run or edit
+`/etc/mantis-control/mantis-control.env` later:
+
+```
+KEA_CTRL_URL=http://<kea-host>:8004/
+KEA4_CTRL_URL=http://<kea-host>:8004/
+KEA6_CTRL_URL=http://<kea-host>:8006/
+KEA_HOOKS_DIR=/usr/lib/kea/hooks
+```
 
 Combine with Option B: point one or more edge `mantis-filter` LXCs at this
 container's address as `CONTROL_URL`.

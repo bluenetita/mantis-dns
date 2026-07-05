@@ -13,11 +13,11 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""ISC Kea DHCP configuration generator and Control Agent client (design.md §22).
+"""ISC Kea DHCP configuration generator and management API client (design.md §22).
 
 `build_dhcp4_config()` translates Mantis shadow DB state to a full Kea Dhcp4
-JSON structure.  `push_full_config()` ships it via the Control Agent REST API
-using the `config-set` command, which replaces the running config atomically.
+JSON structure. `push_full_config()` ships it via Kea's management API using
+the `config-set` command, which replaces the running config atomically.
 
 Every write operation (create/update/delete scope or reservation) calls
 `push_full_config()` so Kea always mirrors the DB.  A manual
@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 from typing import Any, cast
 
 import httpx
@@ -38,7 +39,11 @@ from mantis_control.db.models import DhcpHaConfig, DhcpScope
 
 log = logging.getLogger(__name__)
 
-KEA_CTRL_URL = os.getenv("KEA_CTRL_URL", "http://kea:8080/")
+KEA_CTRL_URL = os.getenv("KEA_CTRL_URL", "http://kea:8004/")
+KEA4_CTRL_URL = os.getenv("KEA4_CTRL_URL", KEA_CTRL_URL)
+KEA6_CTRL_URL = os.getenv("KEA6_CTRL_URL", "http://kea:8006/")
+KEA_CTRL_BIND_ADDRESS = os.getenv("KEA_CTRL_BIND_ADDRESS", "0.0.0.0")
+KEA_HOOKS_DIR = os.getenv("KEA_HOOKS_DIR", "/usr/lib/kea/hooks").rstrip("/")
 
 _PG_CFG = {
     "name": os.getenv("POSTGRES_DB", "mantis"),
@@ -74,6 +79,32 @@ def _assign_unique_kea_ids(scopes: list[DhcpScope]) -> dict[str, int]:
         used.add(candidate)
         assigned[scope.id] = candidate
     return assigned
+
+
+def _url_port(url: str, default: int) -> int:
+    parsed = urlparse(url)
+    return parsed.port or default
+
+
+def _control_sockets(kind: str) -> list[dict[str, Any]]:
+    if kind == "dhcp6":
+        return [
+            {
+                "socket-type": "http",
+                "socket-address": os.getenv("KEA6_CTRL_BIND_ADDRESS", KEA_CTRL_BIND_ADDRESS),
+                "socket-port": int(os.getenv("KEA6_CTRL_PORT", str(_url_port(KEA6_CTRL_URL, 8006)))),
+            },
+            {"socket-type": "unix", "socket-name": "/run/kea/kea6-ctrl-socket"},
+        ]
+
+    return [
+        {
+            "socket-type": "http",
+            "socket-address": os.getenv("KEA4_CTRL_BIND_ADDRESS", KEA_CTRL_BIND_ADDRESS),
+            "socket-port": int(os.getenv("KEA4_CTRL_PORT", str(_url_port(KEA4_CTRL_URL, 8004)))),
+        },
+        {"socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket"},
+    ]
 
 
 def _build_option_data(scope: DhcpScope, filter_node_ip: str) -> list[dict[str, Any]]:
@@ -135,9 +166,9 @@ def _build_reservations(scope: DhcpScope) -> list[dict[str, Any]]:
 def _build_ha_hooks(ha: "DhcpHaConfig") -> list[dict[str, Any]]:
     """Return the two Kea hook library entries needed for HA (lease_cmds + ha)."""
     return [
-        {"library": "/usr/lib/kea/hooks/libdhcp_lease_cmds.so"},
+        {"library": f"{KEA_HOOKS_DIR}/libdhcp_lease_cmds.so"},
         {
-            "library": "/usr/lib/kea/hooks/libdhcp_ha.so",
+            "library": f"{KEA_HOOKS_DIR}/libdhcp_ha.so",
             "parameters": {
                 "high-availability": [{
                     "this-server-name": ha.this_server_name,
@@ -223,10 +254,7 @@ def build_dhcp4_config(db: Session, filter_node_ip: str = "") -> dict[str, Any]:
             "interfaces-config": {"interfaces": ["*"], "dhcp-socket-type": "udp"},
             "hooks-libraries": ha_hooks,
             "lease-database": {"type": "postgresql", **_PG_CFG},
-            "control-socket": {
-                "socket-type": "unix",
-                "socket-name": "/run/kea/kea4-ctrl-socket",
-            },
+            "control-sockets": _control_sockets("dhcp4"),
             "expired-leases-processing": {
                 "reclaim-timer-wait-time": 10,
                 "flush-reclaimed-timer-wait-time": 25,
@@ -247,21 +275,24 @@ def build_dhcp4_config(db: Session, filter_node_ip: str = "") -> dict[str, Any]:
     }
 
 
-# ── Control Agent client ───────────────────────────────────────────────────────
+# ── Kea management API client ──────────────────────────────────────────────────
+
+def _command_url(service: list[str] | None) -> str:
+    if service and service[0] == "dhcp6":
+        return KEA6_CTRL_URL
+    return KEA4_CTRL_URL
 
 async def kea_command(
     command: str,
     service: list[str] | None = None,
     arguments: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Send a command to the Kea Control Agent and return the first result."""
+    """Send a command to Kea and return the first result."""
     payload: dict[str, Any] = {"command": command}
-    if service is not None:
-        payload["service"] = service
     if arguments is not None:
         payload["arguments"] = arguments
     async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(KEA_CTRL_URL, json=payload)
+        resp = await client.post(_command_url(service), json=payload)
         resp.raise_for_status()
         results: Any = resp.json()
         return cast(dict[str, Any], results[0] if isinstance(results, list) else results)

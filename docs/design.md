@@ -1131,7 +1131,7 @@ Mantis-DNS provides enterprise DHCP management by integrating **ISC Kea DHCP** a
 **The result is the same operational outcome as a custom engine with a fraction of the implementation risk:**
 
 - A new device plugs into the VPN or network → Kea assigns an IP → Mantis DDNS bridge writes A + PTR into DNS Zones → device appears in the client registry → visible in SIEM export — all without operator action.
-- Scope/reservation/option changes made in the Mantis UI are immediately pushed to Kea's running config via the Kea Control Agent REST API; no daemon restart required.
+- Scope/reservation/option changes made in the Mantis UI are immediately pushed to Kea's running config via Kea's direct HTTP management API; no daemon restart required.
 
 ---
 
@@ -1142,8 +1142,8 @@ Mantis-DNS provides enterprise DHCP management by integrating **ISC Kea DHCP** a
 │  Mantis node (Docker Compose)                                  │
 │                                                               │
 │  ┌──────────────┐   REST      ┌─────────────────────────┐   │
-│  │  mantis-ctrl  │ ──────────► │  kea-ctrl-agent :8080   │   │
-│  │  (FastAPI)   │             └────────┬────────────────┘   │
+│  │  mantis-ctrl  │ ──────────► │  kea-dhcp4 HTTP :8004   │   │
+│  │  (FastAPI)   │ ──────────► │  kea-dhcp6 HTTP :8006   │   │
 │  │              │                      │ commands            │
 │  │  config-gen  │             ┌────────▼────────────────┐   │
 │  │  lease-sync  │ ◄──────────│  kea-dhcp4 (UDP :67)    │   │
@@ -1160,10 +1160,10 @@ Mantis-DNS provides enterprise DHCP management by integrating **ISC Kea DHCP** a
 **Kea services:**
 - `kea-dhcp4` — DHCPv4 server (UDP port 67); Postgres lease backend.
 - `kea-dhcp6` — DHCPv6 server (UDP port 547); same Postgres instance, separate schema.
-- `kea-ctrl-agent` — HTTP REST API (port 8080) that forwards JSON commands to the running daemons; used by Mantis config-gen for live config updates without restart.
+- Direct HTTP control sockets — `kea-dhcp4` listens on `:8004` and `kea-dhcp6` listens on `:8006` for live config updates without restart.
 
 **Mantis components added for Kea integration:**
-- **`KeaConfigGenerator`** — Python class that translates Mantis DB models to Kea JSON config and pushes it via the Control Agent API (`config-set`, `subnet4-add`, `subnet4-del`, `reservation-add`).
+- **`KeaConfigGenerator`** — Python class that translates Mantis DB models to Kea JSON config and pushes it via Kea's management API (`config-set`, `subnet4-add`, `subnet4-del`, `reservation-add`).
 - **`DhcpLeaseSyncLoop`** — asyncio background task; reads `kea.dhcp4_leases` (Kea's native Postgres table) every 30 s and upserts `ClientEntry` records in the Mantis client registry.
 - **`DhcpDdnsBridge`** — called by Kea's `run_script` hook on DHCP4_LEASE_COMMITTED / DHCP4_LEASE_EXPIRED; writes/deletes A + PTR records in Mantis DNS Zones via the internal records API.
 
@@ -1304,7 +1304,7 @@ Push flow (on any DhcpScope / DhcpStaticLease / DhcpOption change):
        client-classes   ← generated for option-82 circuit-id / remote-id routing
        hooks-libraries  ← run_script (DDNS bridge), lease_cmds, host_cmds, stat_cmds
        ha               ← DhcpHaConfig if set
-  2. POST http://kea-ctrl-agent:8080/ {"command":"config-set","service":["dhcp4"],"arguments":{...}}
+  2. POST http://kea:8004/ {"command":"config-set","arguments":{...}}
   3. On success: UPDATE DhcpScope SET kea_subnet_id=..., last_pushed_at=now() WHERE ...
   4. On failure: log KeaConfigPushFailedEvent; expose error in UI.
 
@@ -1424,7 +1424,7 @@ A new **DHCP** section in the left nav:
 
 **Reservations** — MAC/IP/hostname table; bulk CSV import; inline conflict detection (red badge if IP has active dynamic lease for a different MAC).
 
-**HA / Relay** — HA mode selector + peer config form; live Kea HA state (`partner-down`, `load-balancing`, etc.) via `ha-heartbeat` Control Agent command; relay IP whitelist; option 82 client-class table.
+**HA / Relay** — HA mode selector + peer config form; live Kea HA state (`partner-down`, `load-balancing`, etc.) via `ha-heartbeat` management API command; relay IP whitelist; option 82 client-class table.
 
 **DDNS status** (within scope detail) — recent bridge events (hostname, IP, action, status, timestamp); retry queue depth; `ddns_zone_id` zone selector.
 

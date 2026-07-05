@@ -89,6 +89,14 @@ load_control_env() {
   set +a
 }
 
+ensure_env_var() {
+  key="$1"
+  value="$2"
+  if ! grep -q "^${key}=" "$ENV_FILE"; then
+    printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+  fi
+}
+
 check_control_startup() {
   (
     cd "$INSTALL_DIR/app"
@@ -242,12 +250,21 @@ MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN}
 MANTIS_JWT_SECRET=${MANTIS_JWT_SECRET}
 MANTIS_WEBHOOK_SECRET_KEY=${MANTIS_WEBHOOK_SECRET_KEY}
 MANTIS_FILTER_NODE_IP=${MANTIS_FILTER_NODE_IP:-}
+KEA_CTRL_URL=${KEA_CTRL_URL:-http://127.0.0.1:8004/}
+KEA4_CTRL_URL=${KEA4_CTRL_URL:-http://127.0.0.1:8004/}
+KEA6_CTRL_URL=${KEA6_CTRL_URL:-http://127.0.0.1:8006/}
+KEA_HOOKS_DIR=${KEA_HOOKS_DIR:-/usr/lib/kea/hooks}
 ADMIN_EMAIL=${ADMIN_EMAIL}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 EOF
   chmod 600 "$ENV_FILE"
   echo "Generated ADMIN_PASSWORD (shown once): ${ADMIN_PASSWORD}"
 fi
+ensure_env_var KEA_CTRL_URL "${KEA_CTRL_URL:-http://127.0.0.1:8004/}"
+ensure_env_var KEA4_CTRL_URL "${KEA4_CTRL_URL:-http://127.0.0.1:8004/}"
+ensure_env_var KEA6_CTRL_URL "${KEA6_CTRL_URL:-http://127.0.0.1:8006/}"
+ensure_env_var KEA_HOOKS_DIR "${KEA_HOOKS_DIR:-/usr/lib/kea/hooks}"
+chmod 600 "$ENV_FILE"
 
 load_control_env
 
