@@ -16,18 +16,32 @@
  */
 
 import { MantineProvider } from '@mantine/core';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, type RenderOptions } from '@testing-library/react';
 import { type ReactNode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 
-function Providers({ children }: { children: ReactNode }) {
+function Providers({ children, queryClient }: { children: ReactNode; queryClient: QueryClient }) {
   return (
     <MantineProvider>
-      <MemoryRouter>{children}</MemoryRouter>
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>{children}</MemoryRouter>
+      </QueryClientProvider>
     </MantineProvider>
   );
 }
 
-export function renderWithProviders(ui: ReactNode, options?: RenderOptions) {
-  return render(ui, { wrapper: Providers, ...options });
+export function renderWithProviders(
+  ui: ReactNode,
+  options?: RenderOptions & { queryClient?: QueryClient }
+) {
+  const queryClient =
+    options?.queryClient ??
+    new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+  return render(ui, {
+    wrapper: (props) => <Providers {...props} queryClient={queryClient} />,
+    ...options,
+  });
 }
