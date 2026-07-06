@@ -31,13 +31,11 @@ from fastapi import HTTPException, Request
 from mantis_control.config import settings
 
 # X-Forwarded-For is attacker-controlled unless it's overwritten by a proxy
-# we trust — set this to the reverse proxy's IP(s) so the login rate limiter
-# keys on the real client IP rather than a header any client can rotate to
-# dodge the limit. Empty by default: no reverse proxy in the compose
-# deployment, so XFF is never trusted (falls back to the direct peer IP).
-_TRUSTED_PROXY_IPS = settings.trusted_proxy_ips
-
-
+# we trust — set MANTIS_TRUSTED_PROXY_IPS to the reverse proxy's IP(s) so the
+# login rate limiter keys on the real client IP rather than a header any
+# client can rotate to dodge the limit. Empty by default: no reverse proxy in
+# the compose deployment, so XFF is never trusted (falls back to the direct
+# peer IP).
 _SWEEP_EVERY_N_CALLS = 1000
 
 
@@ -85,7 +83,7 @@ def login_rate_limit(request: Request) -> None:
     """
     direct_ip = request.client.host if request.client else "unknown"
     forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded and direct_ip in _TRUSTED_PROXY_IPS:
+    if forwarded and direct_ip in settings.trusted_proxy_ips:
         ip = forwarded.split(",")[0].strip()
     else:
         ip = direct_ip

@@ -37,11 +37,8 @@ from mantis_control.db.session import get_db
 router = APIRouter(prefix="/internal", tags=["internal"])
 log = logging.getLogger(__name__)
 
-_INTERNAL_TOKEN = settings.MANTIS_INTERNAL_TOKEN
-
-
 def _verify_internal(x_internal_token: str | None = Header(None)) -> None:
-    if not x_internal_token or not hmac.compare_digest(x_internal_token, _INTERNAL_TOKEN):
+    if not x_internal_token or not hmac.compare_digest(x_internal_token, settings.MANTIS_INTERNAL_TOKEN):
         raise HTTPException(403, "invalid internal token")
 
 

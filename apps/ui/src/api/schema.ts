@@ -21,6 +21,28 @@
  */
 
 export interface paths {
+    "/api/v1/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Categories
+         * @description Canonical category taxonomy (design.md §18.1) — static, system-defined,
+         *     same for every tenant. Drives the PolicyPage category picker and the
+         *     FeedsPage category filter/badges.
+         */
+        get: operations["list_categories_api_v1_categories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tenants": {
         parameters: {
             query?: never;
@@ -254,6 +276,23 @@ export interface paths {
         put?: never;
         /** Ingest Feed */
         post: operations["ingest_feed_api_v1_feeds__feed_id__ingest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/query-log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Query Log */
+        get: operations["query_log_api_v1_query_log_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1370,6 +1409,25 @@ export interface components {
             /** Pct */
             pct: number;
         };
+        /** CategoryOut */
+        CategoryOut: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Description */
+            description: string;
+            /** Group */
+            group: string;
+            /** Color */
+            color: string;
+            /** Icon */
+            icon: string;
+            /** Default Action */
+            default_action: string;
+            /** Has Bundled Feed */
+            has_bundled_feed: boolean;
+        };
         /** CategoryToggleIn */
         CategoryToggleIn: {
             /** Category Id */
@@ -2005,6 +2063,44 @@ export interface components {
             client_ip?: string | null;
             /** Qtype */
             qtype?: string | null;
+            /** Matched Rule */
+            matched_rule?: string | null;
+            /** Matched Category */
+            matched_category?: string | null;
+            /** Matched Feed Id */
+            matched_feed_id?: string | null;
+            /** Response Code */
+            response_code?: string | null;
+            /** Cache Hit */
+            cache_hit?: boolean | null;
+            /** Latency Us */
+            latency_us?: number | null;
+        };
+        /** QueryLogEntry */
+        QueryLogEntry: {
+            /** Id */
+            id: string;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Group Id */
+            group_id: string;
+            /** Group Name */
+            group_name?: string | null;
+            /** Tenant Id */
+            tenant_id?: string | null;
+            /** Client Ip */
+            client_ip?: string | null;
+            /** Client Name */
+            client_name?: string | null;
+            /** Qname */
+            qname: string;
+            /** Qtype */
+            qtype?: string | null;
+            /** Decision */
+            decision: string;
             /** Matched Rule */
             matched_rule?: string | null;
             /** Matched Category */
@@ -3206,6 +3302,26 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_categories_api_v1_categories_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryOut"][];
+                };
+            };
+        };
+    };
     list_tenants_api_v1_tenants_get: {
         parameters: {
             query?: never;
@@ -3424,7 +3540,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "x-mantis-service-token"?: string | null;
+                authorization?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -3521,7 +3637,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "x-mantis-service-token"?: string | null;
+                authorization?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -3552,7 +3668,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "x-mantis-service-token"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 group_id: string;
@@ -3795,11 +3911,47 @@ export interface operations {
             };
         };
     };
+    query_log_api_v1_query_log_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                decision?: ("allow" | "block") | null;
+                group_id?: string | null;
+                qname?: string | null;
+                hours?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueryLogEntry"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     ingest_query_events_api_v1_query_events_post: {
         parameters: {
             query?: never;
             header?: {
-                "x-mantis-service-token"?: string | null;
+                authorization?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -4058,6 +4210,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                offset?: number;
                 resource_type?: string | null;
             };
             header?: never;
@@ -5403,7 +5556,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                "x-mantis-service-token"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 tenant_id: string;

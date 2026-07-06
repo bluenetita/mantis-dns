@@ -778,43 +778,39 @@ def get_upstream_bundle(
         .all()
     } if resolver_ids else {}
 
-    # Tenant policy (or defaults).
+    # Tenant policy (or defaults) — same fallback shape as get_tenant_policy above.
     policy = db.get(models.UpstreamTenantPolicy, tenant_id)
+    policy_out = (
+        TenantPolicyOut.model_validate(policy)
+        if policy is not None
+        else _DEFAULT_POLICY.model_copy(update={"tenant_id": tenant_id})
+    )
 
     now_ts = int(datetime.now(timezone.utc).timestamp())
 
+    # Bundle fields are the *_Out schemas minus admin-only metadata (ids the
+    # filter node has no use for, audit timestamps, tags/enabled — enabled is
+    # already expressed by the object's presence in the bundle at all). Wire
+    # format = "everything the admin API knows" minus an explicit opt-out
+    # list, rather than a hand-copied field-by-field dict: a new resolver/
+    # route/pool field lands in the bundle automatically unless added to the
+    # exclude set below, instead of silently missing until someone remembers
+    # to update this endpoint too.
     bundle: dict[str, Any] = {
         "version": now_ts,
         "tenant_id": tenant_id,
         "issued_at": datetime.now(timezone.utc).isoformat(),
         "routes": [
-            {
-                "id": rt.id,
-                "name": rt.name,
-                "tenant_id": rt.tenant_id,
-                "group_id": rt.group_id,
-                "match_type": rt.match_type,
-                "match_value": rt.match_value,
-                "pool_id": rt.pool_id,
-                "nxdomain_ttl_override": rt.nxdomain_ttl_override,
-                "require_dnssec": rt.require_dnssec,
-                "priority": rt.priority,
-            }
+            RouteOut.model_validate(rt).model_dump(exclude={"enabled", "created_at", "updated_at"})
             for rt in routes
         ],
         "pools": {
             pid: {
-                "id": p.id,
-                "name": p.name,
-                "strategy": p.strategy,
-                "health_check_interval_s": p.health_check_interval_s,
-                "health_check_timeout_ms": p.health_check_timeout_ms,
-                "health_check_query": p.health_check_query,
-                "health_check_type": p.health_check_type,
-                "unhealthy_threshold": p.unhealthy_threshold,
-                "healthy_threshold": p.healthy_threshold,
-                "min_healthy_members": p.min_healthy_members,
-                "fallback_pool_id": p.fallback_pool_id,
+                **PoolOut.model_validate(p).model_dump(
+                    exclude={"members", "created_at", "updated_at"}
+                ),
+                # Health-check-filtered/sorted view of membership, not the raw
+                # PoolMemberOut list — deliberately its own shape.
                 "members": [
                     {
                         "resolver_id": m.resolver_id,
@@ -828,34 +824,12 @@ def get_upstream_bundle(
             for pid, p in pools.items()
         },
         "resolvers": {
-            rid: {
-                "id": r.id,
-                "name": r.name,
-                "protocol": r.protocol,
-                "address": r.address,
-                "port": r.port,
-                "tls_hostname": r.tls_hostname,
-                "tls_pin_sha256": r.tls_pin_sha256 or [],
-                "doh_path": r.doh_path,
-                "doh_method": r.doh_method,
-                "dnssec_validation": r.dnssec_validation,
-                "qname_minimization": r.qname_minimization,
-                "edns_client_subnet": r.edns_client_subnet,
-                "timeout_ms": r.timeout_ms,
-                "max_retries": r.max_retries,
-                "connect_timeout_ms": r.connect_timeout_ms,
-            }
+            rid: ResolverOut.model_validate(r).model_dump(
+                exclude={"tags", "enabled", "created_at", "updated_at"}
+            )
             for rid, r in resolvers.items()
         },
-        "tenant_policy": {
-            "require_encrypted": policy.require_encrypted if policy else False,
-            "dnssec_validation": policy.dnssec_validation if policy else "opportunistic",
-            "qname_minimization": policy.qname_minimization if policy else True,
-            "blocked_response_type": policy.blocked_response_type if policy else "nxdomain",
-            "min_ttl_s": policy.min_ttl_s if policy else 0,
-            "max_ttl_s": policy.max_ttl_s if policy else 86400,
-            "negative_ttl_s": policy.negative_ttl_s if policy else 300,
-        },
+        "tenant_policy": policy_out.model_dump(exclude={"tenant_id"}),
     }
 
     body, sig_hex = _sign_bundle_body(bundle)

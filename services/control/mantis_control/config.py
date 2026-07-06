@@ -17,9 +17,9 @@
 
 Every setting the control plane reads from the environment is declared once
 here instead of scattered `os.environ.get(...)` calls with hand-copied
-defaults in each consumer module. `main.py`'s production-secret check
-compares live values against the same dev-default constants, so the two
-can't drift out of sync.
+defaults in each consumer module. `_check_production_secrets` below compares
+live values against the same dev-default constants, so the two can't drift
+out of sync.
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Dev-only defaults. Never used when MANTIS_ENV=production (main.py's
-# _check_production_secrets refuses to boot if any of these are still active).
+# Dev-only defaults. Never used when MANTIS_ENV=production
+# (_check_production_secrets below refuses to boot if any are still active).
 JWT_DEV_SECRET = "dev-insecure-secret-change-me"
 WEBHOOK_DEV_KEY_MATERIAL = "dev-insecure-webhook-key-change-me"
 INTERNAL_TOKEN_DEV_DEFAULT = "dev-insecure-internal-token"
@@ -65,7 +65,7 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        return self.CORS_ALLOW_ORIGINS.split(",")
+        return [origin.strip() for origin in self.CORS_ALLOW_ORIGINS.split(",") if origin.strip()]
 
     @property
     def trusted_proxy_ips(self) -> set[str]:
@@ -73,6 +73,36 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def _check_production_secrets() -> None:
+    """Refuse to start when MANTIS_ENV=production but dev-default secrets are
+    in use. Runs at import time (below) rather than only from the FastAPI
+    lifespan, so every entrypoint that touches mantis_control — the server,
+    alembic, a future CLI/worker — gets the same guarantee."""
+    if not settings.is_production:
+        return
+    errors: list[str] = []
+    if settings.MANTIS_JWT_SECRET == JWT_DEV_SECRET:
+        errors.append("MANTIS_JWT_SECRET is the insecure dev default — set a strong random value")
+    elif len(settings.MANTIS_JWT_SECRET) < 32:
+        errors.append("MANTIS_JWT_SECRET is too short — minimum 32 characters required")
+    if not settings.MANTIS_WEBHOOK_SECRET_KEY:
+        errors.append("MANTIS_WEBHOOK_SECRET_KEY is not set")
+    if settings.MANTIS_INTERNAL_TOKEN == INTERNAL_TOKEN_DEV_DEFAULT:
+        errors.append("MANTIS_INTERNAL_TOKEN is the insecure dev default — set a strong random value")
+    if not settings.MANTIS_SERVICE_TOKEN:
+        errors.append("MANTIS_SERVICE_TOKEN is not set — filter-node M2M endpoints would be unauthenticated")
+    if settings.ADMIN_PASSWORD == ADMIN_PASSWORD_DEV_DEFAULT:
+        errors.append("ADMIN_PASSWORD is the insecure dev default — set it before first boot")
+    if errors:
+        raise RuntimeError(
+            "Refusing to start: MANTIS_ENV=production but insecure secrets detected: "
+            + "; ".join(errors)
+        )
+
+
+_check_production_secrets()
 
 # Sprint 2/5: local disk. Swap for S3 + etcd per design.md §5.2 without
 # touching callers — see build_policy_bundle.store_bundle.

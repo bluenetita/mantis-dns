@@ -26,12 +26,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from functools import lru_cache
 
 from cryptography.fernet import Fernet
 
 from mantis_control.config import WEBHOOK_DEV_KEY_MATERIAL, settings
 
 
+@lru_cache(maxsize=1)
 def _fernet() -> Fernet:
     raw = settings.MANTIS_WEBHOOK_SECRET_KEY
     if raw:

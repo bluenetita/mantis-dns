@@ -38,8 +38,6 @@ from mantis_control.config import settings
 from mantis_control.db import models
 from mantis_control.db.session import get_db
 
-# Dev default — set MANTIS_JWT_SECRET before any non-dev deployment.
-_JWT_SECRET = settings.MANTIS_JWT_SECRET
 _JWT_ALGORITHM = "HS256"
 _ACCESS_TOKEN_TTL = timedelta(hours=12)
 
@@ -86,17 +84,12 @@ def clear_auth_cookies(response: Response) -> None:
 
 # Shared secret authenticating filter-node -> control-plane machine calls
 # (/public-key, /routing-table, /groups/{id}/bundle GET, /upstream-bundle/{id},
-# /query-events). Empty by default: these endpoints predate auth and stay open
-# in dev unless MANTIS_SERVICE_TOKEN is set. Production startup (main.py)
-# refuses to boot with MANTIS_ENV=production unless it's configured.
-_SERVICE_TOKEN = settings.MANTIS_SERVICE_TOKEN
-
-
+# /query-events). Empty by default: these endpoints predate auth and stay open.
 def require_service_token(authorization: str | None = Header(None)) -> None:
-    if not _SERVICE_TOKEN:
+    if not settings.MANTIS_SERVICE_TOKEN:
         return
     token = authorization.removeprefix("Bearer ") if authorization else None
-    if not token or not hmac.compare_digest(token, _SERVICE_TOKEN):
+    if not token or not hmac.compare_digest(token, settings.MANTIS_SERVICE_TOKEN):
         raise HTTPException(403, "invalid or missing service token")
 
 
@@ -125,7 +118,7 @@ def create_access_token(user: models.User) -> str:
         "iat": now,
         "exp": now + _ACCESS_TOKEN_TTL,
     }
-    return jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALGORITHM)
+    return jwt.encode(payload, settings.MANTIS_JWT_SECRET, algorithm=_JWT_ALGORITHM)
 
 
 def get_current_user(
@@ -139,7 +132,7 @@ def get_current_user(
     if token is None:
         raise HTTPException(401, "missing bearer token or session cookie")
     try:
-        payload = jwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALGORITHM])
+        payload = jwt.decode(token, settings.MANTIS_JWT_SECRET, algorithms=[_JWT_ALGORITHM])
     except jwt.PyJWTError as e:
         raise HTTPException(401, "invalid token") from e
 

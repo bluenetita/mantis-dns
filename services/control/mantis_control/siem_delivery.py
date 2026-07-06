@@ -174,14 +174,28 @@ async def _process_webhook(db: Session, webhook: models.SiemWebhook, client: htt
 async def run_webhook_delivery_cycle() -> None:
     db = SessionLocal()
     try:
-        webhooks = db.query(models.SiemWebhook).filter(models.SiemWebhook.enabled.is_(True)).all()
-        if not webhooks:
-            return
-        async with httpx.AsyncClient() as client:
-            for webhook in webhooks:
-                try:
-                    await _process_webhook(db, webhook, client)
-                except Exception:
-                    db.rollback()
+        webhook_ids = [
+            w.id for w in db.query(models.SiemWebhook).filter(models.SiemWebhook.enabled.is_(True)).all()
+        ]
     finally:
         db.close()
+    if not webhook_ids:
+        return
+
+    # One connection per webhook, held only for that webhook's read + POST +
+    # write — not one connection pinned across every webhook's HTTP call.
+    # A shared connection here would sit checked-out from the pool for the
+    # combined duration of all deliveries (up to 10s each), starving other
+    # requests (e.g. bundle-compile) of pool connections.
+    async with httpx.AsyncClient() as client:
+        for webhook_id in webhook_ids:
+            db = SessionLocal()
+            try:
+                webhook = db.get(models.SiemWebhook, webhook_id)
+                if webhook is None or not webhook.enabled:
+                    continue
+                await _process_webhook(db, webhook, client)
+            except Exception:
+                db.rollback()
+            finally:
+                db.close()

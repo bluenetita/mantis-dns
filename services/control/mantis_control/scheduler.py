@@ -38,17 +38,30 @@ def _job_id(feed_id: str) -> str:
 
 
 async def run_ingest(feed_id: str) -> None:
+    # Look up the feed and release the connection *before* the (slow,
+    # possibly hanging) outbound fetch below — holding a pooled connection
+    # for the duration of an httpx call starves the pool (5+10 conns) when
+    # several feeds are in flight at once, which then starves API requests
+    # like bundle-compile that need a connection too.
     db = SessionLocal()
     try:
         feed = db.get(Feed, feed_id)
         if feed is None or not feed.enabled:
             return
-        async with httpx.AsyncClient() as client:
-            result = await fetch_and_ingest(feed, FEED_STORAGE_DIR, client)
-        if result.status == "updated":
-            db.commit()
+        db.expunge(feed)
     finally:
         db.close()
+
+    async with httpx.AsyncClient() as client:
+        result = await fetch_and_ingest(feed, FEED_STORAGE_DIR, client)
+
+    if result.status == "updated":
+        db = SessionLocal()
+        try:
+            db.merge(feed)
+            db.commit()
+        finally:
+            db.close()
 
 
 def schedule_feed(feed: Feed) -> None:

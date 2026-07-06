@@ -28,7 +28,7 @@ def _make_request(client_host: str, xff: str | None) -> MagicMock:
 def test_untrusted_peer_xff_is_ignored(monkeypatch):
     """A direct peer that isn't a configured trusted proxy can't spoof its
     rate-limit key via X-Forwarded-For."""
-    monkeypatch.setattr(rate_limit, "_TRUSTED_PROXY_IPS", set())
+    monkeypatch.setattr(rate_limit.settings, "MANTIS_TRUSTED_PROXY_IPS", "")
     calls: list[str] = []
     monkeypatch.setattr(rate_limit._login_limiter, "check", lambda key: calls.append(key))
 
@@ -39,7 +39,7 @@ def test_untrusted_peer_xff_is_ignored(monkeypatch):
 
 
 def test_trusted_proxy_xff_is_honored(monkeypatch):
-    monkeypatch.setattr(rate_limit, "_TRUSTED_PROXY_IPS", {"10.0.0.1"})
+    monkeypatch.setattr(rate_limit.settings, "MANTIS_TRUSTED_PROXY_IPS", "10.0.0.1")
     calls: list[str] = []
     monkeypatch.setattr(rate_limit._login_limiter, "check", lambda key: calls.append(key))
 
@@ -50,7 +50,7 @@ def test_trusted_proxy_xff_is_honored(monkeypatch):
 
 
 def test_no_xff_header_uses_direct_peer(monkeypatch):
-    monkeypatch.setattr(rate_limit, "_TRUSTED_PROXY_IPS", {"10.0.0.1"})
+    monkeypatch.setattr(rate_limit.settings, "MANTIS_TRUSTED_PROXY_IPS", "10.0.0.1")
     calls: list[str] = []
     monkeypatch.setattr(rate_limit._login_limiter, "check", lambda key: calls.append(key))
 

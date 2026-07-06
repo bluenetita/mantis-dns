@@ -41,7 +41,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+        working-directory: services/control
       - run: npm ci
       - run: npm run build
       - run: npm run size
       - run: npm test
+      # Fails if src/api/schema.ts wasn't regenerated after an API change —
+      # see apps/ui/scripts/gen-api.mjs.
+      - run: npm run gen:api:check

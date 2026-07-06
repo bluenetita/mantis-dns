@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # Copyright (C) 2026 Blue Networks srl <support+github@bluenetworks.it>
 #
 # This program is free software: you can redistribute it and/or modify
@@ -13,25 +14,19 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from __future__ import annotations
+"""Dumps the control-plane's OpenAPI schema to stdout.
 
-from collections.abc import Generator
+`FastAPI.openapi()` builds the schema from the route/model definitions
+already loaded in-process — no running server, Postgres, or network call
+needed. Used by `apps/ui`'s `gen:api` script and CI's schema-drift check so
+regenerating apps/ui/src/api/schema.ts doesn't require standing up the whole
+stack first.
+"""
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+import json
+import sys
 
-from mantis_control.config import settings
+from mantis_control.main import app
 
-engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-
-
-def get_db() -> Generator[Session, None, None]:
-    db = SessionLocal()
-    try:
-        yield db
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+json.dump(app.openapi(), sys.stdout, indent=2)
+sys.stdout.write("\n")

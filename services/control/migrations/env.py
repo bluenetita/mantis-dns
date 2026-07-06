@@ -13,7 +13,6 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -21,6 +20,7 @@ from sqlalchemy import pool
 
 from alembic import context
 
+from mantis_control.config import settings
 from mantis_control.db.models import Base
 
 # this is the Alembic Config object, which provides
@@ -32,13 +32,10 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# DATABASE_URL (same env var mantis_control.db.session reads) overrides
-# alembic.ini's placeholder so both the app and migrations point at the
-# same database without duplicating config.
-_database_url = os.environ.get(
-    "DATABASE_URL", "postgresql+psycopg://mantis:mantis@localhost:5432/mantis"
-)
-config.set_main_option("sqlalchemy.url", _database_url)
+# settings.DATABASE_URL (mantis_control.config, same value mantis_control.db.session
+# reads) overrides alembic.ini's placeholder so both the app and migrations
+# point at the same database without duplicating the default.
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 target_metadata = Base.metadata
 

@@ -39,12 +39,8 @@ from mantis_control.api.siem_routers import router as siem_router
 from mantis_control.api.siem_webhook_routers import router as siem_webhook_router
 from mantis_control.api.telemetry_routers import router as telemetry_router
 from mantis_control.auth import CsrfMiddleware, hash_password
-from mantis_control.config import (
-    ADMIN_PASSWORD_DEV_DEFAULT,
-    INTERNAL_TOKEN_DEV_DEFAULT,
-    JWT_DEV_SECRET,
-    settings,
-)
+from mantis_control.compiler.keys import load_or_create_signing_key
+from mantis_control.config import settings
 
 from mantis_control.db.models import Feed, User
 from mantis_control.db.session import SessionLocal
@@ -53,28 +49,6 @@ from mantis_control.scheduler import schedule_feed, scheduler
 from mantis_control.siem_delivery import run_webhook_delivery_cycle
 from mantis_control.dhcp.lease_sync import sync_dhcp_leases
 
-def _check_production_secrets() -> None:
-    """Refuse to start when MANTIS_ENV=production but dev-default secrets are in use."""
-    if not settings.is_production:
-        return
-    errors: list[str] = []
-    if settings.MANTIS_JWT_SECRET == JWT_DEV_SECRET:
-        errors.append("MANTIS_JWT_SECRET is the insecure dev default — set a strong random value")
-    elif len(settings.MANTIS_JWT_SECRET) < 32:
-        errors.append("MANTIS_JWT_SECRET is too short — minimum 32 characters required")
-    if not settings.MANTIS_WEBHOOK_SECRET_KEY:
-        errors.append("MANTIS_WEBHOOK_SECRET_KEY is not set")
-    if settings.MANTIS_INTERNAL_TOKEN == INTERNAL_TOKEN_DEV_DEFAULT:
-        errors.append("MANTIS_INTERNAL_TOKEN is the insecure dev default — set a strong random value")
-    if not settings.MANTIS_SERVICE_TOKEN:
-        errors.append("MANTIS_SERVICE_TOKEN is not set — filter-node M2M endpoints would be unauthenticated")
-    if settings.ADMIN_PASSWORD == ADMIN_PASSWORD_DEV_DEFAULT:
-        errors.append("ADMIN_PASSWORD is the insecure dev default — set it before first boot")
-    if errors:
-        raise RuntimeError(
-            "Refusing to start: MANTIS_ENV=production but insecure secrets detected: "
-            + "; ".join(errors)
-        )
 
 _SERVICE_ROOT = Path(__file__).resolve().parent.parent  # services/control/
 _ALEMBIC_INI = _SERVICE_ROOT / "alembic.ini"
@@ -95,8 +69,14 @@ def _run_migrations() -> None:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    _check_production_secrets()
     _run_migrations()
+
+    # Load (or create) the signing key sequentially, before the app accepts
+    # any requests: a corrupt/unreadable key file must fail boot loudly
+    # rather than surface as 500s on /public-key and compile later, and
+    # doing it here — instead of lazily on first request — avoids two
+    # concurrent first requests racing to generate and persist different keys.
+    load_or_create_signing_key()
 
     db = SessionLocal()
     try:
