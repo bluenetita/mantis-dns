@@ -239,9 +239,10 @@ def compile_bundle(
     group_id: str,
     db: Session = Depends(get_db),
     user: models.User = Depends(require_role("admin", "operator")),
-) -> Response:
+) -> dict:
     """Compiles the group's current policy into a signed bundle, stores it
-    content-addressed on disk, bumps the version, and returns the bytes."""
+    content-addressed on disk, and bumps the version. Callers that need the
+    bundle bytes fetch them separately via GET /groups/{group_id}/bundle."""
     group = get_group_or_403(db, group_id, user)
     policy = db.query(models.Policy).filter(models.Policy.group_id == group_id).one_or_none()
     if policy is None:
@@ -254,11 +255,9 @@ def compile_bundle(
     policy.bundle_version = next_version
     write_audit_log(db, "bundle.compile", "policy", policy.id, detail=f"version={next_version}", actor=user.email, tenant_id=group.tenant_id)
     db.commit()
-    try:
-        content = bundle_path.read_bytes()
-    except FileNotFoundError:
+    if not bundle_path.exists():
         raise HTTPException(500, "bundle file missing after compile — storage error")
-    return Response(content=content, media_type="application/octet-stream")
+    return {"version": next_version}
 
 
 @router.get("/groups/{group_id}/bundle")
