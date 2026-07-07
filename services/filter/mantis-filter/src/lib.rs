@@ -22,8 +22,10 @@ pub mod health_monitor;
 mod router;
 mod telemetry;
 pub mod upstream_bundle;
+pub mod zone_store;
 
 pub use telemetry::{QueryEventInput, TelemetryEmitter};
+pub use zone_store::{fetch_and_publish_zone, fetch_local_zone_records, LocalZoneRecordDto, ZoneLookup, ZoneStore};
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -92,6 +94,7 @@ impl Forwarder for DotForwarder {
 
 pub struct AppState {
     pub store: BundleStore,
+    pub zones: ZoneStore,
     pub public_key: VerifyingKey,
     pub cache: DnsCache,
     pub forwarder: Box<dyn Forwarder>,
@@ -106,6 +109,7 @@ impl AppState {
     pub fn with_forwarder(public_key: VerifyingKey, forwarder: Box<dyn Forwarder>) -> Self {
         Self {
             store: BundleStore::empty(),
+            zones: ZoneStore::empty(),
             public_key,
             cache: DnsCache::new(10_000),
             forwarder,
@@ -262,6 +266,21 @@ pub async fn bundle_refresh_loop(
     }
 }
 
+pub async fn zone_refresh_loop(
+    state: Arc<AppState>,
+    control_url: String,
+    group_id: String,
+    interval: Duration,
+) {
+    let mut ticker = tokio::time::interval(interval);
+    loop {
+        ticker.tick().await;
+        if let Err(e) = fetch_and_publish_zone(&state.zones, &control_url, &group_id).await {
+            warn!("local zone refresh failed: {e}");
+        }
+    }
+}
+
 // ── UDP server ─────────────────────────────────────────────────────────────────
 
 pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<()> {
@@ -283,6 +302,7 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
         let response = build_response(
             &query,
             bundle.as_deref(),
+            &state.zones,
             peer.ip(),
             &state.cache,
             state.forwarder.as_ref(),
@@ -363,6 +383,7 @@ async fn handle_tcp_connection(
         let response = build_response(
             &query,
             bundle.as_deref(),
+            &state.zones,
             peer_ip,
             &state.cache,
             state.forwarder.as_ref(),
@@ -408,6 +429,7 @@ pub fn with_service_token(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilde
 pub(crate) async fn build_response(
     query: &Message,
     bundle: Option<&Bundle>,
+    zones: &ZoneStore,
     client_ip: IpAddr,
     cache: &DnsCache,
     forwarder: &dyn Forwarder,
@@ -431,6 +453,26 @@ pub(crate) async fn build_response(
     let qname = question.name().to_utf8();
     let qtype = question.query_type();
     let qtype_str = format!("{qtype:?}");
+
+    // Stub zones (design.md §7.3, §DNS-Zones) win outright: if the qname
+    // falls under a locally-hosted zone, answer authoritatively without
+    // ever consulting the policy bundle or forwarding upstream.
+    match zones.lookup(&qname, qtype) {
+        ZoneLookup::Answer(records) => {
+            response.set_authoritative(true);
+            response.set_response_code(ResponseCode::NoError);
+            for rec in records {
+                response.add_answer(rec);
+            }
+            return response;
+        }
+        ZoneLookup::NxDomain => {
+            response.set_authoritative(true);
+            response.set_response_code(ResponseCode::NXDomain);
+            return response;
+        }
+        ZoneLookup::NotLocal => {}
+    }
 
     let Some(bundle) = bundle else {
         response.set_response_code(ResponseCode::ServFail);

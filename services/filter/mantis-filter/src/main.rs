@@ -20,10 +20,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mantis_filter::{
-    bundle_refresh_loop, fetch_public_key, fetch_upstream_bundle, refresh_bundle,
-    run_health_monitor, run_router_tcp_server, run_router_udp_server, run_tcp_server,
-    run_udp_server, upstream_bundle_refresh_loop, AppState, HealthStore, TelemetryEmitter,
-    TenantRouter, UpstreamBundleForwarder, UpstreamBundleStore,
+    bundle_refresh_loop, fetch_and_publish_zone, fetch_public_key, fetch_upstream_bundle,
+    refresh_bundle, run_health_monitor, run_router_tcp_server, run_router_udp_server,
+    run_tcp_server, run_udp_server, upstream_bundle_refresh_loop, zone_refresh_loop, AppState,
+    HealthStore, TelemetryEmitter, TenantRouter, UpstreamBundleForwarder, UpstreamBundleStore,
 };
 use tokio::net::{TcpListener, UdpSocket};
 use tracing::{error, info, warn};
@@ -100,7 +100,16 @@ async fn main() -> anyhow::Result<()> {
         if let Err(e) = refresh_bundle(&state, &control_url, &group_id).await {
             warn!("initial bundle fetch failed (will retry on poll loop): {e}");
         }
+        if let Err(e) = fetch_and_publish_zone(&state.zones, &control_url, &group_id).await {
+            warn!("initial local zone fetch failed (will retry on poll loop): {e}");
+        }
         tokio::spawn(bundle_refresh_loop(
+            state.clone(),
+            control_url.clone(),
+            group_id.clone(),
+            Duration::from_secs(poll_secs),
+        ));
+        tokio::spawn(zone_refresh_loop(
             state.clone(),
             control_url,
             group_id,

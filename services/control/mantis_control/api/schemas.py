@@ -55,6 +55,18 @@ class RoutingTableEntry(BaseModel):
     group_id: str
 
 
+class LocalZoneRecord(BaseModel):
+    """Flattened resource record for the filter node's stub-zone store
+    (design.md §7.3, §DNS-Zones). `name` is the fully-qualified owner name."""
+
+    name: str
+    zone: str
+    record_type: str
+    ttl: int
+    data: str
+    priority: int | None = None
+
+
 class CategoryOut(BaseModel):
     id: str
     label: str

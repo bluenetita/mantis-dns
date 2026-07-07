@@ -38,7 +38,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
 use tracing::{debug, info, warn};
 
-use crate::{build_response, cache::DnsCache, fetch_and_publish_bundle, Forwarder, TelemetryEmitter};
+use crate::zone_store::fetch_and_publish_zone;
+use crate::{build_response, cache::DnsCache, fetch_and_publish_bundle, Forwarder, TelemetryEmitter, ZoneStore};
 
 #[derive(Deserialize)]
 struct RoutingTableEntry {
@@ -51,6 +52,7 @@ struct RouteEntry {
     net: IpNet,
     group_id: String,
     store: Arc<BundleStore>,
+    zones: Arc<ZoneStore>,
 }
 
 pub struct TenantRouter {
@@ -80,13 +82,13 @@ impl TenantRouter {
     /// Longest-prefix match: the most specific matching subnet wins, so a
     /// /24 override inside a routed /16 (if that ever happens) behaves as
     /// expected rather than being order-dependent.
-    fn match_route(&self, ip: IpAddr) -> Option<Arc<BundleStore>> {
+    fn match_route(&self, ip: IpAddr) -> Option<(Arc<BundleStore>, Arc<ZoneStore>)> {
         let routes = self.routes.load();
         routes
             .iter()
             .filter(|r| r.net.contains(&ip))
             .max_by_key(|r| r.net.prefix_len())
-            .map(|r| r.store.clone())
+            .map(|r| (r.store.clone(), r.zones.clone()))
     }
 
     pub fn route_count(&self) -> usize {
@@ -130,10 +132,16 @@ pub async fn refresh_routes(router: &TenantRouter, control_url: &str) -> Result<
             .find(|r| r.group_id == entry.group_id)
             .map(|r| r.store.clone())
             .unwrap_or_else(|| Arc::new(BundleStore::empty()));
+        let zones = existing
+            .iter()
+            .find(|r| r.group_id == entry.group_id)
+            .map(|r| r.zones.clone())
+            .unwrap_or_else(|| Arc::new(ZoneStore::empty()));
         new_routes.push(RouteEntry {
             net,
             group_id: entry.group_id.clone(),
             store,
+            zones,
         });
     }
 
@@ -141,7 +149,8 @@ pub async fn refresh_routes(router: &TenantRouter, control_url: &str) -> Result<
     router.routes.store(Arc::new(new_routes));
     debug!("routing table refreshed: {route_count} routes");
 
-    // Fetch all groups' bundles concurrently — independent HTTP round-trips.
+    // Fetch all groups' bundles and local-zone records concurrently —
+    // independent HTTP round-trips.
     let routes = router.routes.load();
     let mut set = tokio::task::JoinSet::new();
     for route in routes.iter() {
@@ -154,10 +163,19 @@ pub async fn refresh_routes(router: &TenantRouter, control_url: &str) -> Result<
                 warn!("bundle refresh failed for group {gid}: {e}");
             }
         });
+
+        let zones = route.zones.clone();
+        let url = control_url.to_string();
+        let gid = route.group_id.clone();
+        set.spawn(async move {
+            if let Err(e) = fetch_and_publish_zone(&zones, &url, &gid).await {
+                warn!("local zone refresh failed for group {gid}: {e}");
+            }
+        });
     }
     while let Some(res) = set.join_next().await {
         if let Err(e) = res {
-            warn!("bundle refresh task panicked: {e}");
+            warn!("route refresh task panicked: {e}");
         }
     }
 
@@ -199,6 +217,7 @@ pub mod test_support {
             net,
             group_id: group_id.to_string(),
             store,
+            zones: Arc::new(ZoneStore::empty()),
         });
         router.routes.store(Arc::new(routes));
     }
@@ -249,15 +268,18 @@ pub async fn run_router_tcp_server(listener: TcpListener, router: Arc<TenantRout
                     }
                 };
 
-                let bundle_store = router.match_route(peer.ip());
-                if bundle_store.is_none() {
+                let matched = router.match_route(peer.ip());
+                if matched.is_none() {
                     debug!("no tenant route matched source IP {}", peer.ip());
                 }
-                let bundle = bundle_store.as_ref().and_then(|s| s.current());
+                let bundle = matched.as_ref().and_then(|(s, _)| s.current());
+                let empty_zones = ZoneStore::empty();
+                let zones = matched.as_ref().map(|(_, z)| z.as_ref()).unwrap_or(&empty_zones);
 
                 let response = build_response(
                     &query,
                     bundle.as_deref(),
+                    zones,
                     peer.ip(),
                     &router.cache,
                     router.forwarder.as_ref(),
@@ -300,15 +322,18 @@ pub async fn run_router_udp_server(socket: UdpSocket, router: Arc<TenantRouter>)
             }
         };
 
-        let bundle_store = router.match_route(peer.ip());
-        if bundle_store.is_none() {
+        let matched = router.match_route(peer.ip());
+        if matched.is_none() {
             debug!("no tenant route matched source IP {}", peer.ip());
         }
-        let bundle = bundle_store.as_ref().and_then(|s| s.current());
+        let bundle = matched.as_ref().and_then(|(s, _)| s.current());
+        let empty_zones = ZoneStore::empty();
+        let zones = matched.as_ref().map(|(_, z)| z.as_ref()).unwrap_or(&empty_zones);
 
         let response = build_response(
             &query,
             bundle.as_deref(),
+            zones,
             peer.ip(),
             &router.cache,
             router.forwarder.as_ref(),

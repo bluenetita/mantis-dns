@@ -162,6 +162,45 @@ def get_routing_table(
     ]
 
 
+@router.get("/local-zones", response_model=list[schemas.LocalZoneRecord])
+def get_local_zone_records(
+    group_id: str, db: Session = Depends(get_db), _: None = Depends(require_service_token)
+) -> list[schemas.LocalZoneRecord]:
+    """Flattened local-zone records for the group's tenant (design.md
+    §DNS-Zones "stub zone" route type). Polled machine-to-machine by filter
+    nodes alongside /routing-table and the policy bundle — same service-token
+    auth, no user JWT involved."""
+    group = db.get(models.Group, group_id)
+    if group is None:
+        raise HTTPException(404, "group not found")
+    zones = (
+        db.query(models.DnsZone)
+        .filter(
+            models.DnsZone.tenant_id == group.tenant_id,
+            models.DnsZone.zone_type == "local",
+            models.DnsZone.enabled.is_(True),
+        )
+        .all()
+    )
+    out: list[schemas.LocalZoneRecord] = []
+    for zone in zones:
+        for rec in zone.records:
+            if not rec.enabled:
+                continue
+            fqdn = zone.name if rec.name == "@" else f"{rec.name}.{zone.name}"
+            out.append(
+                schemas.LocalZoneRecord(
+                    name=fqdn,
+                    zone=zone.name,
+                    record_type=rec.record_type,
+                    ttl=rec.ttl if rec.ttl is not None else zone.ttl_default,
+                    data=rec.data,
+                    priority=rec.priority,
+                )
+            )
+    return out
+
+
 @router.get("/groups/{group_id}/policy", response_model=schemas.PolicyOut)
 def get_policy(
     group_id: str, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)

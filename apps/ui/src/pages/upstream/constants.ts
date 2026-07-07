@@ -35,3 +35,15 @@ export const DNSSEC_OPTIONS = [
   { value: "opportunistic", label: "Opportunistic — propagate AD bit" },
   { value: "disabled", label: "Disabled — strip AD bit" },
 ];
+
+export const PROTOCOL_OPTIONS = [
+  { value: "do53", label: "Plain DNS (do53)" },
+  { value: "dot", label: "DNS-over-TLS (DoT)" },
+  { value: "doh", label: "DNS-over-HTTPS (DoH)" },
+];
+
+export const DEFAULT_PORT_BY_PROTOCOL: Record<string, number> = {
+  do53: 53,
+  dot: 853,
+  doh: 443,
+};

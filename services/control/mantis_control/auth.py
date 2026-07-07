@@ -83,8 +83,9 @@ def clear_auth_cookies(response: Response) -> None:
     response.delete_cookie(CSRF_COOKIE_NAME, path="/")
 
 # Shared secret authenticating filter-node -> control-plane machine calls
-# (/public-key, /routing-table, /groups/{id}/bundle GET, /upstream-bundle/{id},
-# /query-events). Empty by default: these endpoints predate auth and stay open.
+# (/public-key, /routing-table, /local-zones, /groups/{id}/bundle GET,
+# /upstream-bundle/{id}, /query-events). Empty by default: these endpoints
+# predate auth and stay open.
 def require_service_token(authorization: str | None = Header(None)) -> None:
     if not settings.MANTIS_SERVICE_TOKEN:
         return

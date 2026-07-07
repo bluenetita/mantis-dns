@@ -46,7 +46,7 @@ import {
   type UpstreamResolver,
 } from "../../api/hooks";
 import { CrudTable, EntityModal, type CrudColumn } from "../../components/crud";
-import { DNSSEC_OPTIONS } from "./constants";
+import { DEFAULT_PORT_BY_PROTOCOL, DNSSEC_OPTIONS, PROTOCOL_OPTIONS } from "./constants";
 
 function ResolverForm({
   initial,
@@ -62,9 +62,9 @@ function ResolverForm({
   const form = useForm({
     initialValues: {
       name: initial?.name ?? "",
-      protocol: initial?.protocol ?? "dot",
+      protocol: initial?.protocol ?? "do53",
       address: initial?.address ?? "",
-      port: initial?.port ?? 853,
+      port: initial?.port ?? DEFAULT_PORT_BY_PROTOCOL[initial?.protocol ?? "do53"],
       tls_hostname: initial?.tls_hostname ?? "",
       dnssec_validation: initial?.dnssec_validation ?? "opportunistic",
       qname_minimization: initial?.qname_minimization ?? true,
@@ -99,12 +99,13 @@ function ResolverForm({
         <SimpleGrid cols={2}>
           <Select
             label="Protocol"
-            data={[
-              { value: "dot", label: "DNS-over-TLS (DoT)" },
-              { value: "doh", label: "DNS-over-HTTPS (DoH)" },
-              { value: "do53", label: "Plain DNS (do53)" },
-            ]}
+            data={PROTOCOL_OPTIONS}
             {...form.getInputProps("protocol")}
+            onChange={(value) => {
+              if (!value) return;
+              form.setFieldValue("protocol", value);
+              form.setFieldValue("port", DEFAULT_PORT_BY_PROTOCOL[value]);
+            }}
           />
           <NumberInput label="Port" min={1} max={65535} {...form.getInputProps("port")} />
         </SimpleGrid>
