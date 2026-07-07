@@ -25,7 +25,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
-use hickory_proto::rr::rdata::{A, AAAA, CNAME, MX, NS, PTR, SRV, TXT};
+use hickory_proto::rr::rdata::{A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, TXT};
 use hickory_proto::rr::{Name, RData, Record, RecordType};
 use serde::Deserialize;
 use tracing::warn;
@@ -57,7 +57,9 @@ pub enum ZoneLookup {
 struct ZoneData {
     /// Zone apex names, normalized (lowercased, no trailing dot).
     zones: Vec<String>,
-    /// Normalized owner name -> every record at that name (any type).
+    /// Normalized owner name -> every record at that name (any type). A name
+    /// with only unsupported record types (e.g. CAA "iodef") still gets an
+    /// entry here (possibly empty) so it reads as NODATA, not NXDOMAIN.
     records: HashMap<String, Vec<Record>>,
 }
 
@@ -143,10 +145,43 @@ fn build_record(entry: &LocalZoneRecordDto) -> Option<Record> {
             };
             RData::SRV(SRV::new(entry.priority.unwrap_or(0), weight, port, target))
         }
+        "CAA" => {
+            // Convention: data = "<tag> <value>", tag one of issue/issuewild,
+            // value either a CA domain name or ";" for "no CA authorized".
+            // "iodef" isn't supported — it needs a `Url` value and pulling in
+            // the `url` crate just for that rarely-used tag isn't worth it.
+            let parts: Vec<&str> = entry.data.splitn(2, char::is_whitespace).collect();
+            let [tag, value] = parts[..] else {
+                warn!(
+                    "skipping CAA record '{}': expected data '<issue|issuewild> <value>', got '{}'",
+                    entry.name, entry.data
+                );
+                return None;
+            };
+            let value = value.trim();
+            let name = if value == ";" {
+                None
+            } else {
+                match value.parse::<Name>() {
+                    Ok(n) => Some(n),
+                    Err(e) => {
+                        warn!("skipping CAA record '{}': invalid issuer '{}': {e}", entry.name, value);
+                        return None;
+                    }
+                }
+            };
+            match tag {
+                "issue" => RData::CAA(CAA::new_issue(false, name, Vec::new())),
+                "issuewild" => RData::CAA(CAA::new_issuewild(false, name, Vec::new())),
+                other => {
+                    warn!("skipping CAA record '{}': unsupported tag '{other}' (only issue/issuewild)", entry.name);
+                    return None;
+                }
+            }
+        }
         other => {
-            // CAA and any future record types: not yet supported by the
-            // stub-zone store. Rare in practice; skip rather than fail the
-            // whole zone load.
+            // Any future record type unsupported by the stub-zone store.
+            // Rare in practice; skip rather than fail the whole zone load.
             warn!("skipping unsupported record type '{other}' for '{}'", entry.name);
             return None;
         }
@@ -169,8 +204,12 @@ impl ZoneStore {
 
         let mut records: HashMap<String, Vec<Record>> = HashMap::new();
         for entry in &entries {
+            // .or_default() first so a name with only unsupported record
+            // types still gets a (possibly empty) entry — NODATA, not
+            // NXDOMAIN, since the name genuinely exists in the zone.
+            let bucket = records.entry(normalize(&entry.name)).or_default();
             if let Some(record) = build_record(entry) {
-                records.entry(normalize(&entry.name)).or_default().push(record);
+                bucket.push(record);
             }
         }
 
@@ -276,6 +315,40 @@ mod tests {
         match store.lookup("example.com.", RecordType::A) {
             ZoneLookup::NotLocal => {}
             _ => panic!("expected NotLocal"),
+        }
+    }
+
+    #[test]
+    fn caa_issue_record_builds_and_answers() {
+        let store = ZoneStore::empty();
+        store.publish(vec![entry(
+            "bluenetworks.lab",
+            "bluenetworks.lab",
+            "CAA",
+            "issue letsencrypt.org",
+        )]);
+
+        match store.lookup("bluenetworks.lab.", RecordType::CAA) {
+            ZoneLookup::Answer(recs) => assert_eq!(recs.len(), 1),
+            _ => panic!("expected Answer"),
+        }
+    }
+
+    #[test]
+    fn caa_iodef_tag_is_unsupported_and_skipped() {
+        let store = ZoneStore::empty();
+        store.publish(vec![entry(
+            "bluenetworks.lab",
+            "bluenetworks.lab",
+            "CAA",
+            "iodef mailto:security@bluenetworks.lab",
+        )]);
+
+        // Zone apex is still registered (it's a local zone), but no record
+        // was built for the unsupported tag -> NODATA, not a crash.
+        match store.lookup("bluenetworks.lab.", RecordType::CAA) {
+            ZoneLookup::Answer(recs) => assert!(recs.is_empty()),
+            _ => panic!("expected Answer(empty) i.e. NODATA"),
         }
     }
 

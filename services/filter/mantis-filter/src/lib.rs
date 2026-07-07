@@ -205,6 +205,36 @@ fn normalize(domain: &str) -> String {
     domain.trim_end_matches('.').to_ascii_lowercase()
 }
 
+/// Emits a query-event for a stub-zone answer/NXDOMAIN, matching the shape of
+/// the bloom-filter decision path so zone hits show up in the same
+/// query-events feed rather than going dark. `bundle` may not be loaded yet
+/// (rare — a policy bundle is normally compiled before a group's filter node
+/// comes up), in which case group_id is reported empty rather than skipping
+/// telemetry entirely.
+fn emit_zone_telemetry(
+    telemetry: &TelemetryEmitter,
+    bundle: Option<&Bundle>,
+    client_ip: &IpAddr,
+    qname: &str,
+    qtype_str: &str,
+    response: &Message,
+    start: std::time::Instant,
+) {
+    telemetry.emit(QueryEventInput {
+        group_id: bundle.map(|b| b.group_id.clone()).unwrap_or_default(),
+        client_ip: client_ip.to_string(),
+        qname: qname.to_string(),
+        qtype: qtype_str.to_string(),
+        decision: "stub_zone",
+        matched_rule: "stub_zone",
+        matched_category: None,
+        matched_feed_id: None,
+        response_code: format!("{:?}", response.response_code()),
+        cache_hit: None,
+        latency_us: start.elapsed().as_micros().min(u32::MAX as u128) as u32,
+    });
+}
+
 pub async fn fetch_public_key(control_url: &str) -> Result<VerifyingKey> {
     let client = reqwest::Client::new();
     let bytes = with_service_token(client.get(format!("{control_url}/api/v1/public-key")))
@@ -464,11 +494,13 @@ pub(crate) async fn build_response(
             for rec in records {
                 response.add_answer(rec);
             }
+            emit_zone_telemetry(telemetry, bundle, &client_ip, &qname, &qtype_str, &response, start);
             return response;
         }
         ZoneLookup::NxDomain => {
             response.set_authoritative(true);
             response.set_response_code(ResponseCode::NXDomain);
+            emit_zone_telemetry(telemetry, bundle, &client_ip, &qname, &qtype_str, &response, start);
             return response;
         }
         ZoneLookup::NotLocal => {}
