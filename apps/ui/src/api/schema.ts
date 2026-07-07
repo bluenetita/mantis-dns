@@ -193,7 +193,8 @@ export interface paths {
         /**
          * Compile Bundle
          * @description Compiles the group's current policy into a signed bundle, stores it
-         *     content-addressed on disk, bumps the version, and returns the bytes.
+         *     content-addressed on disk, and bumps the version. Callers that need the
+         *     bundle bytes fetch them separately via GET /groups/{group_id}/bundle.
          */
         post: operations["compile_bundle_api_v1_groups__group_id__bundle_post"];
         delete?: never;
@@ -3714,7 +3715,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: number;
+                    };
                 };
             };
             /** @description Validation Error */
