@@ -94,7 +94,7 @@ def _control_sockets(kind: str) -> list[dict[str, Any]]:
                 "socket-address": os.getenv("KEA6_CTRL_BIND_ADDRESS", KEA_CTRL_BIND_ADDRESS),
                 "socket-port": int(os.getenv("KEA6_CTRL_PORT", str(_url_port(KEA6_CTRL_URL, 8006)))),
             },
-            {"socket-type": "unix", "socket-name": "/run/kea/kea6-ctrl-socket"},
+            {"socket-type": "unix", "socket-name": "/var/run/kea/kea6-ctrl-socket"},
         ]
 
     return [
@@ -103,7 +103,7 @@ def _control_sockets(kind: str) -> list[dict[str, Any]]:
             "socket-address": os.getenv("KEA4_CTRL_BIND_ADDRESS", KEA_CTRL_BIND_ADDRESS),
             "socket-port": int(os.getenv("KEA4_CTRL_PORT", str(_url_port(KEA4_CTRL_URL, 8004)))),
         },
-        {"socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket"},
+        {"socket-type": "unix", "socket-name": "/var/run/kea/kea4-ctrl-socket"},
     ]
 
 

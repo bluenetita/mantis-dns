@@ -247,7 +247,6 @@ install_local_kea() {
 
   hooks_dir="$(dirname "$lease_cmds_lib")"
   mkdir -p /usr/lib/kea /etc/kea
-  install -d -m 750 /var/run/kea
   ln -sfn "$hooks_dir" /usr/lib/kea/hooks
 
   # Kea 3.x's run_script hook only allows scripts under /usr/share/kea/scripts

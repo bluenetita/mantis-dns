@@ -17,8 +17,8 @@
 
 set -e
 
-mkdir -p /var/run/kea /var/lib/kea
-chmod 750 /var/run/kea
+install -d -m 750 /var/run/kea
+mkdir -p /var/lib/kea
 rm -f /var/run/kea/*.pid
 
 PG_HOST="${POSTGRES_HOST:-postgres}"

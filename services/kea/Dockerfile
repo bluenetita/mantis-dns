@@ -22,7 +22,7 @@ RUN hooks_dir="$(dirname "$(find /usr/lib -name 'libdhcp_lease_cmds.so' | head -
     && mkdir -p /usr/lib/kea \
     && ln -s "$hooks_dir" /usr/lib/kea/hooks
 
-RUN mkdir -p /var/run/kea /etc/kea
+RUN mkdir -p /etc/kea
 
 COPY kea-dhcp4.conf /etc/kea/kea-dhcp4.conf
 COPY kea-dhcp6.conf /etc/kea/kea-dhcp6.conf
