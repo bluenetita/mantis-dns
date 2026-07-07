@@ -239,7 +239,7 @@ def compile_bundle(
     group_id: str,
     db: Session = Depends(get_db),
     user: models.User = Depends(require_role("admin", "operator")),
-) -> dict:
+) -> dict[str, int]:
     """Compiles the group's current policy into a signed bundle, stores it
     content-addressed on disk, and bumps the version. Callers that need the
     bundle bytes fetch them separately via GET /groups/{group_id}/bundle."""
