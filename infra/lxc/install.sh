@@ -142,6 +142,7 @@ KEA6_CTRL_URL=${KEA6_CTRL_URL:-}
 KEA_HOOKS_DIR=${KEA_HOOKS_DIR:-/usr/lib/kea/hooks}
 ADMIN_EMAIL=${ADMIN_EMAIL}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
+MANTIS_SIGNING_KEY_PATH=${ENV_DIR}/signing_key.bin
 EOF
   chmod 600 "$ENV_FILE"
   echo "Generated ADMIN_PASSWORD (shown once): ${ADMIN_PASSWORD}"
@@ -150,6 +151,13 @@ ensure_env_var KEA_CTRL_URL "${KEA_CTRL_URL:-}"
 ensure_env_var KEA4_CTRL_URL "${KEA4_CTRL_URL:-}"
 ensure_env_var KEA6_CTRL_URL "${KEA6_CTRL_URL:-}"
 ensure_env_var KEA_HOOKS_DIR "${KEA_HOOKS_DIR:-/usr/lib/kea/hooks}"
+# Must live outside $INSTALL_DIR/app: that directory is wiped and recreated
+# from a fresh checkout on every re-run of this script (see
+# `rm -rf "$INSTALL_DIR/app"` below), so a signing key stored there would be
+# silently regenerated on every reinstall — invalidating every already-running
+# filter node's cached public key (they only fetch it once at startup) until
+# someone notices bundles are being rejected and restarts them by hand.
+ensure_env_var MANTIS_SIGNING_KEY_PATH "${ENV_DIR}/signing_key.bin"
 refresh_kea_env_var KEA_CTRL_URL "$REQUESTED_KEA_CTRL_URL" ""
 refresh_kea_env_var KEA4_CTRL_URL "$REQUESTED_KEA4_CTRL_URL" ""
 refresh_kea_env_var KEA6_CTRL_URL "$REQUESTED_KEA6_CTRL_URL" ""
@@ -157,6 +165,13 @@ refresh_kea_env_var KEA_HOOKS_DIR "$REQUESTED_KEA_HOOKS_DIR" "/usr/lib/kea/hooks
 chmod 600 "$ENV_FILE"
 
 id -u mantis >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --shell /usr/sbin/nologin mantis
+
+# mantis-control.env itself stays root:root 0600 (systemd reads
+# EnvironmentFile as root before dropping privileges), but the app needs to
+# create/read MANTIS_SIGNING_KEY_PATH (signing_key.bin) in this directory at
+# runtime as the `mantis` user.
+chown mantis:mantis "$ENV_DIR"
+chmod 750 "$ENV_DIR"
 
 echo "==> Deploying control plane..."
 mkdir -p "$INSTALL_DIR"

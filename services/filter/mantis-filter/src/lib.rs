@@ -34,6 +34,7 @@ use std::time::Duration;
 use mantis_bundle::{Bundle, BundleStore};
 use mantis_policy::BloomFilter;
 use anyhow::{Context, Result};
+use arc_swap::ArcSwap;
 use cache::DnsCache;
 use ed25519_dalek::VerifyingKey;
 use hickory_proto::op::{Message, MessageType, ResponseCode};
@@ -92,10 +93,32 @@ impl Forwarder for DotForwarder {
     }
 }
 
+/// Holds the control plane's Ed25519 public key, re-fetched on every poll tick
+/// (see `refresh_public_key`) rather than once at startup. Without this, a
+/// signing-key rotation on the control plane (e.g. `signing_key.bin`
+/// regenerated because a reinstall changed the process's working directory)
+/// would silently and permanently reject every future bundle until someone
+/// noticed and restarted every filter node by hand.
+pub struct PublicKeyStore(ArcSwap<VerifyingKey>);
+
+impl PublicKeyStore {
+    pub fn new(key: VerifyingKey) -> Self {
+        Self(ArcSwap::from_pointee(key))
+    }
+
+    pub fn current(&self) -> VerifyingKey {
+        **self.0.load()
+    }
+
+    fn set(&self, key: VerifyingKey) {
+        self.0.store(Arc::new(key));
+    }
+}
+
 pub struct AppState {
     pub store: BundleStore,
     pub zones: ZoneStore,
-    pub public_key: VerifyingKey,
+    pub public_key: PublicKeyStore,
     pub cache: DnsCache,
     pub forwarder: Box<dyn Forwarder>,
     pub telemetry: TelemetryEmitter,
@@ -110,7 +133,7 @@ impl AppState {
         Self {
             store: BundleStore::empty(),
             zones: ZoneStore::empty(),
-            public_key,
+            public_key: PublicKeyStore::new(public_key),
             cache: DnsCache::new(10_000),
             forwarder,
             telemetry: TelemetryEmitter::noop(),
@@ -250,6 +273,19 @@ pub async fn fetch_public_key(control_url: &str) -> Result<VerifyingKey> {
     Ok(VerifyingKey::from_bytes(&arr)?)
 }
 
+/// Re-fetches the control plane's public key and updates `keys` in place if
+/// it changed. Called on every poll tick (not just at startup) so a signing-
+/// key rotation on the control plane self-heals instead of requiring a
+/// filter-node restart.
+pub async fn refresh_public_key(keys: &PublicKeyStore, control_url: &str) -> Result<()> {
+    let fetched = fetch_public_key(control_url).await?;
+    if fetched != keys.current() {
+        info!("control-plane public key changed — updating (was this an intentional key rotation?)");
+        keys.set(fetched);
+    }
+    Ok(())
+}
+
 pub async fn fetch_and_publish_bundle(
     store: &BundleStore,
     public_key: &VerifyingKey,
@@ -278,7 +314,8 @@ pub async fn fetch_and_publish_bundle(
 }
 
 pub async fn refresh_bundle(state: &AppState, control_url: &str, group_id: &str) -> Result<()> {
-    fetch_and_publish_bundle(&state.store, &state.public_key, control_url, group_id).await
+    let key = state.public_key.current();
+    fetch_and_publish_bundle(&state.store, &key, control_url, group_id).await
 }
 
 pub async fn bundle_refresh_loop(
@@ -290,6 +327,9 @@ pub async fn bundle_refresh_loop(
     let mut ticker = tokio::time::interval(interval);
     loop {
         ticker.tick().await;
+        if let Err(e) = refresh_public_key(&state.public_key, &control_url).await {
+            warn!("public key refresh failed (keeping last known good key): {e}");
+        }
         if let Err(e) = refresh_bundle(&state, &control_url, &group_id).await {
             warn!("bundle refresh failed: {e}");
         }
@@ -604,4 +644,29 @@ async fn resolve_records(
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_key(seed: u8) -> VerifyingKey {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+        signing_key.verifying_key()
+    }
+
+    #[test]
+    fn public_key_store_returns_the_key_it_was_built_with() {
+        let key = test_key(1);
+        let store = PublicKeyStore::new(key);
+        assert_eq!(store.current(), key);
+    }
+
+    #[test]
+    fn public_key_store_reflects_a_hot_swap() {
+        let store = PublicKeyStore::new(test_key(1));
+        let new_key = test_key(2);
+        store.set(new_key);
+        assert_eq!(store.current(), new_key);
+    }
 }

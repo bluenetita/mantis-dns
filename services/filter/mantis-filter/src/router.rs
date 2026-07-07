@@ -39,7 +39,10 @@ use tokio::net::{TcpListener, UdpSocket};
 use tracing::{debug, info, warn};
 
 use crate::zone_store::fetch_and_publish_zone;
-use crate::{build_response, cache::DnsCache, fetch_and_publish_bundle, Forwarder, TelemetryEmitter, ZoneStore};
+use crate::{
+    build_response, cache::DnsCache, fetch_and_publish_bundle, refresh_public_key, Forwarder,
+    PublicKeyStore, TelemetryEmitter, ZoneStore,
+};
 
 #[derive(Deserialize)]
 struct RoutingTableEntry {
@@ -56,7 +59,7 @@ struct RouteEntry {
 }
 
 pub struct TenantRouter {
-    public_key: VerifyingKey,
+    public_key: PublicKeyStore,
     cache: DnsCache,
     forwarder: Box<dyn Forwarder>,
     routes: ArcSwap<Vec<RouteEntry>>,
@@ -66,7 +69,7 @@ pub struct TenantRouter {
 impl TenantRouter {
     pub fn new(public_key: VerifyingKey, forwarder: Box<dyn Forwarder>) -> Self {
         Self {
-            public_key,
+            public_key: PublicKeyStore::new(public_key),
             cache: DnsCache::new(10_000),
             forwarder,
             routes: ArcSwap::from_pointee(Vec::new()),
@@ -114,6 +117,10 @@ async fn fetch_routing_table(control_url: &str) -> Result<Vec<RoutingTableEntry>
 /// group's policy history (version monotonicity) survives a routing-table
 /// reload — only genuinely new groups get a fresh empty store.
 pub async fn refresh_routes(router: &TenantRouter, control_url: &str) -> Result<()> {
+    if let Err(e) = refresh_public_key(&router.public_key, control_url).await {
+        warn!("public key refresh failed (keeping last known good key): {e}");
+    }
+
     let entries = fetch_routing_table(control_url).await?;
 
     let existing = router.routes.load();
@@ -155,7 +162,7 @@ pub async fn refresh_routes(router: &TenantRouter, control_url: &str) -> Result<
     let mut set = tokio::task::JoinSet::new();
     for route in routes.iter() {
         let store = route.store.clone();
-        let key = router.public_key;
+        let key = router.public_key.current();
         let url = control_url.to_string();
         let gid = route.group_id.clone();
         set.spawn(async move {

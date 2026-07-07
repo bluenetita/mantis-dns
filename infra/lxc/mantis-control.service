@@ -17,6 +17,12 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/opt/mantis-dns
+# Holds MANTIS_SIGNING_KEY_PATH (signing_key.bin) — deliberately outside
+# /opt/mantis-dns/app, which install-rocky.sh wipes and recreates from a
+# fresh checkout on every reinstall. A signing key stored there would
+# regenerate on every reinstall, silently invalidating every already-running
+# filter node's cached public key until it's manually restarted.
+ReadWritePaths=/etc/mantis-control
 
 [Install]
 WantedBy=multi-user.target

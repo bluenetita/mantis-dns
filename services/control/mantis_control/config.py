@@ -95,6 +95,18 @@ def _check_production_secrets() -> None:
         errors.append("MANTIS_SERVICE_TOKEN is not set — filter-node M2M endpoints would be unauthenticated")
     if settings.ADMIN_PASSWORD == ADMIN_PASSWORD_DEV_DEFAULT:
         errors.append("ADMIN_PASSWORD is the insecure dev default — set it before first boot")
+    if not settings.MANTIS_SIGNING_KEY_PATH.is_absolute():
+        # load_or_create_signing_key() silently generates a brand-new keypair
+        # if the file isn't found — a relative path resolves against the
+        # process's current working directory, which a reinstall/redeploy
+        # can easily change. That regenerates the key with zero warning,
+        # invalidating every already-running filter node's cached public key
+        # (they only fetch it once at startup) until someone manually
+        # restarts them and notices bundles were being silently rejected.
+        errors.append(
+            f"MANTIS_SIGNING_KEY_PATH ({settings.MANTIS_SIGNING_KEY_PATH}) is a relative path — "
+            "set it to a stable absolute path outside the deployment directory"
+        )
     if errors:
         raise RuntimeError(
             "Refusing to start: MANTIS_ENV=production but insecure secrets detected: "
