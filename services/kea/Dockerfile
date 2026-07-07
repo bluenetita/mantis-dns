@@ -15,19 +15,20 @@ RUN curl -1sLf 'https://dl.cloudsmith.io/public/isc/kea-3-0/setup.deb.sh' | bash
         isc-kea-dhcp6 \
         isc-kea-admin \
         isc-kea-hooks \
+        isc-kea-pgsql \
     && rm -rf /var/lib/apt/lists/*
 
 RUN hooks_dir="$(dirname "$(find /usr/lib -name 'libdhcp_lease_cmds.so' | head -1)")" \
     && mkdir -p /usr/lib/kea \
     && ln -s "$hooks_dir" /usr/lib/kea/hooks
 
-RUN mkdir -p /run/kea /etc/kea
+RUN mkdir -p /var/run/kea /etc/kea
 
 COPY kea-dhcp4.conf /etc/kea/kea-dhcp4.conf
 COPY kea-dhcp6.conf /etc/kea/kea-dhcp6.conf
-COPY mantis-ddns-bridge.sh /usr/local/bin/mantis-ddns-bridge.sh
+COPY mantis-ddns-bridge.sh /usr/share/kea/scripts/mantis-ddns-bridge.sh
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh /usr/local/bin/mantis-ddns-bridge.sh
+RUN chmod +x /entrypoint.sh /usr/share/kea/scripts/mantis-ddns-bridge.sh
 
 EXPOSE 8004
 EXPOSE 8006

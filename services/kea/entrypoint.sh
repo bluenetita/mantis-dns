@@ -17,8 +17,9 @@
 
 set -e
 
-mkdir -p /run/kea /var/lib/kea
-rm -f /run/kea/*.pid
+mkdir -p /var/run/kea /var/lib/kea
+chmod 750 /var/run/kea
+rm -f /var/run/kea/*.pid
 
 PG_HOST="${POSTGRES_HOST:-postgres}"
 PG_PORT="${POSTGRES_PORT:-5432}"
@@ -48,19 +49,32 @@ if [ "$SCHEMA_EXISTS" != "1" ]; then
         -f /usr/share/kea/scripts/pgsql/dhcpdb_create.pgsql
     echo "Kea DB schema initialised."
 else
-    echo "Kea DB schema already present, skipping init."
+    echo "Kea DB schema already present — running kea-admin db-upgrade to catch it up to $(kea-dhcp4 -V | head -1)..."
+    kea-admin db-upgrade pgsql \
+        -h "$PG_HOST" -P "$PG_PORT" -u "$PG_USER" -p "$PG_PASS" -n "$PG_DB"
 fi
 
-# Resolve run_script hook library path (varies by arch / Kea version).
+# Resolve hook library paths (vary by arch / Kea version). Kea 3.x moved the
+# PostgreSQL lease backend out of the daemon binaries and into a hook library
+# that every daemon using lease-database type "postgresql" must load.
+PGSQL_LIB=$(find /usr/lib -name 'libdhcp_pgsql.so' 2>/dev/null | head -1)
 RUN_SCRIPT_LIB=$(find /usr/lib -name 'libdhcp_run_script.so' 2>/dev/null | head -1)
 
-if [ -n "$RUN_SCRIPT_LIB" ] && [ -f /usr/local/bin/mantis-ddns-bridge.sh ]; then
+if [ -z "$PGSQL_LIB" ]; then
+    echo "libdhcp_pgsql.so not found — install isc-kea-pgsql." >&2
+    exit 1
+fi
+
+HOOKS4_JSON="[{\"library\":\"${PGSQL_LIB}\"}"
+HOOKS6_JSON="[{\"library\":\"${PGSQL_LIB}\"}]"
+
+if [ -n "$RUN_SCRIPT_LIB" ] && [ -f /usr/share/kea/scripts/mantis-ddns-bridge.sh ]; then
     echo "run_script hook found at ${RUN_SCRIPT_LIB} — DDNS bridge active."
-    HOOKS_JSON="[{\"library\":\"${RUN_SCRIPT_LIB}\",\"parameters\":{\"name\":\"/usr/local/bin/mantis-ddns-bridge.sh\",\"sync\":false}}]"
+    HOOKS4_JSON="${HOOKS4_JSON}, {\"library\":\"${RUN_SCRIPT_LIB}\",\"parameters\":{\"name\":\"/usr/share/kea/scripts/mantis-ddns-bridge.sh\",\"sync\":false}}"
 else
     echo "run_script hook not found — DDNS bridge disabled."
-    HOOKS_JSON="[]"
 fi
+HOOKS4_JSON="${HOOKS4_JSON}]"
 
 # Write DHCPv4 runtime config.
 sed \
@@ -72,8 +86,8 @@ sed \
     -e "s/__KEA_CTRL_BIND_ADDRESS__/${KEA_CTRL_BIND_ADDRESS}/g" \
     -e "s/__KEA4_CTRL_PORT__/${KEA4_CTRL_PORT}/g" \
     /etc/kea/kea-dhcp4.conf \
-    | sed "s|__HOOKS_LIBRARIES__|${HOOKS_JSON}|g" \
-    > /run/kea/kea-dhcp4-runtime.conf
+    | sed "s|__HOOKS_LIBRARIES__|${HOOKS4_JSON}|g" \
+    > /var/run/kea/kea-dhcp4-runtime.conf
 
 # Write DHCPv6 runtime config.
 sed \
@@ -85,15 +99,16 @@ sed \
     -e "s/__KEA_CTRL_BIND_ADDRESS__/${KEA_CTRL_BIND_ADDRESS}/g" \
     -e "s/__KEA6_CTRL_PORT__/${KEA6_CTRL_PORT}/g" \
     /etc/kea/kea-dhcp6.conf \
-    > /run/kea/kea-dhcp6-runtime.conf
+    | sed "s|__HOOKS_LIBRARIES__|${HOOKS6_JSON}|g" \
+    > /var/run/kea/kea-dhcp6-runtime.conf
 
 echo "Starting Kea as role: ${KEA_ROLE}"
 
 # Start DHCPv6 daemon in background (secondary nodes skip DHCPv4/v6 port binding
 # to avoid conflict — HA handles failover via lease sync, not dual listeners).
 if [ "$KEA_ROLE" = "primary" ]; then
-    kea-dhcp6 -c /run/kea/kea-dhcp6-runtime.conf &
+    kea-dhcp6 -c /var/run/kea/kea-dhcp6-runtime.conf &
 fi
 
 # Start DHCPv4 daemon in foreground.
-exec kea-dhcp4 -c /run/kea/kea-dhcp4-runtime.conf
+exec kea-dhcp4 -c /var/run/kea/kea-dhcp4-runtime.conf

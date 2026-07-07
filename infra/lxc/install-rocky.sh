@@ -227,32 +227,43 @@ install_local_kea() {
 
   if ! command -v kea-dhcp4 >/dev/null || ! command -v kea-admin >/dev/null; then
     curl -1sLf 'https://dl.cloudsmith.io/public/isc/kea-3-0/setup.rpm.sh' | bash
-    dnf -y install isc-kea-dhcp4 isc-kea-dhcp6 isc-kea-admin isc-kea-hooks
+    dnf -y install isc-kea-dhcp4 isc-kea-dhcp6 isc-kea-admin isc-kea-hooks isc-kea-pgsql
   fi
 
   kea_dhcp4_bin="$(command -v kea-dhcp4)"
   kea_dhcp6_bin="$(command -v kea-dhcp6)"
   lease_cmds_lib="$(find /usr/lib64 /usr/lib -name libdhcp_lease_cmds.so -print -quit 2>/dev/null || true)"
   run_script_lib="$(find /usr/lib64 /usr/lib -name libdhcp_run_script.so -print -quit 2>/dev/null || true)"
+  pgsql_lib="$(find /usr/lib64 /usr/lib -name libdhcp_pgsql.so -print -quit 2>/dev/null || true)"
 
   if [ -z "$lease_cmds_lib" ]; then
     echo "Kea lease_cmds hook not found after installing isc-kea-hooks." >&2
     exit 1
   fi
+  if [ -z "$pgsql_lib" ]; then
+    echo "Kea PostgreSQL lease-backend hook (libdhcp_pgsql.so) not found after installing isc-kea-pgsql." >&2
+    exit 1
+  fi
 
   hooks_dir="$(dirname "$lease_cmds_lib")"
-  mkdir -p /usr/lib/kea /etc/kea /run/kea
+  mkdir -p /usr/lib/kea /etc/kea
+  install -d -m 750 /var/run/kea
   ln -sfn "$hooks_dir" /usr/lib/kea/hooks
 
-  hooks_json='[{"library": "'"$lease_cmds_lib"'"}'
-  if [ -n "$run_script_lib" ] && [ -f services/kea/mantis-ddns-bridge.sh ]; then
-    install -Dm755 services/kea/mantis-ddns-bridge.sh /usr/local/bin/mantis-ddns-bridge.sh
-    hooks_json="${hooks_json}, {\"library\": \"${run_script_lib}\", \"parameters\": {\"name\": \"/usr/local/bin/mantis-ddns-bridge.sh\", \"sync\": false}}"
-  fi
-  hooks_json="${hooks_json}]"
+  # Kea 3.x's run_script hook only allows scripts under /usr/share/kea/scripts
+  # (a guarded-path check) — /usr/local/bin is rejected at load time.
+  ddns_bridge_dest="/usr/share/kea/scripts/mantis-ddns-bridge.sh"
 
-  render_kea_config services/kea/kea-dhcp4.conf /etc/kea/kea-dhcp4.conf "$hooks_json"
-  render_kea_config services/kea/kea-dhcp6.conf /etc/kea/kea-dhcp6.conf '[]'
+  hooks4_json='[{"library": "'"$pgsql_lib"'"}, {"library": "'"$lease_cmds_lib"'"}'
+  if [ -n "$run_script_lib" ] && [ -f services/kea/mantis-ddns-bridge.sh ]; then
+    install -Dm755 services/kea/mantis-ddns-bridge.sh "$ddns_bridge_dest"
+    hooks4_json="${hooks4_json}, {\"library\": \"${run_script_lib}\", \"parameters\": {\"name\": \"${ddns_bridge_dest}\", \"sync\": false}}"
+  fi
+  hooks4_json="${hooks4_json}]"
+  hooks6_json='[{"library": "'"$pgsql_lib"'"}]'
+
+  render_kea_config services/kea/kea-dhcp4.conf /etc/kea/kea-dhcp4.conf "$hooks4_json"
+  render_kea_config services/kea/kea-dhcp6.conf /etc/kea/kea-dhcp6.conf "$hooks6_json"
   chmod 640 /etc/kea/kea-dhcp4.conf /etc/kea/kea-dhcp6.conf
 
   schema_file="/usr/share/kea/scripts/pgsql/dhcpdb_create.pgsql"
@@ -267,6 +278,10 @@ install_local_kea() {
     PGPASSWORD="$POSTGRES_PASSWORD" psql \
       -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
       -v ON_ERROR_STOP=1 -f "$schema_file"
+  else
+    echo "Kea DB schema already present — running kea-admin db-upgrade to catch it up..."
+    kea-admin db-upgrade pgsql \
+      -h 127.0.0.1 -u "$POSTGRES_USER" -p "$POSTGRES_PASSWORD" -n "$POSTGRES_DB"
   fi
 
   cat > /etc/systemd/system/mantis-kea-dhcp4.service <<EOF
@@ -283,7 +298,7 @@ Environment=MANTIS_CTRL_URL=http://127.0.0.1:8000
 ExecStart=${kea_dhcp4_bin} -c /etc/kea/kea-dhcp4.conf
 Restart=on-failure
 RestartSec=2
-ExecStartPre=/usr/bin/mkdir -p /run/kea
+ExecStartPre=/usr/bin/install -d -m 750 /var/run/kea
 AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
 
@@ -305,7 +320,7 @@ Environment=MANTIS_CTRL_URL=http://127.0.0.1:8000
 ExecStart=${kea_dhcp6_bin} -c /etc/kea/kea-dhcp6.conf
 Restart=on-failure
 RestartSec=2
-ExecStartPre=/usr/bin/mkdir -p /run/kea
+ExecStartPre=/usr/bin/install -d -m 750 /var/run/kea
 AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
 

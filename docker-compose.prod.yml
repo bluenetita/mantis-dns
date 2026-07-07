@@ -112,7 +112,7 @@ services:
       - KEA_PEER_URL=http://kea-secondary:8004/
     restart: unless-stopped
     volumes:
-      - kea-primary-run:/run/kea
+      - kea-primary-run:/var/run/kea
     depends_on:
       postgres:
         condition: service_healthy
@@ -133,7 +133,7 @@ services:
       - KEA_PEER_URL=http://kea:8004/
     restart: unless-stopped
     volumes:
-      - kea-secondary-run:/run/kea
+      - kea-secondary-run:/var/run/kea
     depends_on:
       postgres:
         condition: service_healthy
