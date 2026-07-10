@@ -224,8 +224,18 @@ fn matched_categories(bundle: &Bundle, qname: &str) -> Vec<String> {
         .collect()
 }
 
+/// Must mirror `_normalize_domain` in
+/// services/control/mantis_control/feeds/parsers.py exactly: feeds are
+/// ingested with a leading "www." stripped (design.md §18.3), so a bloom
+/// filter built from "pornhub.com" has no entry for "www.pornhub.com" at
+/// all — without stripping it here too, every "www."-prefixed query for an
+/// otherwise-blocked domain silently bypasses the category block.
 fn normalize(domain: &str) -> String {
-    domain.trim_end_matches('.').to_ascii_lowercase()
+    let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+    match domain.strip_prefix("www.") {
+        Some(rest) => rest.to_string(),
+        None => domain,
+    }
 }
 
 /// Emits a query-event for a stub-zone answer/NXDOMAIN, matching the shape of
@@ -668,5 +678,20 @@ mod tests {
         let new_key = test_key(2);
         store.set(new_key);
         assert_eq!(store.current(), new_key);
+    }
+
+    #[test]
+    fn normalize_strips_leading_www_to_match_feed_ingestion() {
+        // Must mirror _normalize_domain in feeds/parsers.py — feeds are
+        // stored with "www." already stripped, so a query for
+        // "www.<blocked-domain>" only matches the bloom filter if this
+        // strip happens here too.
+        assert_eq!(normalize("www.pornhub.com"), "pornhub.com");
+        assert_eq!(normalize("WWW.Example.COM."), "example.com");
+        assert_eq!(normalize("pornhub.com"), "pornhub.com");
+        assert_eq!(normalize("pornhub.com."), "pornhub.com");
+        // Must not strip domains that merely start with "www" without the
+        // dot (a real, if unusual, registrable domain).
+        assert_eq!(normalize("wwwx.example.com"), "wwwx.example.com");
     }
 }
