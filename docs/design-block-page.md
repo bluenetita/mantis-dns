@@ -1,6 +1,6 @@
 # Design: Customizable Block Page
 
-Status: draft · Owner: TBD · Depends on: `proto/bundle.proto`, `services/filter`, `services/control`, `apps/ui`
+Status: phase 1 + most of phase 2 shipped (`d43a043`) · Depends on: `proto/bundle.proto`, `services/filter`, `services/control`, `apps/ui`
 
 ## 1. Problem
 
@@ -82,20 +82,21 @@ the block VIP.
 
 ## 4. Block-page listener
 
-### 4.1 Placement — two options
+### 4.1 Placement — decided: Option A
 
-**Option A (recommended, phase 1): co-hosted in the filter node.** A second
-tokio listener (ports 80/443 on the VIP), separate from the DNS task. The
-filter already computes client-IP → group (`docs/design.md` §7) and holds the
-current bundle in memory, so no new IP-mapping duplication and no extra
-cross-plane call on render. Off the DNS hot path.
+**Option A (shipped): co-hosted in the filter node**
+(`services/filter/mantis-filter/src/blockpage.rs`, `run_block_page_server`).
+An opt-in second tokio listener bound via `BLOCKPAGE_BIND_ADDR`, separate from
+the DNS task — unset in a deployment, it never starts. The filter already
+computes client-IP → group (`docs/design.md` §7) and holds the current bundle
+in memory, so no new IP-mapping duplication and no extra cross-plane call on
+render. A bind failure (e.g. port 80 without privileges) is logged, non-fatal;
+DNS serving is unaffected either way — the render path never blocks
+resolution.
 
-**Option B: standalone `services/blockpage`.** Own deployable behind the VIP.
-Cleaner blast-radius separation, but must re-implement client→group mapping and
-fetch templates itself. Defer unless the HTTP surface on DNS nodes is
-unacceptable.
-
-Either way the render path never blocks DNS resolution.
+**Option B: standalone `services/blockpage`.** Not built. Would need its own
+client→group mapping and template fetch; revisit only if the HTTP surface on
+DNS nodes becomes unacceptable.
 
 ### 4.2 HTTPS caveat (must be explicit to users)
 
@@ -110,6 +111,9 @@ domain. Consequences:
 Strategy: serve HTTP block page always; on 443 present our own cert and accept
 the warning; document that fully-clean HTTPS block pages require installing an
 org root CA on managed devices (MDM) — out of scope for phase 1.
+
+Shipped: HTTP-only (`run_block_page_server` binds one listener, no TLS). The
+443/own-cert path is deferred to phase 2/3.
 
 ## 5. Template config (control plane)
 
@@ -140,16 +144,27 @@ Resolution order at render: group override → tenant default → built-in defau
   (`compiler/build_policy_bundle.py`) → new `BlockResponse` in the signed
   bundle. This is the only template field the hot path needs.
 - All *presentation* fields (title, message, logo, colors, flags) are served to
-  the listener via a control-plane REST endpoint
-  (`GET /internal/block-template?group_id=`), cached with ETag. Kept **out** of
-  the signed bundle to keep the hot-path artifact lean.
+  the listener via `GET /api/v1/groups/{group_id}/block-template`
+  (`routers.py::get_effective_block_template`), service-token-authed like
+  `/routing-table` and the bundle GET, cached in-process by the listener for
+  60s (hit and miss both cached, so a flood of blocked requests can't
+  stampede control). Kept **out** of the signed bundle to keep the hot-path
+  artifact lean.
 
 ### 5.3 API + UI
 
-- REST CRUD under the existing policy/group admin
-  (`services/control/mantis_control/api`, `schemas.py`).
-- UI: a "Block page" tab on the group/policy screen (`apps/ui/src`) — mode
-  selector, branding fields, live preview, "send test" button.
+Shipped:
+- `PUT /api/v1/groups/{group_id}/block-page-template` — group override.
+- `PUT /api/v1/tenants/{tenant_id}/block-page-template` — tenant default.
+- `GET /api/v1/groups/{group_id}/block-page-template` — the group's own
+  override (404 if unset; distinct from the resolved endpoint above).
+- Resolution (`block_page.py::resolve_block_template`): group override → tenant
+  default → `None` (built-in defaults).
+- UI: `BlockPageCard` (`apps/ui/src/pages/BlockPageCard.tsx`) on the group
+  policy screen — mode selector, branding fields, live preview mirroring the
+  filter's `render_page`.
+
+Not shipped: a "send test" button.
 
 ## 6. Optional: request-unblock flow (phase 2)
 
@@ -160,15 +175,22 @@ admin queue in UI. Rate-limited by source IP. Keep gated behind
 
 ## 7. Rollout / phasing
 
-1. Proto + filter redirect modes + tenant-level template (mode + branding),
-   co-hosted listener, HTTP only, built-in template rendering.
-2. UI editor + live preview; per-group override; HTTPS listener with own cert.
-3. Unblock-request flow; per-category block modes; MDM root-CA guidance.
+1. **Shipped** (`d43a043`) — proto + filter redirect modes + tenant-level
+   template (mode + branding), co-hosted listener, HTTP only, built-in
+   template rendering.
+2. **Mostly shipped** — UI editor + live preview (done); per-group override
+   (done). Still open: HTTPS listener with own cert.
+3. Not started — unblock-request flow; per-category block modes; MDM root-CA
+   guidance.
 
 ## 8. Open questions
 
-- Listener placement: co-host in filter (A) vs standalone service (B)?
-- Customization granularity: tenant-only, or tenant + per-group override, or
-  down to per-category?
-- HTTPS: ship own cert + accept warning, or HTTP-only for phase 1?
-- Block VIP: one global anycast VIP, or per-filter-node IP?
+Resolved by implementation:
+- Listener placement → **Option A**, co-hosted in the filter node (§4.1).
+- Customization granularity → **tenant default + per-group override**
+  (§5.1/5.3), not per-category.
+- HTTPS → **HTTP-only for phase 1** (§4.2); own-cert path deferred.
+
+Still open:
+- Block VIP: one global anycast VIP, or per-filter-node IP? `BLOCKPAGE_BIND_ADDR`
+  is per-node today; anycast/VIP allocation is an ops decision outside this repo.
