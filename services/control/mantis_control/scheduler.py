@@ -90,3 +90,25 @@ def sync_feed_schedule(feed: Feed) -> None:
         schedule_feed(feed)
     else:
         unschedule_feed(feed.id)
+
+
+def kick_feed_now(feed_id: str) -> None:
+    """Schedules a one-off immediate ingest for a feed, independent of (and
+    in addition to) its recurring interval job. `add_job` with no trigger
+    defaults to a `DateTrigger` at `now`, so this fires as soon as the
+    scheduler starts rather than waiting up to a full `interval_seconds`
+    (default 24h) for the feed's first run — the gap a never-ingested feed
+    would otherwise sit in, silently contributing nothing to compiled
+    bundles. Distinct job id so it can't collide with/replace the recurring
+    `ingest-{feed_id}` job."""
+    scheduler.add_job(
+        run_ingest,
+        args=[feed_id],
+        id=f"startup-kick-{feed_id}",
+        replace_existing=True,
+        # The default 1s misfire grace time can skip this run if the event
+        # loop is busy (e.g. many feeds queued at once) between this call
+        # and the scheduler actually picking it up — this run must always
+        # happen regardless of how late.
+        misfire_grace_time=None,
+    )

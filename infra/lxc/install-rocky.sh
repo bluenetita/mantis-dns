@@ -471,6 +471,8 @@ KEA_HOOKS_DIR=${KEA_HOOKS_DIR:-/usr/lib/kea/hooks}
 ADMIN_EMAIL=${ADMIN_EMAIL}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 MANTIS_SIGNING_KEY_PATH=${ENV_DIR}/signing_key.bin
+FEED_STORAGE_DIR=${INSTALL_DIR}/data/feed_domains
+BUNDLE_STORAGE_DIR=${INSTALL_DIR}/data/bundles
 EOF
   chmod 600 "$ENV_FILE"
   echo "Generated ADMIN_PASSWORD (shown once): ${ADMIN_PASSWORD}"
@@ -485,6 +487,16 @@ ensure_env_var KEA6_CTRL_URL "${KEA6_CTRL_URL:-}"
 # filter node's cached public key (they only fetch it once at startup) until
 # someone notices bundles are being rejected and restarts them by hand.
 ensure_env_var MANTIS_SIGNING_KEY_PATH "${ENV_DIR}/signing_key.bin"
+# Same hazard, same fix, as MANTIS_SIGNING_KEY_PATH above: the app's default
+# ("feed_domains"/"bundles", relative to CWD) would otherwise resolve inside
+# $INSTALL_DIR/app and be wiped by every reinstall. Unlike the signing key,
+# there's no loud failure mode here — the DB's last_domain_count/
+# bundle_version rows survive (separate storage), so every feed reads back
+# as "ingested" while its domains are gone, and compiled bundles silently
+# stop blocking anything with no error anywhere. $INSTALL_DIR/data is a
+# sibling of app/venv, never touched by the `rm -rf` below.
+ensure_env_var FEED_STORAGE_DIR "${INSTALL_DIR}/data/feed_domains"
+ensure_env_var BUNDLE_STORAGE_DIR "${INSTALL_DIR}/data/bundles"
 ensure_env_var KEA_HOOKS_DIR "${KEA_HOOKS_DIR:-/usr/lib/kea/hooks}"
 refresh_kea_env_var KEA_CTRL_URL "$REQUESTED_KEA_CTRL_URL" ""
 refresh_kea_env_var KEA4_CTRL_URL "$REQUESTED_KEA4_CTRL_URL" ""
@@ -514,6 +526,10 @@ chmod 750 "$ENV_DIR"
 
 echo "==> Deploying control plane..."
 mkdir -p "$INSTALL_DIR"
+# Sibling of app/venv, deliberately outside the `rm -rf` below — holds
+# FEED_STORAGE_DIR/BUNDLE_STORAGE_DIR, which must survive reinstalls (see
+# the ensure_env_var comment above).
+mkdir -p "$INSTALL_DIR/data/feed_domains" "$INSTALL_DIR/data/bundles"
 rm -rf "$INSTALL_DIR/app" "$INSTALL_DIR/venv"
 cp -r services/control "$INSTALL_DIR/app"
 python3 -m venv "$INSTALL_DIR/venv"

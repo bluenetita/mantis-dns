@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     MANTIS_SIGNING_KEY_PATH: Path = Path("signing_key.bin")
     MANTIS_SIGNING_KEY_ID: str = "control-key-1"
 
+    # Sprint 2/5: local disk. Swap for S3 + etcd per design.md §5.2 without
+    # touching callers — see build_policy_bundle.store_bundle.
+    BUNDLE_STORAGE_DIR: Path = Path("bundles")
+    FEED_STORAGE_DIR: Path = Path("feed_domains")
+
     DATABASE_URL: str = "postgresql+psycopg://mantis:mantis@localhost:5432/mantis"
     CORS_ALLOW_ORIGINS: str = "http://localhost:5173"
 
@@ -107,6 +112,24 @@ def _check_production_secrets() -> None:
             f"MANTIS_SIGNING_KEY_PATH ({settings.MANTIS_SIGNING_KEY_PATH}) is a relative path — "
             "set it to a stable absolute path outside the deployment directory"
         )
+    for name, path in (
+        ("FEED_STORAGE_DIR", settings.FEED_STORAGE_DIR),
+        ("BUNDLE_STORAGE_DIR", settings.BUNDLE_STORAGE_DIR),
+    ):
+        if not path.is_absolute():
+            # Same hazard as MANTIS_SIGNING_KEY_PATH above, and just as
+            # silent: a relative path resolves against the process's CWD,
+            # which install-rocky.sh's `rm -rf $INSTALL_DIR/app` (redeploy)
+            # or a plain `docker compose up -d` after a new image (no
+            # matching volume) wipes clean. last_domain_count/bundle_version
+            # in the DB survive (separate storage), so every feed reads back
+            # as "ingested" with zero actual domains — compiled bundles embed
+            # near-empty bloom filters and silently stop blocking anything,
+            # with no error anywhere.
+            errors.append(
+                f"{name} ({path}) is a relative path — "
+                "set it to a stable absolute path outside the deployment directory"
+            )
     if errors:
         raise RuntimeError(
             "Refusing to start: MANTIS_ENV=production but insecure secrets detected: "
@@ -116,7 +139,5 @@ def _check_production_secrets() -> None:
 
 _check_production_secrets()
 
-# Sprint 2/5: local disk. Swap for S3 + etcd per design.md §5.2 without
-# touching callers — see build_policy_bundle.store_bundle.
-BUNDLE_STORAGE_DIR = Path("bundles")
-FEED_STORAGE_DIR = Path("feed_domains")
+BUNDLE_STORAGE_DIR = settings.BUNDLE_STORAGE_DIR
+FEED_STORAGE_DIR = settings.FEED_STORAGE_DIR

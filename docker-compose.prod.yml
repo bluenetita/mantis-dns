@@ -52,6 +52,19 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-mantis}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mantis}
       - POSTGRES_DB=${POSTGRES_DB:-mantis}
+      # Must be absolute paths on a volume that survives container
+      # recreation (a new image on `docker compose up -d` gets a fresh
+      # writable layer otherwise) — MANTIS_ENV=production refuses to boot
+      # if any of these resolve as relative. See config.py's
+      # _check_production_secrets for what silently breaks without this:
+      # the signing key regenerates unnoticed, and/or feed_domains/bundles
+      # go empty while the DB still thinks every feed is ingested, so
+      # compiled bundles silently stop blocking anything.
+      - MANTIS_SIGNING_KEY_PATH=/data/signing_key.bin
+      - FEED_STORAGE_DIR=/data/feed_domains
+      - BUNDLE_STORAGE_DIR=/data/bundles
+    volumes:
+      - control-data:/data
     restart: unless-stopped
     depends_on:
       postgres:
@@ -144,5 +157,6 @@ services:
 
 volumes:
   pgdata:
+  control-data:
   kea-primary-run:
   kea-secondary-run:

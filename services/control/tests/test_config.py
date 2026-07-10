@@ -27,6 +27,8 @@ def _set_all_secrets_strong(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config.settings, "MANTIS_SERVICE_TOKEN", "some-strong-service-token")
     monkeypatch.setattr(config.settings, "ADMIN_PASSWORD", "some-strong-password")
     monkeypatch.setattr(config.settings, "MANTIS_SIGNING_KEY_PATH", Path.cwd() / "signing_key.bin")
+    monkeypatch.setattr(config.settings, "FEED_STORAGE_DIR", Path.cwd() / "feed_domains")
+    monkeypatch.setattr(config.settings, "BUNDLE_STORAGE_DIR", Path.cwd() / "bundles")
 
 
 def test_non_production_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,6 +47,8 @@ def test_production_with_all_dev_defaults_raises(monkeypatch: pytest.MonkeyPatch
     assert "MANTIS_SERVICE_TOKEN" in message
     assert "ADMIN_PASSWORD" in message
     assert "MANTIS_SIGNING_KEY_PATH" in message
+    assert "FEED_STORAGE_DIR" in message
+    assert "BUNDLE_STORAGE_DIR" in message
 
 
 def test_production_with_all_strong_secrets_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -70,6 +74,8 @@ def test_production_with_short_jwt_secret_raises(monkeypatch: pytest.MonkeyPatch
         ("MANTIS_INTERNAL_TOKEN", config.INTERNAL_TOKEN_DEV_DEFAULT),
         ("ADMIN_PASSWORD", config.ADMIN_PASSWORD_DEV_DEFAULT),
         ("MANTIS_SIGNING_KEY_PATH", Path("signing_key.bin")),
+        ("FEED_STORAGE_DIR", Path("feed_domains")),
+        ("BUNDLE_STORAGE_DIR", Path("bundles")),
     ],
 )
 def test_production_rejects_each_insecure_default_individually(
@@ -102,5 +108,29 @@ def test_production_accepts_absolute_signing_key_path(monkeypatch: pytest.Monkey
     monkeypatch.setattr(config.settings, "MANTIS_ENV", "production")
     _set_all_secrets_strong(monkeypatch)
     monkeypatch.setattr(config.settings, "MANTIS_SIGNING_KEY_PATH", Path.cwd() / "signing_key.bin")
+
+    config._check_production_secrets()
+
+
+def test_production_rejects_relative_feed_or_bundle_storage_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same hazard as MANTIS_SIGNING_KEY_PATH, but silent instead of loud: a
+    reinstall/redeploy that changes the working directory wipes the feed
+    domain files and stored bundles a relative path resolves to, while the
+    DB's last_domain_count/bundle_version rows (separate storage) still say
+    everything is ingested and compiled — so blocking silently stops working
+    with no error anywhere, unlike the signing key's visible rejection."""
+    monkeypatch.setattr(config.settings, "MANTIS_ENV", "production")
+    _set_all_secrets_strong(monkeypatch)
+    monkeypatch.setattr(config.settings, "FEED_STORAGE_DIR", Path("feed_domains"))
+
+    with pytest.raises(RuntimeError, match="FEED_STORAGE_DIR"):
+        config._check_production_secrets()
+
+
+def test_production_accepts_absolute_feed_and_bundle_storage_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config.settings, "MANTIS_ENV", "production")
+    _set_all_secrets_strong(monkeypatch)
+    monkeypatch.setattr(config.settings, "FEED_STORAGE_DIR", Path.cwd() / "feed_domains")
+    monkeypatch.setattr(config.settings, "BUNDLE_STORAGE_DIR", Path.cwd() / "bundles")
 
     config._check_production_secrets()

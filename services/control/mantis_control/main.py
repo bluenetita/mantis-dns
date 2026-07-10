@@ -45,7 +45,7 @@ from mantis_control.config import settings
 from mantis_control.db.models import Feed, User
 from mantis_control.db.session import SessionLocal
 from mantis_control.feeds.seed import seed_catalog
-from mantis_control.scheduler import schedule_feed, scheduler
+from mantis_control.scheduler import kick_feed_now, schedule_feed, scheduler
 from mantis_control.siem_delivery import run_webhook_delivery_cycle
 from mantis_control.dhcp.lease_sync import sync_dhcp_leases
 
@@ -84,8 +84,10 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         if inserted:
             logging.getLogger(__name__).info(f"seeded {inserted} feeds from catalog.json")
 
+        enabled_feed_ids = []
         for feed in db.query(Feed).filter(Feed.enabled.is_(True)).all():
             schedule_feed(feed)
+            enabled_feed_ids.append(feed.id)
 
         if db.query(User).count() == 0:
             db.add(User(
@@ -127,6 +129,17 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
 
     scheduler.start()
+
+    # Kick every enabled feed's ingest immediately, in addition to its
+    # recurring interval job: an interval job's first tick is up to a full
+    # `interval_seconds` (default 24h) away, so without this a never-ingested
+    # feed contributes nothing to compiled bundles for up to a day after
+    # every control-plane restart (see _category_bloom in
+    # compiler/build_policy_bundle.py). Called after scheduler.start() so
+    # each job's `date` trigger fires immediately with no misfire risk.
+    for feed_id in enabled_feed_ids:
+        kick_feed_now(feed_id)
+
     try:
         yield
     finally:
