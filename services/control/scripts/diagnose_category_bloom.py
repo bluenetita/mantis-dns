@@ -81,35 +81,35 @@ def _diagnose(db, group_id: str, domain: str | None) -> int:
             continue
         any_block = True
 
-        feed = db.execute(
+        feeds = db.execute(
             select(models.Feed).where(
                 models.Feed.category_id == toggle.category_id,
                 models.Feed.enabled.is_(True),
-            )
-        ).scalars().first()
+            ).order_by(models.Feed.id)
+        ).scalars().all()
 
-        if feed is None:
+        if not feeds:
             print(f"  [{toggle.category_id}] action=ACTION_BLOCK but NO enabled feed for this category")
             print("      -> compiled bundle embeds an EMPTY bloom filter for it. Enable a feed.")
             continue
 
-        if feed.last_domain_count is None:
-            print(f"  [{toggle.category_id}] action=ACTION_BLOCK, feed={feed.id!r} enabled=True, last_domain_count=NULL")
-            print("      -> THIS IS THE BUG: feed has never been ingested (last_domain_count is NULL),")
-            print("         so _category_bloom() embeds an EMPTY placeholder bloom filter - every")
-            print("         compile since has silently blocked nothing for this category, no matter")
-            print("         how many times you click 'Compile & publish bundle'.")
-            print(f"      -> Fix: POST /api/v1/feeds/{feed.id}/ingest (or click 'Refresh' on the")
-            print("         Feeds page for this feed), THEN Compile & publish bundle again.")
-        else:
-            on_disk = load_domains(FEED_STORAGE_DIR, feed.id)
-            print(
-                f"  [{toggle.category_id}] action=ACTION_BLOCK, feed={feed.id!r} enabled=True, "
-                f"last_domain_count={feed.last_domain_count}, on-disk domains={len(on_disk)}"
-            )
-            if domain_norm:
-                hit = domain_norm in on_disk
-                print(f"      -> {domain_norm!r} {'IS' if hit else 'is NOT'} in this feed's domain file")
+        for feed in feeds:
+            if feed.last_domain_count is None:
+                print(f"  [{toggle.category_id}] action=ACTION_BLOCK, feed={feed.id!r} enabled=True, last_domain_count=NULL")
+                print("      -> feed has never been ingested (last_domain_count is NULL), so it")
+                print("         contributes NO domains to the compiled bloom filter, no matter")
+                print("         how many times you click 'Compile & publish bundle'.")
+                print(f"      -> Fix: POST /api/v1/feeds/{feed.id}/ingest (or click 'Refresh' on the")
+                print("         Feeds page for this feed), THEN Compile & publish bundle again.")
+            else:
+                on_disk = load_domains(FEED_STORAGE_DIR, feed.id)
+                print(
+                    f"  [{toggle.category_id}] action=ACTION_BLOCK, feed={feed.id!r} enabled=True, "
+                    f"last_domain_count={feed.last_domain_count}, on-disk domains={len(on_disk)}"
+                )
+                if domain_norm:
+                    hit = domain_norm in on_disk
+                    print(f"      -> {domain_norm!r} {'IS' if hit else 'is NOT'} in this feed's domain file")
 
     if not any_block:
         print("\nNo category is set to ACTION_BLOCK in this policy at all - nothing should be blocked,")

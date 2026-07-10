@@ -52,24 +52,32 @@ _ACTION_MAP = {
 }
 
 
-def _category_bloom(db: Session, category_id: str) -> tuple[bytes, BloomParams, Feed | None]:
-    """Builds a category's bloom filter from its ingested feed domains, if any
-    feed has been ingested for this category yet. Falls back to an empty
-    filter (pre-Sprint-5 behavior) when no feed has run."""
-    feed = db.execute(
-        select(Feed).where(Feed.category_id == category_id, Feed.enabled.is_(True))
-    ).scalars().first()
+def _category_bloom(db: Session, category_id: str) -> tuple[bytes, BloomParams, list[Feed]]:
+    """Builds a category's bloom filter as the UNION of every enabled,
+    ingested feed for that category — a category may have several feeds
+    (e.g. two ads lists), and consulting only one silently drops the rest
+    from the wire. Falls back to an empty filter when no feed has been
+    ingested yet. Returns the feeds that contributed domains (empty list
+    if none). Ordered by feed id so compiles are deterministic."""
+    feeds = db.execute(
+        select(Feed)
+        .where(Feed.category_id == category_id, Feed.enabled.is_(True))
+        .order_by(Feed.id)
+    ).scalars().all()
+    ingested = [f for f in feeds if f.last_domain_count is not None]
 
-    if feed is None or feed.last_domain_count is None:
+    if not ingested:
         bf = BloomFilterBuilder(_EMPTY_CATEGORY_PARAMS)
-        return bf.to_bytes(), _EMPTY_CATEGORY_PARAMS, feed
+        return bf.to_bytes(), _EMPTY_CATEGORY_PARAMS, []
 
-    domains = load_domains(FEED_STORAGE_DIR, feed.id)
+    domains: set[str] = set()
+    for feed in ingested:
+        domains |= load_domains(FEED_STORAGE_DIR, feed.id)
     params = recommended_params(expected_items=max(len(domains), 1), seed=1234)
     bf = BloomFilterBuilder(params)
     for domain in domains:
         bf.add(domain)
-    return bf.to_bytes(), params, feed
+    return bf.to_bytes(), params, ingested
 
 
 def build_bundle(policy: Policy, version: int, db: Session) -> bundle_pb2.Bundle:
@@ -82,13 +90,13 @@ def build_bundle(policy: Policy, version: int, db: Session) -> bundle_pb2.Bundle
     )
 
     for toggle in policy.category_toggles:
-        bloom_bytes, params, feed = _category_bloom(db, toggle.category_id)
+        bloom_bytes, params, feeds = _category_bloom(db, toggle.category_id)
         bundle.categories.append(
             bundle_pb2.CategorySet(
                 category_id=toggle.category_id,
-                source_feed_id=feed.id if feed else "",
-                feed_version=(feed.last_version or "") if feed else "",
-                license=feed.license if feed else "",
+                source_feed_id=",".join(f.id for f in feeds),
+                feed_version=",".join(f.last_version or "" for f in feeds),
+                license=",".join(sorted({f.license for f in feeds if f.license})),
                 bloom=bundle_pb2.BloomParams(
                     num_hashes=params.num_hashes,
                     num_bits=params.num_bits,

@@ -373,25 +373,28 @@ def test_domain(
         if override.kind == "deny" and override.domain.lower() == domain:
             return PolicyTestResult(domain=domain, decision="block", matched="override_deny")
 
-    # 3. Category toggles — check each blocked category's feed domain file.
+    # 3. Category toggles — check every enabled feed of each blocked category
+    # (a category may have several feeds; the compiler unions them all).
     for toggle in policy.category_toggles:
         if toggle.action != "ACTION_BLOCK":
             continue
-        feed = db.execute(
+        feeds = db.execute(
             select(models.Feed).where(
                 models.Feed.category_id == toggle.category_id,
                 models.Feed.enabled.is_(True),
-            )
-        ).scalars().first()
-        if feed is None:
-            continue
-        if domain in load_domains(FEED_STORAGE_DIR, feed.id):
-            return PolicyTestResult(
-                domain=domain,
-                decision="block",
-                matched="category",
-                matched_category=toggle.category_id,
-                matched_feed_id=feed.id,
-            )
+                # Mirror the compiler: a never-ingested feed contributes no
+                # domains to the bundle, so it must not block here either.
+                models.Feed.last_domain_count.is_not(None),
+            ).order_by(models.Feed.id)
+        ).scalars().all()
+        for feed in feeds:
+            if domain in load_domains(FEED_STORAGE_DIR, feed.id):
+                return PolicyTestResult(
+                    domain=domain,
+                    decision="block",
+                    matched="category",
+                    matched_category=toggle.category_id,
+                    matched_feed_id=feed.id,
+                )
 
     return PolicyTestResult(domain=domain, decision="allow", matched="default")
