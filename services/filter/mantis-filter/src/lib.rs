@@ -17,6 +17,7 @@
 
 //! Mantis filter node: DNS frontend + policy engine.
 
+mod blockpage;
 mod cache;
 pub mod health_monitor;
 mod router;
@@ -27,18 +28,19 @@ pub mod zone_store;
 pub use telemetry::{QueryEventInput, TelemetryEmitter};
 pub use zone_store::{fetch_and_publish_zone, fetch_local_zone_records, LocalZoneRecordDto, ZoneLookup, ZoneStore};
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mantis_bundle::{Bundle, BundleStore};
+use mantis_bundle::{BlockMode, Bundle, BundleStore};
 use mantis_policy::BloomFilter;
 use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
 use cache::DnsCache;
 use ed25519_dalek::VerifyingKey;
 use hickory_proto::op::{Message, MessageType, ResponseCode};
-use hickory_proto::rr::{Name, Record, RecordType};
+use hickory_proto::rr::rdata::{A, AAAA};
+use hickory_proto::rr::{Name, RData, Record, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::TokioConnectionProvider;
@@ -485,6 +487,7 @@ async fn handle_tcp_connection(
     Ok(())
 }
 
+pub use blockpage::{run_block_page_server, BlockPageBundles};
 pub use health_monitor::{run_health_monitor, HealthStore};
 pub use router::{
     refresh_routes, routing_refresh_loop, run_router_tcp_server, run_router_udp_server,
@@ -568,7 +571,7 @@ pub(crate) async fn build_response(
 
     match outcome.decision {
         Decision::Block => {
-            response.set_response_code(ResponseCode::NXDomain);
+            apply_block_response(bundle, &qname, qtype, &mut response);
         }
         Decision::Allow => {
             cache_hit = Some(
@@ -595,6 +598,69 @@ pub(crate) async fn build_response(
     });
 
     response
+}
+
+/// Synthesizes the DNS answer for a blocked query per the bundle's
+/// `block_response` policy:
+/// - unspecified / NXDOMAIN → NXDOMAIN (historical default).
+/// - ZERO_IP → `0.0.0.0` (A) / `::` (AAAA) with NOERROR.
+/// - REDIRECT → the configured redirect IP for A/AAAA with NOERROR, so a web
+///   navigation lands on the block-page listener.
+///
+/// In the ZERO_IP/REDIRECT modes the blocked name is treated as *existing*: a
+/// query for a type we have no address for returns NODATA (NOERROR, no answer)
+/// rather than NXDOMAIN, so a missing AAAA never poisons the A lookup on
+/// dual-stack stub resolvers.
+fn apply_block_response(bundle: &Bundle, qname: &str, qtype: RecordType, response: &mut Message) {
+    let block = bundle.block_response.as_ref();
+    let mode = block.map(|b| b.mode()).unwrap_or(BlockMode::Unspecified);
+
+    let ttl = |default: u32| {
+        block
+            .map(|b| b.ttl_seconds)
+            .filter(|t| *t > 0)
+            .unwrap_or(default)
+    };
+
+    let (v4, v6, ttl) = match mode {
+        BlockMode::Redirect => (
+            block.and_then(|b| b.redirect_ipv4.parse::<Ipv4Addr>().ok()),
+            block.and_then(|b| b.redirect_ipv6.parse::<Ipv6Addr>().ok()),
+            ttl(30),
+        ),
+        BlockMode::ZeroIp => (
+            Some(Ipv4Addr::UNSPECIFIED),
+            Some(Ipv6Addr::UNSPECIFIED),
+            ttl(30),
+        ),
+        // BLOCK_MODE_NXDOMAIN and unspecified.
+        _ => {
+            response.set_response_code(ResponseCode::NXDomain);
+            return;
+        }
+    };
+
+    let rdata = match qtype {
+        RecordType::A => v4.map(|ip| RData::A(A::from(ip))),
+        RecordType::AAAA => v6.map(|ip| RData::AAAA(AAAA::from(ip))),
+        _ => None,
+    };
+
+    // Name is already normalized from the query; a parse failure here should
+    // not happen, but fall back to NXDOMAIN rather than panic.
+    match (rdata, Name::from_utf8(qname)) {
+        (Some(rdata), Ok(name)) => {
+            response.set_response_code(ResponseCode::NoError);
+            response.add_answer(Record::from_rdata(name, ttl, rdata));
+        }
+        // Name exists (it's redirected/sinkholed) but no record of this type.
+        (None, _) => {
+            response.set_response_code(ResponseCode::NoError);
+        }
+        (Some(_), Err(_)) => {
+            response.set_response_code(ResponseCode::NXDomain);
+        }
+    }
 }
 
 /// Resolves any qtype through the cache then forwarder. Returns `true` on

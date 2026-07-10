@@ -44,6 +44,7 @@ import { Link, useParams } from "react-router-dom";
 import { useCategories, useCompileBundle, useTopDomains, usePolicy, useUpsertPolicy, useTestPolicy } from "../api/hooks";
 import type { Category } from "../api/hooks";
 import { categoryIcon, CATEGORY_GROUP_LABEL } from "../categoryIcons";
+import { BlockPageCard } from "./BlockPageCard";
 import type { components } from "../api/schema";
 import { useAuth } from "../auth/AuthContext";
 
@@ -283,6 +284,8 @@ export function PolicyPage() {
           onChange={(v) => v && setOnLoadFailure(v)}
         />
       </Card>
+
+      <BlockPageCard groupId={groupId} canEdit={hasRole("operator")} />
 
       <Card withBorder>
         <Title order={4} mb="sm">

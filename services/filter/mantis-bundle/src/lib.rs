@@ -22,7 +22,7 @@ pub mod gen {
     include!(concat!(env!("OUT_DIR"), "/mantis.bundle.v1.rs"));
 }
 
-pub use gen::{Action, Bundle, CategorySet, FailurePolicy};
+pub use gen::{Action, BlockMode, BlockResponse, Bundle, CategorySet, FailurePolicy};
 
 use anyhow::{bail, Result};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};

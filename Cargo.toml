@@ -20,6 +20,7 @@ tracing-subscriber = "0.3"
 anyhow = "1"
 thiserror = "2"
 arc-swap = "1"
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 hickory-proto = "0.25"
 hickory-resolver = { version = "0.25", features = ["tls-ring", "webpki-roots", "https-ring", "dnssec-ring"] }

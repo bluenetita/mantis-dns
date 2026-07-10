@@ -108,6 +108,47 @@ class PolicyOverride(Base):
     policy: Mapped[Policy] = relationship(back_populates="overrides")
 
 
+class BlockPageTemplate(Base):
+    """Per-group (or tenant-default) block-page config + branding.
+
+    A row with `group_id` set is that group's override; a row with `group_id`
+    NULL is the tenant default. Resolution at read time: group override →
+    tenant default → built-in (see mantis_control.block_page).
+
+    `block_mode` + redirect IPs + ttl are the only fields the DNS hot path
+    needs — the compiler copies them into the signed bundle's `block_response`.
+    The remaining fields are presentation-only, served to the filter node's
+    co-hosted block-page listener over HTTP (never signed into the bundle).
+    """
+
+    __tablename__ = "block_page_templates"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "group_id", name="uq_block_page_tenant_group"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"))
+    group_id: Mapped[str | None] = mapped_column(ForeignKey("groups.id"), nullable=True)
+
+    # Hot-path fields (compiled into the bundle).
+    block_mode: Mapped[str] = mapped_column(String(24), default="BLOCK_MODE_NXDOMAIN")
+    redirect_ipv4: Mapped[str | None] = mapped_column(String(15), nullable=True)
+    redirect_ipv6: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    ttl_seconds: Mapped[int] = mapped_column(Integer, default=30)
+
+    # Presentation fields (served to the block-page listener).
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    message: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    logo_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    brand_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
+    contact_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    show_domain: Mapped[bool] = mapped_column(Boolean, default=True)
+    show_category: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
 class QueryEvent(Base):
     """Lightweight query log. Sprint 6: Postgres. design.md §6 calls for
     Kafka -> ClickHouse at scale; this is the local-disk-storage-equivalent

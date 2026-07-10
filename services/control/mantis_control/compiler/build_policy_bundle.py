@@ -30,6 +30,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from mantis_control.block_page import resolve_block_template
 from mantis_control.compiler.bloom import BloomFilterBuilder, BloomParams, recommended_params
 from mantis_control.compiler.signing import sign_bundle
 from mantis_control.config import FEED_STORAGE_DIR
@@ -49,6 +50,12 @@ _ACTION_MAP = {
     "ACTION_BLOCK": bundle_pb2.ACTION_BLOCK,
     "ACTION_LOG_ONLY": bundle_pb2.ACTION_LOG_ONLY,
     "ACTION_ALLOW": bundle_pb2.ACTION_ALLOW,
+}
+_BLOCK_MODE_MAP = {
+    "BLOCK_MODE_UNSPECIFIED": bundle_pb2.BLOCK_MODE_UNSPECIFIED,
+    "BLOCK_MODE_NXDOMAIN": bundle_pb2.BLOCK_MODE_NXDOMAIN,
+    "BLOCK_MODE_ZERO_IP": bundle_pb2.BLOCK_MODE_ZERO_IP,
+    "BLOCK_MODE_REDIRECT": bundle_pb2.BLOCK_MODE_REDIRECT,
 }
 
 
@@ -112,6 +119,21 @@ def build_bundle(policy: Policy, version: int, db: Session) -> bundle_pb2.Bundle
             bundle.allow_overrides.append(override.domain)
         else:
             bundle.deny_overrides.append(override.domain)
+
+    # Only the hot-path fields (mode + redirect IPs + ttl) go in the signed
+    # bundle; branding is served separately to the block-page listener. When no
+    # template is configured the field is left absent and the filter defaults to
+    # NXDOMAIN (historical behavior).
+    template = resolve_block_template(db, policy.group.tenant_id, policy.group_id)
+    if template is not None and template.block_mode != "BLOCK_MODE_NXDOMAIN":
+        bundle.block_response.CopyFrom(
+            bundle_pb2.BlockResponse(
+                mode=_BLOCK_MODE_MAP.get(template.block_mode, bundle_pb2.BLOCK_MODE_NXDOMAIN),
+                redirect_ipv4=template.redirect_ipv4 or "",
+                redirect_ipv6=template.redirect_ipv6 or "",
+                ttl_seconds=template.ttl_seconds or 0,
+            )
+        )
 
     return bundle
 

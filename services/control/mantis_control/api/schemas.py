@@ -15,10 +15,12 @@
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class TenantCreate(BaseModel):
@@ -113,3 +115,72 @@ class PolicyUpsert(BaseModel):
     on_load_failure: Literal["FAIL_OPEN", "FAIL_CLOSED"] = "FAIL_OPEN"
     category_toggles: list[CategoryToggleIn] = []
     overrides: list[OverrideIn] = []
+
+
+_HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
+BlockMode = Literal["BLOCK_MODE_NXDOMAIN", "BLOCK_MODE_ZERO_IP", "BLOCK_MODE_REDIRECT"]
+
+
+class BlockPageTemplateUpsert(BaseModel):
+    """Create/update payload for a group's block page. `group_id` is set by the
+    path; a tenant-default template is written with the group's tenant and a
+    null group at the router layer."""
+
+    block_mode: BlockMode = "BLOCK_MODE_NXDOMAIN"
+    redirect_ipv4: str | None = None
+    redirect_ipv6: str | None = None
+    ttl_seconds: int = Field(default=30, ge=0, le=86_400)
+    title: str | None = Field(default=None, max_length=255)
+    message: str | None = Field(default=None, max_length=2000)
+    logo_url: str | None = Field(default=None, max_length=1024)
+    brand_color: str | None = None
+    contact_url: str | None = Field(default=None, max_length=1024)
+    show_domain: bool = True
+    show_category: bool = True
+
+    @field_validator("redirect_ipv4")
+    @classmethod
+    def _valid_v4(cls, v: str | None) -> str | None:
+        if v:
+            ipaddress.IPv4Address(v)  # raises ValueError -> 422
+        return v or None
+
+    @field_validator("redirect_ipv6")
+    @classmethod
+    def _valid_v6(cls, v: str | None) -> str | None:
+        if v:
+            ipaddress.IPv6Address(v)
+        return v or None
+
+    @field_validator("brand_color")
+    @classmethod
+    def _valid_color(cls, v: str | None) -> str | None:
+        if v and not _HEX_COLOR_RE.match(v):
+            raise ValueError("brand_color must be a #rgb or #rrggbb hex color")
+        return v or None
+
+    def require_redirect_ip(self) -> None:
+        """REDIRECT mode is meaningless without at least one redirect IP."""
+        if self.block_mode == "BLOCK_MODE_REDIRECT" and not (
+            self.redirect_ipv4 or self.redirect_ipv6
+        ):
+            raise ValueError("BLOCK_MODE_REDIRECT requires redirect_ipv4 or redirect_ipv6")
+
+
+class BlockPageTemplateOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    tenant_id: str
+    group_id: str | None
+    block_mode: str
+    redirect_ipv4: str | None
+    redirect_ipv6: str | None
+    ttl_seconds: int
+    title: str | None
+    message: str | None
+    logo_url: str | None
+    brand_color: str | None
+    contact_url: str | None
+    show_domain: bool
+    show_category: bool

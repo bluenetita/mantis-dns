@@ -24,21 +24,25 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0c\x62undle.proto\x12\x10mantis.bundle.v1\"\x9d\x02\n\x06\x42undle\x12\x11\n\ttenant_id\x18\x01 \x01(\t\x12\x10\n\x08group_id\x18\x02 \x01(\t\x12\x0f\n\x07version\x18\x03 \x01(\x04\x12\x15\n\rbuilt_at_unix\x18\x04 \x01(\x03\x12\x31\n\ncategories\x18\x05 \x03(\x0b\x32\x1d.mantis.bundle.v1.CategorySet\x12\x17\n\x0f\x61llow_overrides\x18\x06 \x03(\t\x12\x16\n\x0e\x64\x65ny_overrides\x18\x07 \x03(\t\x12\x38\n\x0fon_load_failure\x18\x08 \x01(\x0e\x32\x1f.mantis.bundle.v1.FailurePolicy\x12\x11\n\tsignature\x18\x0f \x01(\x0c\x12\x15\n\rsigner_key_id\x18\x10 \x01(\t\"\xcd\x01\n\x0b\x43\x61tegorySet\x12\x13\n\x0b\x63\x61tegory_id\x18\x01 \x01(\t\x12\x16\n\x0esource_feed_id\x18\x02 \x01(\t\x12\x14\n\x0c\x66\x65\x65\x64_version\x18\x03 \x01(\t\x12\x0f\n\x07license\x18\x04 \x01(\t\x12,\n\x05\x62loom\x18\x05 \x01(\x0b\x32\x1d.mantis.bundle.v1.BloomParams\x12\x12\n\nbloom_bits\x18\x06 \x01(\x0c\x12(\n\x06\x61\x63tion\x18\x07 \x01(\x0e\x32\x18.mantis.bundle.v1.Action\"A\n\x0b\x42loomParams\x12\x12\n\nnum_hashes\x18\x01 \x01(\r\x12\x10\n\x08num_bits\x18\x02 \x01(\x04\x12\x0c\n\x04seed\x18\x03 \x01(\x04*Y\n\x06\x41\x63tion\x12\x16\n\x12\x41\x43TION_UNSPECIFIED\x10\x00\x12\x10\n\x0c\x41\x43TION_BLOCK\x10\x01\x12\x13\n\x0f\x41\x43TION_LOG_ONLY\x10\x02\x12\x10\n\x0c\x41\x43TION_ALLOW\x10\x03*O\n\rFailurePolicy\x12\x1e\n\x1a\x46\x41ILURE_POLICY_UNSPECIFIED\x10\x00\x12\r\n\tFAIL_OPEN\x10\x01\x12\x0f\n\x0b\x46\x41IL_CLOSED\x10\x02\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0c\x62undle.proto\x12\x10mantis.bundle.v1\"\xd6\x02\n\x06\x42undle\x12\x11\n\ttenant_id\x18\x01 \x01(\t\x12\x10\n\x08group_id\x18\x02 \x01(\t\x12\x0f\n\x07version\x18\x03 \x01(\x04\x12\x15\n\rbuilt_at_unix\x18\x04 \x01(\x03\x12\x31\n\ncategories\x18\x05 \x03(\x0b\x32\x1d.mantis.bundle.v1.CategorySet\x12\x17\n\x0f\x61llow_overrides\x18\x06 \x03(\t\x12\x16\n\x0e\x64\x65ny_overrides\x18\x07 \x03(\t\x12\x38\n\x0fon_load_failure\x18\x08 \x01(\x0e\x32\x1f.mantis.bundle.v1.FailurePolicy\x12\x37\n\x0e\x62lock_response\x18\t \x01(\x0b\x32\x1f.mantis.bundle.v1.BlockResponse\x12\x11\n\tsignature\x18\x0f \x01(\x0c\x12\x15\n\rsigner_key_id\x18\x10 \x01(\t\"}\n\rBlockResponse\x12)\n\x04mode\x18\x01 \x01(\x0e\x32\x1b.mantis.bundle.v1.BlockMode\x12\x15\n\rredirect_ipv4\x18\x02 \x01(\t\x12\x15\n\rredirect_ipv6\x18\x03 \x01(\t\x12\x13\n\x0bttl_seconds\x18\x04 \x01(\r\"\xcd\x01\n\x0b\x43\x61tegorySet\x12\x13\n\x0b\x63\x61tegory_id\x18\x01 \x01(\t\x12\x16\n\x0esource_feed_id\x18\x02 \x01(\t\x12\x14\n\x0c\x66\x65\x65\x64_version\x18\x03 \x01(\t\x12\x0f\n\x07license\x18\x04 \x01(\t\x12,\n\x05\x62loom\x18\x05 \x01(\x0b\x32\x1d.mantis.bundle.v1.BloomParams\x12\x12\n\nbloom_bits\x18\x06 \x01(\x0c\x12(\n\x06\x61\x63tion\x18\x07 \x01(\x0e\x32\x18.mantis.bundle.v1.Action\"A\n\x0b\x42loomParams\x12\x12\n\nnum_hashes\x18\x01 \x01(\r\x12\x10\n\x08num_bits\x18\x02 \x01(\x04\x12\x0c\n\x04seed\x18\x03 \x01(\x04*q\n\tBlockMode\x12\x1a\n\x16\x42LOCK_MODE_UNSPECIFIED\x10\x00\x12\x17\n\x13\x42LOCK_MODE_NXDOMAIN\x10\x01\x12\x16\n\x12\x42LOCK_MODE_ZERO_IP\x10\x02\x12\x17\n\x13\x42LOCK_MODE_REDIRECT\x10\x03*Y\n\x06\x41\x63tion\x12\x16\n\x12\x41\x43TION_UNSPECIFIED\x10\x00\x12\x10\n\x0c\x41\x43TION_BLOCK\x10\x01\x12\x13\n\x0f\x41\x43TION_LOG_ONLY\x10\x02\x12\x10\n\x0c\x41\x43TION_ALLOW\x10\x03*O\n\rFailurePolicy\x12\x1e\n\x1a\x46\x41ILURE_POLICY_UNSPECIFIED\x10\x00\x12\r\n\tFAIL_OPEN\x10\x01\x12\x0f\n\x0b\x46\x41IL_CLOSED\x10\x02\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'bundle_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_ACTION']._serialized_start=597
-  _globals['_ACTION']._serialized_end=686
-  _globals['_FAILUREPOLICY']._serialized_start=688
-  _globals['_FAILUREPOLICY']._serialized_end=767
+  _globals['_BLOCKMODE']._serialized_start=781
+  _globals['_BLOCKMODE']._serialized_end=894
+  _globals['_ACTION']._serialized_start=896
+  _globals['_ACTION']._serialized_end=985
+  _globals['_FAILUREPOLICY']._serialized_start=987
+  _globals['_FAILUREPOLICY']._serialized_end=1066
   _globals['_BUNDLE']._serialized_start=35
-  _globals['_BUNDLE']._serialized_end=320
-  _globals['_CATEGORYSET']._serialized_start=323
-  _globals['_CATEGORYSET']._serialized_end=528
-  _globals['_BLOOMPARAMS']._serialized_start=530
-  _globals['_BLOOMPARAMS']._serialized_end=595
+  _globals['_BUNDLE']._serialized_end=377
+  _globals['_BLOCKRESPONSE']._serialized_start=379
+  _globals['_BLOCKRESPONSE']._serialized_end=504
+  _globals['_CATEGORYSET']._serialized_start=507
+  _globals['_CATEGORYSET']._serialized_end=712
+  _globals['_BLOOMPARAMS']._serialized_start=714
+  _globals['_BLOOMPARAMS']._serialized_end=779
 # @@protoc_insertion_point(module_scope)

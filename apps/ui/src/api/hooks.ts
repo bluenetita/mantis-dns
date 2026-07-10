@@ -23,6 +23,7 @@ type TenantCreate = components["schemas"]["TenantCreate"];
 type GroupCreate = components["schemas"]["GroupCreate"];
 type GroupSubnetUpdate = components["schemas"]["GroupSubnetUpdate"];
 type PolicyUpsert = components["schemas"]["PolicyUpsert"];
+type BlockPageTemplateUpsert = components["schemas"]["BlockPageTemplateUpsert"];
 type FeedCreate = components["schemas"]["FeedCreate"];
 type FeedUpdate = components["schemas"]["FeedUpdate"];
 type SiemWebhookCreate = components["schemas"]["SiemWebhookCreate"];
@@ -174,6 +175,34 @@ export function useCompileBundle() {
   return useMutation({
     mutationFn: async (groupId: string) =>
       unwrap(await apiClient.POST("/api/v1/groups/{group_id}/bundle", { params: { path: { group_id: groupId } } })),
+  });
+}
+
+export function useBlockPageTemplate(groupId: string | undefined) {
+  return useQuery({
+    queryKey: ["block-page-template", groupId],
+    queryFn: async () => {
+      const res = await apiClient.GET("/api/v1/groups/{group_id}/block-page-template", {
+        params: { path: { group_id: groupId! } },
+      });
+      if (res.response.status === 404) return null;
+      return unwrap(res);
+    },
+    enabled: !!groupId,
+  });
+}
+
+export function useUpsertBlockPageTemplate(groupId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: BlockPageTemplateUpsert) =>
+      unwrap(
+        await apiClient.PUT("/api/v1/groups/{group_id}/block-page-template", {
+          params: { path: { group_id: groupId! } },
+          body,
+        })
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["block-page-template", groupId] }),
   });
 }
 

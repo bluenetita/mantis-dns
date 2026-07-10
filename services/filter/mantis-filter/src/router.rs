@@ -98,6 +98,13 @@ impl TenantRouter {
         self.routes.load().len()
     }
 
+    /// Resolves the current policy bundle for a client IP the same way the DNS
+    /// path does (longest-prefix source-IP match). Used by the co-hosted
+    /// block-page listener so a redirected client sees its own tenant's policy.
+    pub fn bundle_for(&self, ip: IpAddr) -> Option<Arc<mantis_bundle::Bundle>> {
+        self.match_route(ip).and_then(|(store, _)| store.current())
+    }
+
     pub fn purge_cache(&self) {
         self.cache.purge_expired();
     }

@@ -137,6 +137,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/local-zones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Local Zone Records
+         * @description Flattened local-zone records for the group's tenant (design.md
+         *     §DNS-Zones "stub zone" route type). Polled machine-to-machine by filter
+         *     nodes alongside /routing-table and the policy bundle — same service-token
+         *     auth, no user JWT involved.
+         */
+        get: operations["get_local_zone_records_api_v1_local_zones_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/groups/{group_id}/policy": {
         parameters: {
             query?: never;
@@ -219,6 +242,77 @@ export interface paths {
          *     compiled bundle — reads directly from DB + feed domain files.
          */
         post: operations["test_domain_api_v1_groups__group_id__policy_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/groups/{group_id}/block-page-template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Group Block Template
+         * @description The group's own block-page override (not the resolved/effective one).
+         *     404 if the group has no override configured.
+         */
+        get: operations["get_group_block_template_api_v1_groups__group_id__block_page_template_get"];
+        /**
+         * Upsert Group Block Template
+         * @description Upserts this group's block-page override. Takes effect on the next bundle
+         *     compile (POST /groups/{group_id}/bundle) for the hot-path fields; branding
+         *     is picked up by the block-page listener within its cache TTL.
+         */
+        put: operations["upsert_group_block_template_api_v1_groups__group_id__block_page_template_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tenants/{tenant_id}/block-page-template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Upsert Tenant Block Template
+         * @description Upserts the tenant-default block page, used for any group without its own
+         *     override.
+         */
+        put: operations["upsert_tenant_block_template_api_v1_tenants__tenant_id__block_page_template_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/groups/{group_id}/block-template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Effective Block Template
+         * @description Resolved (group override → tenant default) block-page template for the
+         *     filter node's co-hosted block-page listener. Machine-to-machine, guarded by
+         *     MANTIS_SERVICE_TOKEN like /routing-table and the bundle GET. 404 when
+         *     nothing is configured — the listener then renders built-in defaults.
+         */
+        get: operations["get_effective_block_template_api_v1_groups__group_id__block_template_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1401,6 +1495,80 @@ export interface components {
             /** Tenant Id */
             tenant_id?: string | null;
         };
+        /** BlockPageTemplateOut */
+        BlockPageTemplateOut: {
+            /** Id */
+            id: string;
+            /** Tenant Id */
+            tenant_id: string;
+            /** Group Id */
+            group_id: string | null;
+            /** Block Mode */
+            block_mode: string;
+            /** Redirect Ipv4 */
+            redirect_ipv4: string | null;
+            /** Redirect Ipv6 */
+            redirect_ipv6: string | null;
+            /** Ttl Seconds */
+            ttl_seconds: number;
+            /** Title */
+            title: string | null;
+            /** Message */
+            message: string | null;
+            /** Logo Url */
+            logo_url: string | null;
+            /** Brand Color */
+            brand_color: string | null;
+            /** Contact Url */
+            contact_url: string | null;
+            /** Show Domain */
+            show_domain: boolean;
+            /** Show Category */
+            show_category: boolean;
+        };
+        /**
+         * BlockPageTemplateUpsert
+         * @description Create/update payload for a group's block page. `group_id` is set by the
+         *     path; a tenant-default template is written with the group's tenant and a
+         *     null group at the router layer.
+         */
+        BlockPageTemplateUpsert: {
+            /**
+             * Block Mode
+             * @default BLOCK_MODE_NXDOMAIN
+             * @enum {string}
+             */
+            block_mode: "BLOCK_MODE_NXDOMAIN" | "BLOCK_MODE_ZERO_IP" | "BLOCK_MODE_REDIRECT";
+            /** Redirect Ipv4 */
+            redirect_ipv4?: string | null;
+            /** Redirect Ipv6 */
+            redirect_ipv6?: string | null;
+            /**
+             * Ttl Seconds
+             * @default 30
+             */
+            ttl_seconds: number;
+            /** Title */
+            title?: string | null;
+            /** Message */
+            message?: string | null;
+            /** Logo Url */
+            logo_url?: string | null;
+            /** Brand Color */
+            brand_color?: string | null;
+            /** Contact Url */
+            contact_url?: string | null;
+            /**
+             * Show Domain
+             * @default true
+             */
+            show_domain: boolean;
+            /**
+             * Show Category
+             * @default true
+             */
+            show_category: boolean;
+        };
         /** CategoryBreakdown */
         CategoryBreakdown: {
             /** Category */
@@ -1775,6 +1943,25 @@ export interface components {
             expire: string | null;
             /** State */
             state: number;
+        };
+        /**
+         * LocalZoneRecord
+         * @description Flattened resource record for the filter node's stub-zone store
+         *     (design.md §7.3, §DNS-Zones). `name` is the fully-qualified owner name.
+         */
+        LocalZoneRecord: {
+            /** Name */
+            name: string;
+            /** Zone */
+            zone: string;
+            /** Record Type */
+            record_type: string;
+            /** Ttl */
+            ttl: number;
+            /** Data */
+            data: string;
+            /** Priority */
+            priority?: number | null;
         };
         /** LoginRequest */
         LoginRequest: {
@@ -3568,6 +3755,39 @@ export interface operations {
             };
         };
     };
+    get_local_zone_records_api_v1_local_zones_get: {
+        parameters: {
+            query: {
+                group_id: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalZoneRecord"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_policy_api_v1_groups__group_id__policy_get: {
         parameters: {
             query?: never;
@@ -3753,6 +3973,140 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PolicyTestResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_group_block_template_api_v1_groups__group_id__block_page_template_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockPageTemplateOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upsert_group_block_template_api_v1_groups__group_id__block_page_template_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockPageTemplateUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockPageTemplateOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upsert_tenant_block_template_api_v1_tenants__tenant_id__block_page_template_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockPageTemplateUpsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockPageTemplateOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_effective_block_template_api_v1_groups__group_id__block_template_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockPageTemplateOut"];
                 };
             };
             /** @description Validation Error */

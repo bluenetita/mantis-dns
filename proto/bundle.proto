@@ -33,8 +33,29 @@ message Bundle {
 
   FailurePolicy on_load_failure = 8;
 
+  // How the filter node answers a blocked query. Absent/unspecified => NXDOMAIN
+  // (the historical behavior), so old bundles keep working unchanged.
+  BlockResponse block_response = 9;
+
   bytes signature = 15;       // ed25519 signature over the serialized message with this field zeroed
   string signer_key_id = 16;
+}
+
+// Controls the DNS answer returned for a blocked query. REDIRECT points web
+// navigations at a block-page listener so the user sees a branded explanation
+// instead of a bare resolver error.
+message BlockResponse {
+  BlockMode mode = 1;
+  string redirect_ipv4 = 2;   // A record target when mode = BLOCK_MODE_REDIRECT
+  string redirect_ipv6 = 3;   // AAAA record target when mode = BLOCK_MODE_REDIRECT (optional)
+  uint32 ttl_seconds = 4;     // TTL on the synthesized A/AAAA; keep low so an unblock clears fast
+}
+
+enum BlockMode {
+  BLOCK_MODE_UNSPECIFIED = 0; // treated as NXDOMAIN
+  BLOCK_MODE_NXDOMAIN = 1;    // return NXDOMAIN (default, historical behavior)
+  BLOCK_MODE_ZERO_IP = 2;     // return 0.0.0.0 / :: with NOERROR
+  BLOCK_MODE_REDIRECT = 3;    // return redirect_ipv4 / redirect_ipv6 with NOERROR
 }
 
 message CategorySet {

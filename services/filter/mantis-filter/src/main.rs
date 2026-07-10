@@ -21,9 +21,10 @@ use std::time::Duration;
 
 use mantis_filter::{
     bundle_refresh_loop, fetch_and_publish_zone, fetch_public_key, fetch_upstream_bundle,
-    refresh_bundle, run_health_monitor, run_router_tcp_server, run_router_udp_server,
-    run_tcp_server, run_udp_server, upstream_bundle_refresh_loop, zone_refresh_loop, AppState,
-    HealthStore, TelemetryEmitter, TenantRouter, UpstreamBundleForwarder, UpstreamBundleStore,
+    refresh_bundle, run_block_page_server, run_health_monitor, run_router_tcp_server,
+    run_router_udp_server, run_tcp_server, run_udp_server, upstream_bundle_refresh_loop,
+    zone_refresh_loop, AppState, BlockPageBundles, HealthStore, TelemetryEmitter, TenantRouter,
+    UpstreamBundleForwarder, UpstreamBundleStore,
 };
 use tokio::net::{TcpListener, UdpSocket};
 use tracing::{error, info, warn};
@@ -40,6 +41,10 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(10);
+    // Opt-in co-hosted block-page HTTP listener (e.g. "0.0.0.0:80"). Only
+    // started when set, so deployments that don't use REDIRECT block mode —
+    // or can't bind a privileged port — are unaffected.
+    let block_page_addr = env::var("BLOCKPAGE_BIND_ADDR").ok();
 
     info!("mantis-filter starting: control_url={control_url} group_id={group_id} bind={bind_addr}");
 
@@ -103,6 +108,10 @@ async fn main() -> anyhow::Result<()> {
         if let Err(e) = fetch_and_publish_zone(&state.zones, &control_url, &group_id).await {
             warn!("initial local zone fetch failed (will retry on poll loop): {e}");
         }
+        if let Some(addr) = &block_page_addr {
+            spawn_block_page(addr, BlockPageBundles::Single(state.clone()), control_url.clone())
+                .await;
+        }
         tokio::spawn(bundle_refresh_loop(
             state.clone(),
             control_url.clone(),
@@ -141,6 +150,10 @@ async fn main() -> anyhow::Result<()> {
         if let Err(e) = mantis_filter::refresh_routes(&router, &control_url).await {
             warn!("initial routing table fetch failed (will retry on poll loop): {e}");
         }
+        if let Some(addr) = &block_page_addr {
+            spawn_block_page(addr, BlockPageBundles::Multi(router.clone()), control_url.clone())
+                .await;
+        }
         tokio::spawn(mantis_filter::routing_refresh_loop(
             router.clone(),
             control_url,
@@ -163,4 +176,20 @@ async fn main() -> anyhow::Result<()> {
         run_router_udp_server(socket, router).await?;
     }
     Ok(())
+}
+
+/// Binds the block-page HTTP listener and spawns it as a background task. A
+/// bind failure (e.g. port 80 without privileges) is logged but non-fatal:
+/// DNS serving continues, only the block page is unavailable.
+async fn spawn_block_page(addr: &str, bundles: BlockPageBundles, control_url: String) {
+    match TcpListener::bind(addr).await {
+        Ok(listener) => {
+            tokio::spawn(async move {
+                if let Err(e) = run_block_page_server(listener, bundles, control_url).await {
+                    error!("block-page HTTP server exited: {e}");
+                }
+            });
+        }
+        Err(e) => error!("failed to bind block-page listener on {addr}: {e}"),
+    }
 }

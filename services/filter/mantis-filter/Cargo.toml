@@ -22,6 +22,7 @@ hickory-proto = { workspace = true }
 hickory-resolver = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 arc-swap = { workspace = true }
+axum = { workspace = true }
 ed25519-dalek = { workspace = true }
 prost = { workspace = true }
 async-trait = "0.1"

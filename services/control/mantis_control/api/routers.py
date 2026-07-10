@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from mantis_control.api import schemas
 from mantis_control.audit import write_audit_log
+from mantis_control.block_page import resolve_block_template
 from mantis_control.auth import check_tenant_access, get_current_user, get_group_or_403, require_role, require_service_token, user_tenant_filter
 from mantis_control.categories import CATEGORY_REGISTRY
 from mantis_control.compiler.build_policy_bundle import compile_and_store
@@ -398,3 +399,113 @@ def test_domain(
                 )
 
     return PolicyTestResult(domain=domain, decision="allow", matched="default")
+
+
+# ── Block page templates ───────────────────────────────────────────────────
+
+def _upsert_block_template(
+    db: Session,
+    tenant_id: str,
+    group_id: str | None,
+    payload: schemas.BlockPageTemplateUpsert,
+    user: models.User,
+) -> models.BlockPageTemplate:
+    try:
+        payload.require_redirect_ip()
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+    template = db.execute(
+        select(models.BlockPageTemplate).where(
+            models.BlockPageTemplate.tenant_id == tenant_id,
+            models.BlockPageTemplate.group_id.is_(group_id)
+            if group_id is None
+            else models.BlockPageTemplate.group_id == group_id,
+        )
+    ).scalar_one_or_none()
+    if template is None:
+        template = models.BlockPageTemplate(tenant_id=tenant_id, group_id=group_id)
+        db.add(template)
+
+    for field, value in payload.model_dump().items():
+        setattr(template, field, value)
+
+    scope = "group" if group_id is not None else "tenant-default"
+    write_audit_log(
+        db,
+        "block_page.update",
+        "block_page_template",
+        group_id or tenant_id,
+        detail=f"scope={scope} mode={payload.block_mode}",
+        actor=user.email,
+        tenant_id=tenant_id,
+    )
+    db.commit()
+    db.refresh(template)
+    return template
+
+
+@router.get("/groups/{group_id}/block-page-template", response_model=schemas.BlockPageTemplateOut)
+def get_group_block_template(
+    group_id: str, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)
+) -> models.BlockPageTemplate:
+    """The group's own block-page override (not the resolved/effective one).
+    404 if the group has no override configured."""
+    group = get_group_or_403(db, group_id, user)
+    template = db.execute(
+        select(models.BlockPageTemplate).where(
+            models.BlockPageTemplate.tenant_id == group.tenant_id,
+            models.BlockPageTemplate.group_id == group_id,
+        )
+    ).scalar_one_or_none()
+    if template is None:
+        raise HTTPException(404, "no block-page template configured for this group")
+    return template
+
+
+@router.put("/groups/{group_id}/block-page-template", response_model=schemas.BlockPageTemplateOut)
+def upsert_group_block_template(
+    group_id: str,
+    payload: schemas.BlockPageTemplateUpsert,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_role("admin", "operator")),
+) -> models.BlockPageTemplate:
+    """Upserts this group's block-page override. Takes effect on the next bundle
+    compile (POST /groups/{group_id}/bundle) for the hot-path fields; branding
+    is picked up by the block-page listener within its cache TTL."""
+    group = get_group_or_403(db, group_id, user)
+    return _upsert_block_template(db, group.tenant_id, group_id, payload, user)
+
+
+@router.put(
+    "/tenants/{tenant_id}/block-page-template", response_model=schemas.BlockPageTemplateOut
+)
+def upsert_tenant_block_template(
+    tenant_id: str,
+    payload: schemas.BlockPageTemplateUpsert,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_role("admin", "operator")),
+) -> models.BlockPageTemplate:
+    """Upserts the tenant-default block page, used for any group without its own
+    override."""
+    check_tenant_access(user, tenant_id)
+    if db.get(models.Tenant, tenant_id) is None:
+        raise HTTPException(404, "tenant not found")
+    return _upsert_block_template(db, tenant_id, None, payload, user)
+
+
+@router.get("/groups/{group_id}/block-template", response_model=schemas.BlockPageTemplateOut)
+def get_effective_block_template(
+    group_id: str, db: Session = Depends(get_db), _: None = Depends(require_service_token)
+) -> models.BlockPageTemplate:
+    """Resolved (group override → tenant default) block-page template for the
+    filter node's co-hosted block-page listener. Machine-to-machine, guarded by
+    MANTIS_SERVICE_TOKEN like /routing-table and the bundle GET. 404 when
+    nothing is configured — the listener then renders built-in defaults."""
+    group = db.get(models.Group, group_id)
+    if group is None:
+        raise HTTPException(404, "group not found")
+    template = resolve_block_template(db, group.tenant_id, group_id)
+    if template is None:
+        raise HTTPException(404, "no block-page template configured")
+    return template
