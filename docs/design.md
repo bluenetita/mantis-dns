@@ -11,6 +11,17 @@
 >
 > Category-based content filtering with auto-updating feeds (porn, gambling, firearms, etc.) is a first-class feature in both profiles (§18).
 
+> **⚠️ Build status.** §4–§9, §11–§12, §14, and roadmap phases 3/5/6 (§16) describe
+> the **target cloud/K8s design** — they are not implemented. Nothing in this repo
+> today runs Kubernetes, Kafka/NATS, Redis Cluster, ClickHouse, etcd/Consul, Vault,
+> Patroni, or SPIFFE/SPIRE. Items pulled from these sections are marked `🚧 not
+> built` inline below. What's actually running is the **Proxmox VE profile (§17)**:
+> a single-process Rust filter node, one PostgreSQL instance, filesystem-based
+> bundle distribution, in-memory rate limiting — see [`ARCHITECTURE.md`](../ARCHITECTURE.md)
+> for the as-built summary. §17.2 already flags object store/Kafka/ClickHouse as
+> optional-and-unused at this scale; §18–§21 carry their own "current state" notes
+> where relevant.
+
 ---
 
 ## 1. Summary
@@ -79,8 +90,8 @@ This separation is the single most important departure from Pi-hole, which colla
                          ┌───────────────▼──────────────────────────────┐
                          │               CONTROL PLANE                    │
                          │  Policy compiler · Blocklist ingester          │
-                         │  Config store (etcd/Consul) · Distribution bus │
-                         │  PostgreSQL (source of truth) + object store   │
+                         │  Config store (etcd/Consul) 🚧 · Dist. bus 🚧   │
+                         │  PostgreSQL (source of truth) + object store 🚧│
                          └───────────────┬──────────────────────────────┘
                                          │ push: signed policy bundles
             ┌────────────────────────────┼────────────────────────────┐
@@ -93,16 +104,16 @@ This separation is the single most important departure from Pi-hole, which colla
    │  Recursor/fwd   │         │  Recursor/fwd    │         │  Recursor/fwd    │
    └────────┬────────┘         └────────┬─────────┘         └────────┬────────┘
             │                            │                            │
-            └────────────► shared cache (Redis cluster) ◄────────────┘
+            └────────────► shared cache (Redis cluster) 🚧 ◄────────────┘
             │
             │ query events (async, fire-and-forget)
             ▼
    ┌─────────────────────────────────────────────────────────────────┐
-   │  TELEMETRY PIPELINE: Kafka/NATS → stream processor → ClickHouse   │
+   │  TELEMETRY PIPELINE 🚧: Kafka/NATS → stream processor → ClickHouse │
    │  OpenTelemetry traces · Loki/ELK logs                             │
    └─────────────────────────────────────────────────────────────────┘
 
-   OpenVPN AS cluster pushes DHCP-option DNS = Anycast VIP of filter fleet
+   OpenVPN AS cluster 🚧 pushes DHCP-option DNS = Anycast VIP 🚧 of filter fleet
 ```
 
 ### 4.1 Request path (cache miss)
@@ -124,35 +135,35 @@ Target: cache hit served entirely in-node, no control-plane dependency on the ho
 ### 5.1 Filter node (data plane)
 
 - **Stateless.** Holds only: cache + the latest signed policy bundle (in memory + local disk cache). Can be killed/replaced anytime.
-- **DNS frontend.** CoreDNS or a custom Go/Rust server. CoreDNS chosen for plugin model; custom plugin chain: `tenant-resolve → policy → cache → forward`.
+- **DNS frontend.** CoreDNS or a custom Go/Rust server. CoreDNS chosen for plugin model; custom plugin chain: `tenant-resolve → policy → cache → forward`. *As built: a custom Rust server (`services/filter`), not CoreDNS — see ARCHITECTURE.md.*
 - **Policy engine.** Evaluates against compiled bundle. Blocklists stored as **bloom filter + sorted hash set** for O(1) negative checks and bounded memory (millions of domains in tens of MB).
-- **Resolver.** Forwards allowed misses to internal recursive resolver pool (Unbound/Knot) over DoT, or directly to vetted upstreams.
-- **Local cache.** In-process LRU with TTL honoring; optional read-through to shared Redis for cross-node warm cache.
+- **Resolver.** Forwards allowed misses to internal recursive resolver pool (Unbound/Knot) 🚧 over DoT, or directly to vetted upstreams.
+- **Local cache.** In-process LRU with TTL honoring; optional read-through to shared Redis 🚧 for cross-node warm cache.
 
 Scaling: add nodes behind anycast/LB. No coordination needed — pure function of (query, policy bundle).
 
 ### 5.2 Control plane
 
-- **Source of truth:** PostgreSQL (HA: Patroni/RDS Multi-AZ). Stores tenants, policies, group definitions, blocklist subscriptions, allow/deny overrides.
+- **Source of truth:** PostgreSQL (HA: Patroni/RDS Multi-AZ 🚧 — as built: single PostgreSQL instance, no HA). Stores tenants, policies, group definitions, blocklist subscriptions, allow/deny overrides.
 - **Blocklist ingester:** scheduled jobs fetch external lists (StevenBlack, URLhaus, threat feeds), normalize, dedupe, diff. Produces canonical domain sets.
 - **Policy compiler:** takes DB policy + ingested lists → emits a **signed, versioned policy bundle** per tenant/group (bloom filter blob + override tables + metadata). Bundles are immutable and content-addressed.
-- **Distribution:** bundles published to object store (S3-compatible); pointer/version published to **etcd/Consul**. Filter nodes watch the config store and pull new bundles. Push-on-change + periodic reconcile.
+- **Distribution:** bundles published to object store (S3-compatible) 🚧; pointer/version published to **etcd/Consul** 🚧. Filter nodes watch the config store and pull new bundles. Push-on-change + periodic reconcile. *As built: filesystem/HTTP pull, see §17.2.*
 - **Signing:** bundles signed (e.g. cosign/ed25519). Nodes verify before applying. Prevents poisoned policy.
 
 ### 5.3 Management plane
 
-- **API:** gRPC + REST gateway, stateless, behind LB. All writes go to PostgreSQL; triggers recompile.
+- **API:** gRPC 🚧 + REST gateway, stateless, behind LB. All writes go to PostgreSQL; triggers recompile. *As built: REST (FastAPI) only, no gRPC.*
 - **UI:** SPA (React) talking to API. No PHP, no per-node state.
-- **AuthN:** OIDC/SAML SSO (Okta/Entra/Keycloak). Service-to-service mTLS.
+- **AuthN:** OIDC/SAML SSO (Okta/Entra/Keycloak) 🚧. Service-to-service mTLS 🚧.
 - **AuthZ:** RBAC + tenant scoping. Roles: super-admin, tenant-admin, policy-author, read-only/auditor.
-- **Audit:** every mutation appended to immutable audit log (separate store, WORM/retention).
+- **Audit:** every mutation appended to immutable audit log (separate store, WORM/retention 🚧).
 
-### 5.4 Telemetry pipeline
+### 5.4 Telemetry pipeline 🚧 (target design — see §20 for what's actually shipped: DB-stored query events + pull/webhook SIEM export, no message bus)
 
 - Query events are **enriched at the filter node** before leaving the data plane: client IP, query type, response code, matched category, matched feed ID, and resolution latency are attached at source — not inferred later from partial data.
-- Enriched events → message bus (Kafka or NATS JetStream), partitioned by tenant.
-- Stream processor → **ClickHouse** for high-cardinality, fast analytical query logs with TTL-based retention.
-- **OpenTelemetry** traces on the resolve path; **Loki/ELK** for operational logs.
+- Enriched events → message bus (Kafka or NATS JetStream) 🚧, partitioned by tenant.
+- Stream processor → **ClickHouse** 🚧 for high-cardinality, fast analytical query logs with TTL-based retention.
+- **OpenTelemetry** 🚧 traces on the resolve path; **Loki/ELK** 🚧 for operational logs.
 - Dashboards (in-app, off the telemetry/metrics APIs): QPS, block ratio, cache hit ratio, p50/p99 latency, upstream health, per-tenant volume.
 - **SIEM export layer** (§20): query event stream exposed via pull API (cursor-based REST) and push webhook, in JSON or CEF format, so any SIEM can consume without a custom connector.
 
@@ -160,16 +171,16 @@ Scaling: add nodes behind anycast/LB. No coordination needed — pure function o
 
 ## 6. Data Stores
 
-| Store | Tech | Role | HA strategy |
-|-------|------|------|-------------|
-| Source of truth | PostgreSQL | Tenants, policy, config | Patroni / Multi-AZ, sync replica |
-| Config/version | etcd or Consul | Bundle pointers, node registry | Raft quorum, ≥3 nodes |
-| Bundle storage | S3-compatible object store | Immutable signed bundles | Multi-AZ, versioned |
-| Shared cache | Redis Cluster | Cross-node DNS cache | Sharded + replicas |
-| Query logs | ClickHouse | Analytics, search, retention | Sharded + replicated |
-| Audit | Append-only (Postgres/ClickHouse + object archive) | Compliance | WORM archive |
-| SIEM config | PostgreSQL | Webhook endpoints, delivery state, cursor | Same as source of truth |
-| Secrets | Vault / cloud KMS | Keys, upstream creds | HA Vault |
+| Store | Tech | Role | HA strategy | Status |
+|-------|------|------|-------------|--------|
+| Source of truth | PostgreSQL | Tenants, policy, config | Patroni / Multi-AZ, sync replica | 🚧 single instance, no HA |
+| Config/version | etcd or Consul | Bundle pointers, node registry | Raft quorum, ≥3 nodes | 🚧 not built |
+| Bundle storage | S3-compatible object store | Immutable signed bundles | Multi-AZ, versioned | 🚧 filesystem instead (§17.2) |
+| Shared cache | Redis Cluster | Cross-node DNS cache | Sharded + replicas | 🚧 not built |
+| Query logs | ClickHouse | Analytics, search, retention | Sharded + replicated | 🚧 Postgres instead |
+| Audit | Append-only (Postgres/ClickHouse + object archive) | Compliance | WORM archive | 🚧 not built |
+| SIEM config | PostgreSQL | Webhook endpoints, delivery state, cursor | Same as source of truth | ✅ built (§20) |
+| Secrets | Vault / cloud KMS | Keys, upstream creds | HA Vault | 🚧 env vars instead |
 
 **Key principle:** the hot DNS path depends on *none* of these synchronously. It reads only the in-memory policy bundle and local cache. Control/management stores being down degrades management, not resolution.
 
@@ -220,11 +231,11 @@ Recommended default: **C (Hybrid)** — sidecar filter+cache for latency and AS 
 
 ## 8. Scalability & Performance
 
-- **Stateless filter nodes** → linear horizontal scale; autoscale on QPS/CPU.
+- **Stateless filter nodes** → linear horizontal scale; autoscale on QPS/CPU 🚧 (currently: manual scale-out, one node per host/CT — §17.3).
 - **Bloom-filter blocklists** → millions of domains, tens of MB RAM, O(1) negative lookups, no DB on hot path.
-- **Two-tier cache** (in-process LRU + Redis cluster) → high hit ratio, cross-node warm cache.
+- **Two-tier cache** (in-process LRU + Redis cluster 🚧) → high hit ratio, cross-node warm cache 🚧 (currently: in-process LRU only, no cross-node sharing).
 - **Recursor pool** scaled independently; only cache misses for allowed domains reach it.
-- **Anycast** spreads load to nearest node; LB health checks eject bad nodes in seconds.
+- **Anycast** 🚧 spreads load to nearest node; LB health checks eject bad nodes in seconds.
 
 Performance targets:
 
@@ -241,12 +252,12 @@ Performance targets:
 ## 9. Security
 
 - **Upstream privacy:** all recursion via DoT/DoH to vetted resolvers or self-hosted recursors with QNAME minimization.
-- **Internal:** mTLS between all planes; SPIFFE/SPIRE for workload identity.
-- **Bundle integrity:** signed, content-addressed bundles; nodes reject unsigned/invalid.
-- **DNS hardening:** rate limiting per source, response-rate-limiting (RRL) to resist amplification, DNSSEC validation at recursor.
-- **AuthN/Z:** SSO + RBAC + per-tenant isolation; least-privilege service accounts.
-- **Secrets:** Vault/KMS, no secrets on disk in plaintext.
-- **Audit:** immutable, exportable for compliance (SOC2/ISO27001).
+- **Internal:** mTLS between all planes 🚧; SPIFFE/SPIRE for workload identity 🚧.
+- **Bundle integrity:** signed, content-addressed bundles; nodes reject unsigned/invalid. *Built (ed25519 signing, `crypto.py`).*
+- **DNS hardening:** rate limiting per source (built: login endpoint only, in-memory — `rate_limit.py`), response-rate-limiting (RRL) 🚧 to resist amplification, DNSSEC validation at recursor 🚧.
+- **AuthN/Z:** SSO 🚧 + RBAC + per-tenant isolation; least-privilege service accounts.
+- **Secrets:** Vault/KMS 🚧, no secrets on disk in plaintext (as built: env vars / systemd `EnvironmentFile`, 0600).
+- **Audit:** immutable, exportable for compliance (built: `audit.py`/`audit_routers.py` + UI; SOC2/ISO27001 certification scope itself 🚧).
 - **Tenant isolation:** policy bundles, query logs, and UI scoped per tenant; no cross-tenant data leakage.
 
 ---
@@ -273,22 +284,22 @@ Organization (tenant)
 ## 11. Observability
 
 - **Metrics:** QPS, block ratio, cache hit ratio, latency histograms, upstream errors, bundle version per node — surfaced via the control plane telemetry API and the in-app Analytics dashboard.
-- **Logs (Loki/ELK):** operational; structured JSON.
-- **Query analytics (ClickHouse):** per-tenant top domains, blocked categories, client breakdown, retention by policy.
-- **Traces (OpenTelemetry):** resolve path spans for latency debugging.
-- **Alerting:** stale bundle, node down, upstream failure, block-ratio anomaly (possible misconfig or attack), Redis/PG health.
-- **SLOs:** availability of resolution (e.g. 99.99%), p99 latency, bundle freshness.
+- **Logs (Loki/ELK) 🚧:** operational; structured JSON.
+- **Query analytics (ClickHouse 🚧):** per-tenant top domains, blocked categories, client breakdown, retention by policy. *As built: PostgreSQL.*
+- **Traces (OpenTelemetry) 🚧:** resolve path spans for latency debugging.
+- **Alerting 🚧:** stale bundle, node down, upstream failure, block-ratio anomaly (possible misconfig or attack), Redis/PG health.
+- **SLOs 🚧:** availability of resolution (e.g. 99.99%), p99 latency, bundle freshness.
 
 ---
 
 ## 12. Deployment & Operations
 
-- **Packaging:** containers (OCI). Filter node, control-plane services, UI/API each independently deployable.
-- **Orchestration:** Kubernetes for control/management plane and shared filter fleet; sidecar filters deployed with AS nodes (systemd or co-located pods).
-- **IaC:** Terraform for infra, Helm for k8s workloads, GitOps (Argo/Flux) for config.
-- **Rollout:** canary policy bundles to a subset of nodes; automatic rollback on error-rate spike. Blue/green for control-plane services.
-- **Backup/DR:** PostgreSQL PITR, object-store versioning, etcd snapshots, ClickHouse backups. Multi-AZ; documented RTO/RPO.
-- **Upgrades:** filter nodes are cattle — rolling replace. Schema migrations gated and reversible.
+- **Packaging:** containers (OCI) — built (Docker Compose images). Filter node also ships as a native `.deb`. Control-plane/UI each independently deployable.
+- **Orchestration:** Kubernetes 🚧 for control/management plane and shared filter fleet; sidecar filters deployed with AS nodes (systemd or co-located pods). *As built: systemd units (native install) or Docker Compose — see `charts/mantis-dns` for an early, unverified Helm chart.*
+- **IaC:** Terraform 🚧 for infra, Helm 🚧 for k8s workloads, GitOps (Argo/Flux) 🚧 for config. *As built: shell installers (`infra/lxc/*.sh`) + Ansible-shaped provisioning notes in §17.5, not yet an Ansible playbook.*
+- **Rollout:** canary policy bundles to a subset of nodes 🚧; automatic rollback on error-rate spike 🚧. Blue/green for control-plane services 🚧. *As built: the update scripts (`scripts/update.sh`, `infra/lxc/install*.sh`) do backup → deploy → health-check → keep-previous-generation → manual rollback instructions on failure — no automatic traffic-based rollback.*
+- **Backup/DR:** PostgreSQL PITR 🚧 (as built: `pg_dump` before upgrades), object-store versioning 🚧, etcd snapshots 🚧, ClickHouse backups 🚧. Multi-AZ 🚧; documented RTO/RPO 🚧.
+- **Upgrades:** filter nodes are cattle — rolling replace 🚧 (as built: in-place restart per node, no rolling fleet orchestration). Schema migrations gated and reversible — built (Alembic).
 
 ---
 
@@ -304,18 +315,18 @@ Organization (tenant)
 
 ## 14. Technology Choices (reference, not mandatory)
 
-| Layer | Primary | Alternative |
-|-------|---------|-------------|
-| DNS frontend | CoreDNS (custom plugins) | Knot Resolver, custom Rust |
-| Recursor | Unbound | Knot Resolver |
-| Source DB | PostgreSQL + Patroni | CockroachDB |
-| Config store | etcd | Consul |
-| Shared cache | Redis Cluster | KeyDB / Dragonfly |
-| Bus | Kafka | NATS JetStream |
-| Query analytics | ClickHouse | Druid |
-| Metrics | In-app Analytics dashboard (telemetry API) | External APM (optional) |
-| Secrets | Vault | Cloud KMS |
-| Orchestration | Kubernetes | Nomad |
+| Layer | Primary | Alternative | Status |
+|-------|---------|-------------|--------|
+| DNS frontend | CoreDNS (custom plugins) | Knot Resolver, custom Rust | ✅ built, but as *custom Rust* — CoreDNS was never adopted |
+| Recursor | Unbound | Knot Resolver | 🚧 filter forwards to configured upstream pools directly (§21), no local recursor |
+| Source DB | PostgreSQL + Patroni | CockroachDB | 🚧 PostgreSQL only, no Patroni/HA |
+| Config store | etcd | Consul | 🚧 not built |
+| Shared cache | Redis Cluster | KeyDB / Dragonfly | 🚧 not built |
+| Bus | Kafka | NATS JetStream | 🚧 not built |
+| Query analytics | ClickHouse | Druid | 🚧 PostgreSQL instead |
+| Metrics | In-app Analytics dashboard (telemetry API) | External APM (optional) | ✅ built |
+| Secrets | Vault | Cloud KMS | 🚧 env vars / systemd `EnvironmentFile` instead |
+| Orchestration | Kubernetes | Nomad | 🚧 systemd / Docker Compose; early Helm chart exists (`charts/mantis-dns`), unverified |
 
 ---
 
@@ -331,17 +342,17 @@ Organization (tenant)
 
 ## 16. Phased Roadmap
 
-| Phase | Deliverable |
-|-------|-------------|
-| 0 | Control-plane schema, blocklist ingester, policy compiler, signed bundles |
-| 0b | Category taxonomy + feed registry + auto-update pipeline with sanity gates (§18) |
-| 0c | Proxmox VE appliance: CT templates + Ansible, collapsed control plane (§17) |
-| 1 | Stateless filter node (CoreDNS plugin chain), bundle pull + verify, local cache |
-| 2 | OpenVPN AS integration (sidecar + VIP), tenant/group mapping |
-| 3 | Telemetry pipeline (Kafka → ClickHouse), in-app analytics dashboards |
-| 4 | Management API + UI, SSO/RBAC, audit |
-| 5 | HA hardening, multi-AZ, DR drills, canary rollout, autoscaling |
-| 6 | Migration tooling, shadow mode, production cutover |
+| Phase | Deliverable | Status |
+|-------|-------------|--------|
+| 0 | Control-plane schema, blocklist ingester, policy compiler, signed bundles | ✅ built |
+| 0b | Category taxonomy + feed registry + auto-update pipeline with sanity gates (§18) | ✅ built |
+| 0c | Proxmox VE appliance: CT templates + Ansible, collapsed control plane (§17) | 🚧 partial — shell installers exist (`infra/lxc/*.sh`), no Ansible/CT-template packaging yet |
+| 1 | Stateless filter node (CoreDNS plugin chain), bundle pull + verify, local cache | ✅ built (custom Rust, not CoreDNS) |
+| 2 | OpenVPN AS integration (sidecar + VIP), tenant/group mapping | 🚧 works with community OpenVPN via DHCP-option/manual DNS push; no AS/sidecar/VIP automation |
+| 3 | Telemetry pipeline (Kafka → ClickHouse), in-app analytics dashboards | 🚧 dashboards ✅ built on PostgreSQL; Kafka/ClickHouse not built |
+| 4 | Management API + UI, SSO/RBAC, audit | 🚧 API/UI/audit ✅ built; SSO not built |
+| 5 | HA hardening, multi-AZ, DR drills, canary rollout, autoscaling | 🚧 not built |
+| 6 | Migration tooling, shadow mode, production cutover | 🚧 not built |
 
 ---
 
