@@ -118,6 +118,15 @@ class PolicyUpsert(BaseModel):
 
 
 _HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+# Uploaded logos are stored inline as a base64 data: URI (see BlockPageCard.tsx);
+# restrict to image mimetypes so the field can't carry arbitrary payloads.
+_LOGO_DATA_URI_RE = re.compile(
+    r"^data:image/(?:png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/]+=*$"
+)
+# ~220KB raw image after base64 expansion (~1.37x) — generous for a logo, small
+# enough that the branding fetch/cache in the filter's block-page listener
+# (docs/design-block-page.md §5.2) stays cheap.
+_LOGO_MAX_LEN = 300_000
 
 BlockMode = Literal["BLOCK_MODE_NXDOMAIN", "BLOCK_MODE_ZERO_IP", "BLOCK_MODE_REDIRECT"]
 
@@ -133,11 +142,20 @@ class BlockPageTemplateUpsert(BaseModel):
     ttl_seconds: int = Field(default=30, ge=0, le=86_400)
     title: str | None = Field(default=None, max_length=255)
     message: str | None = Field(default=None, max_length=2000)
-    logo_url: str | None = Field(default=None, max_length=1024)
+    logo_url: str | None = Field(default=None, max_length=_LOGO_MAX_LEN)
     brand_color: str | None = None
     contact_url: str | None = Field(default=None, max_length=1024)
     show_domain: bool = True
     show_category: bool = True
+
+    @field_validator("logo_url")
+    @classmethod
+    def _valid_logo(cls, v: str | None) -> str | None:
+        # Uploaded logos arrive as data: URIs; anything else is treated as a
+        # hosted-URL string, same as before this field supported uploads.
+        if v and v.startswith("data:") and not _LOGO_DATA_URI_RE.match(v):
+            raise ValueError("logo_url data URI must be a base64 png/jpeg/gif/webp/svg image")
+        return v or None
 
     @field_validator("redirect_ipv4")
     @classmethod

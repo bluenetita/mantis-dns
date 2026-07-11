@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi, type MockedFunction } from 'vitest';
 import { useBlockPageTemplate, useUpsertBlockPageTemplate } from '../../api/hooks';
@@ -31,6 +31,9 @@ vi.mock('../../api/hooks', async (importOriginal) => {
   };
 });
 
+const notify = vi.fn();
+vi.mock('@mantine/notifications', () => ({ notifications: { show: (...a: unknown[]) => notify(...a) } }));
+
 const mockUseTemplate = useBlockPageTemplate as MockedFunction<typeof useBlockPageTemplate>;
 const mockUseUpsert = useUpsertBlockPageTemplate as MockedFunction<typeof useUpsertBlockPageTemplate>;
 const mutate = vi.fn();
@@ -39,6 +42,7 @@ beforeEach(() => {
   mockUseTemplate.mockReset();
   mockUseUpsert.mockReset();
   mutate.mockReset();
+  notify.mockReset();
   mockUseTemplate.mockReturnValue({ data: null } as never);
   mockUseUpsert.mockReturnValue({ mutate, isPending: false } as never);
 });
@@ -147,5 +151,81 @@ describe('BlockPageCard', () => {
     mockUseTemplate.mockReturnValue({ data: null } as never);
     renderWithProviders(<BlockPageCard groupId="g1" canEdit={false} />);
     expect(screen.queryByRole('button', { name: 'Save block page' })).toBeNull();
+  });
+
+  describe('logo upload', () => {
+    beforeEach(() => {
+      mockUseTemplate.mockReturnValue({
+        data: {
+          block_mode: 'BLOCK_MODE_REDIRECT',
+          redirect_ipv4: '10.0.0.53',
+          redirect_ipv6: null,
+          ttl_seconds: 30,
+          title: null,
+          message: null,
+          logo_url: null,
+          brand_color: null,
+          contact_url: null,
+          show_domain: true,
+          show_category: true,
+        },
+      } as never);
+    });
+
+    function fileInput(): HTMLInputElement {
+      return document.querySelector('input[type="file"]') as HTMLInputElement;
+    }
+
+    it('converts an uploaded image to a data URI and previews it', async () => {
+      renderWithProviders(<BlockPageCard groupId="g1" canEdit />);
+      const file = new File(['fake-png-bytes'], 'logo.png', { type: 'image/png' });
+      await userEvent.upload(fileInput(), file);
+
+      await waitFor(() =>
+        expect(screen.getByTitle('Block page preview').getAttribute('srcdoc')).toContain(
+          'data:image/png;base64,'
+        )
+      );
+      // manual-URL fallback field stays blank while a data URI is active
+      expect(screen.getByPlaceholderText('https://…/logo.png')).toHaveValue('');
+    });
+
+    it('rejects a non-image file without touching the form', async () => {
+      // fireEvent bypasses the input's `accept` filter that userEvent.upload
+      // enforces, so this exercises the mime check itself (the same guard
+      // that matters for e.g. drag-and-drop, which isn't accept-filtered).
+      renderWithProviders(<BlockPageCard groupId="g1" canEdit />);
+      const file = new File(['not an image'], 'evil.html', { type: 'text/html' });
+      fireEvent.change(fileInput(), { target: { files: [file] } });
+
+      await waitFor(() =>
+        expect(notify).toHaveBeenCalledWith(
+          expect.objectContaining({ message: 'Logo must be a PNG, JPEG, GIF, WEBP or SVG image' })
+        )
+      );
+      expect(screen.getByTitle('Block page preview').getAttribute('srcdoc')).not.toContain('data:');
+    });
+
+    it('rejects a file over the size cap', async () => {
+      renderWithProviders(<BlockPageCard groupId="g1" canEdit />);
+      const big = new File([new Uint8Array(201 * 1024)], 'big.png', { type: 'image/png' });
+      await userEvent.upload(fileInput(), big);
+
+      await waitFor(() =>
+        expect(notify).toHaveBeenCalledWith(
+          expect.objectContaining({ message: expect.stringContaining('Logo must be under 200KB') })
+        )
+      );
+    });
+
+    it('clears the logo via Remove', async () => {
+      renderWithProviders(<BlockPageCard groupId="g1" canEdit />);
+      const file = new File(['fake-png-bytes'], 'logo.png', { type: 'image/png' });
+      await userEvent.upload(fileInput(), file);
+      await waitFor(() => screen.getByRole('button', { name: 'Remove' }));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Remove' }));
+      expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+    });
   });
 });

@@ -16,9 +16,11 @@
  */
 
 import {
+  Avatar,
   Button,
   Card,
   ColorInput,
+  FileButton,
   Group,
   NumberInput,
   Select,
@@ -31,9 +33,21 @@ import {
   Title,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useBlockPageTemplate, useUpsertBlockPageTemplate } from "../api/hooks";
 import type { components } from "../api/schema";
+
+const LOGO_MAX_BYTES = 200 * 1024; // server caps the stored data URI at ~220KB post-base64
+const LOGO_MIME_RE = /^image\/(png|jpeg|gif|webp|svg\+xml)$/;
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+}
 
 type Upsert = components["schemas"]["BlockPageTemplateUpsert"];
 type BlockMode = "BLOCK_MODE_NXDOMAIN" | "BLOCK_MODE_ZERO_IP" | "BLOCK_MODE_REDIRECT";
@@ -113,6 +127,8 @@ export function BlockPageCard({
   const upsert = useUpsertBlockPageTemplate(groupId);
 
   const [form, setForm] = useState<Upsert>(DEFAULTS);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const resetLogoPicker = useRef<() => void>(null);
 
   useEffect(() => {
     // template === null means "no override configured yet" → keep defaults.
@@ -140,6 +156,32 @@ export function BlockPageCard({
 
   function set<K extends keyof Upsert>(key: K, value: Upsert[K]) {
     setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  async function uploadLogo(file: File | null) {
+    if (!file) return;
+    if (!LOGO_MIME_RE.test(file.type)) {
+      notifications.show({ message: "Logo must be a PNG, JPEG, GIF, WEBP or SVG image", color: "red" });
+      resetLogoPicker.current?.();
+      return;
+    }
+    if (file.size > LOGO_MAX_BYTES) {
+      notifications.show({
+        message: `Logo must be under ${Math.round(LOGO_MAX_BYTES / 1024)}KB (got ${Math.round(file.size / 1024)}KB)`,
+        color: "red",
+      });
+      resetLogoPicker.current?.();
+      return;
+    }
+    setLogoUploading(true);
+    try {
+      set("logo_url", await readFileAsDataUrl(file));
+    } catch (e) {
+      notifications.show({ message: String(e), color: "red" });
+    } finally {
+      setLogoUploading(false);
+      resetLogoPicker.current?.();
+    }
   }
 
   function save() {
@@ -225,22 +267,60 @@ export function BlockPageCard({
               onChange={(e) => set("message", e.currentTarget.value || null)}
               disabled={!canEdit}
             />
-            <SimpleGrid cols={{ base: 1, sm: 2 }}>
+            <Stack gap="xs">
+              <Text size="sm" fw={500}>
+                Logo
+              </Text>
+              <Group align="center" gap="sm">
+                <Avatar
+                  src={form.logo_url || null}
+                  radius="sm"
+                  size={56}
+                  style={{ border: "1px solid var(--mantine-color-default-border)" }}
+                >
+                  {!form.logo_url && "?"}
+                </Avatar>
+                <FileButton
+                  resetRef={resetLogoPicker}
+                  onChange={uploadLogo}
+                  accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+                  disabled={!canEdit || logoUploading}
+                >
+                  {(props) => (
+                    <Button {...props} variant="default" loading={logoUploading}>
+                      Upload logo
+                    </Button>
+                  )}
+                </FileButton>
+                {form.logo_url && (
+                  <Button
+                    variant="subtle"
+                    color="red"
+                    onClick={() => set("logo_url", null)}
+                    disabled={!canEdit}
+                  >
+                    Remove
+                  </Button>
+                )}
+              </Group>
+              <Text size="xs" c="dimmed">
+                PNG, JPEG, GIF, WEBP or SVG, up to {Math.round(LOGO_MAX_BYTES / 1024)}KB. Or paste a
+                hosted image URL instead:
+              </Text>
               <TextInput
-                label="Logo URL"
                 placeholder="https://…/logo.png"
-                value={form.logo_url ?? ""}
+                value={form.logo_url && !form.logo_url.startsWith("data:") ? form.logo_url : ""}
                 onChange={(e) => set("logo_url", e.currentTarget.value || null)}
                 disabled={!canEdit}
               />
-              <TextInput
-                label="Contact / request-access URL"
-                placeholder="https://…/unblock"
-                value={form.contact_url ?? ""}
-                onChange={(e) => set("contact_url", e.currentTarget.value || null)}
-                disabled={!canEdit}
-              />
-            </SimpleGrid>
+            </Stack>
+            <TextInput
+              label="Contact / request-access URL"
+              placeholder="https://…/unblock"
+              value={form.contact_url ?? ""}
+              onChange={(e) => set("contact_url", e.currentTarget.value || null)}
+              disabled={!canEdit}
+            />
             <Group>
               <Switch
                 label="Show requested domain"

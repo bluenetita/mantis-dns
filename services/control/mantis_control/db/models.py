@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, ForeignKey, Identity, Integer, String, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Identity, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -139,7 +139,9 @@ class BlockPageTemplate(Base):
     # Presentation fields (served to the block-page listener).
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     message: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    logo_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # TEXT, not String(1024): an uploaded logo is stored inline as a base64
+    # data: URI (see BlockPageCard.tsx) rather than a separate blob store.
+    logo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     brand_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
     contact_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     show_domain: Mapped[bool] = mapped_column(Boolean, default=True)

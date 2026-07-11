@@ -191,3 +191,56 @@ def test_invalid_redirect_ip_rejected():
 def test_invalid_brand_color_rejected():
     with pytest.raises(ValueError):
         schemas.BlockPageTemplateUpsert(brand_color="red")
+
+
+# ── uploaded logo (data: URI) ─────────────────────────────────────────────
+
+def test_hosted_logo_url_still_accepted():
+    payload = schemas.BlockPageTemplateUpsert(logo_url="https://example.com/logo.png")
+    assert payload.logo_url == "https://example.com/logo.png"
+
+
+def test_uploaded_logo_data_uri_accepted():
+    data_uri = "data:image/png;base64," + "A" * 100
+    payload = schemas.BlockPageTemplateUpsert(logo_url=data_uri)
+    assert payload.logo_url == data_uri
+
+
+def test_logo_data_uri_rejects_non_image_mime():
+    with pytest.raises(ValueError):
+        schemas.BlockPageTemplateUpsert(logo_url="data:text/html;base64,PHNjcmlwdD4=")
+
+
+def test_logo_data_uri_rejects_malformed_base64():
+    with pytest.raises(ValueError):
+        schemas.BlockPageTemplateUpsert(logo_url="data:image/png;base64,not base64!!")
+
+
+def test_logo_oversize_rejected():
+    with pytest.raises(ValueError):
+        schemas.BlockPageTemplateUpsert(logo_url="data:image/png;base64," + "A" * 300_001)
+
+
+def test_uploaded_logo_round_trips_through_compiler_bundle(db, group):
+    """logo_url is a presentation field, not compiled into the signed bundle —
+    guards against it accidentally bloating the hot-path artifact."""
+    db.add(Policy(group_id=group.id))
+    data_uri = "data:image/png;base64," + "A" * 1000
+    db.add(
+        BlockPageTemplate(
+            tenant_id=group.tenant_id,
+            group_id=group.id,
+            block_mode="BLOCK_MODE_REDIRECT",
+            redirect_ipv4="10.0.0.53",
+            logo_url=data_uri,
+        )
+    )
+    db.commit()
+    policy = db.query(Policy).one()
+
+    bundle = build_bundle(policy, 1, db)
+    assert bundle.block_response.mode == bundle_pb2.BLOCK_MODE_REDIRECT
+    assert not hasattr(bundle.block_response, "logo_url")
+
+    resolved = resolve_block_template(db, group.tenant_id, group.id)
+    assert resolved is not None and resolved.logo_url == data_uri
