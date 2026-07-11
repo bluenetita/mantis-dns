@@ -51,6 +51,18 @@ today but can break across kernel/Proxmox upgrades, and you're running a
 full Postgres + 3 more containers for what's ultimately a DNS filter. See
 Option C if you'd rather avoid that.
 
+### Upgrading
+
+```
+pct exec <vmid> -- bash -c 'cd /opt/mantis-dns && MANTIS_VERSION=<new-tag> ./scripts/update.sh'
+```
+
+[`scripts/update.sh`](../scripts/update.sh) backs up the database (`pg_dump`
+into `./backups/`) before pulling the new images, then health-checks the
+control plane once the stack is back up. On failure it prints the exact
+`docker compose up -d`/`pg_restore` commands to roll back instead of running
+them itself.
+
 ## Option B — filter node only, native `.deb`
 
 If you already have a control plane running somewhere (Option A/C, cloud-init
@@ -131,6 +143,14 @@ container's address as `CONTROL_URL`.
 pct exec <vmid> -- bash -c 'cd /opt/mantis-dns-src && git fetch --tags && git checkout <new-tag> && ./infra/lxc/install.sh'
 ```
 
+Re-running the installer against an existing install now also backs up the
+database (`pg_dump` to `/var/backups/mantis-dns/`) before touching anything,
+keeps the previous code as `/opt/mantis-dns/app.previous` and
+`venv.previous`, and checks that the new code boots before switching traffic
+to it. If the health check fails, the script exits with the exact `mv`/
+`pg_restore` commands needed to roll back — it never restores anything
+automatically.
+
 ## Option D — full stack, native install on Rocky Linux 10
 
 [`infra/lxc/install-rocky.sh`](../infra/lxc/install-rocky.sh) is the `dnf`
@@ -190,3 +210,6 @@ Two things Rocky needs that Debian's package manager handles implicitly:
 ```
 pct exec <vmid> -- bash -c 'cd /opt/mantis-dns-src && git fetch --tags && git checkout <new-tag> && ./infra/lxc/install-rocky.sh'
 ```
+
+Same backup-then-health-check-then-switch behavior as Option C's Upgrading
+section above.

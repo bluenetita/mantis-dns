@@ -1,0 +1,72 @@
+<!--
+  Copyright (C) 2026 Blue Networks srl <support+github@bluenetworks.it>
+  Licensed under the GNU AGPLv3 — see repository LICENSE.
+
+  Rules for Mantis DNS SIEM events (design.md §20.2 schema), pulled into
+  Wazuh via mantis_siem_pull.py + the localfile in ossec.conf.snippet.xml.
+
+  No custom decoder is needed: <log_format>json</log_format> makes Wazuh's
+  built-in JSON decoder parse every top-level key (qname, decision,
+  client_ip, matched_category, tags, ...) into a field automatically. These
+  rules are scoped to the Mantis log file via <location> rather than a
+  distinctive field, since "decision"/"qname" style keys could plausibly
+  collide with some other JSON log source on the same manager.
+
+  Install: copy to /var/ossec/etc/rules/local_rules.xml (or append into the
+  existing one — a manager has only one local_rules.xml) and restart
+  wazuh-manager. Local rule IDs below use the 100100-100199 block, reserved
+  for local/custom use — bump if that range is already taken on your
+  manager.
+-->
+<group name="mantis,dns,">
+
+  <rule id="100100" level="3">
+    <decoded_as>json</decoded_as>
+    <location>siem-events\.json$</location>
+    <description>Mantis DNS SIEM event</description>
+    <group>mantis_dns_event,</group>
+  </rule>
+
+  <rule id="100101" level="3">
+    <if_sid>100100</if_sid>
+    <field name="decision">^allow$</field>
+    <description>Mantis DNS: query allowed for $(qname) from $(client_ip)</description>
+    <group>mantis_dns_allow,gdpr_IV_30.1.g,</group>
+  </rule>
+
+  <rule id="100102" level="7">
+    <if_sid>100100</if_sid>
+    <field name="decision">^block$</field>
+    <description>Mantis DNS: query blocked for $(qname) from $(client_ip)</description>
+    <group>mantis_dns_block,gdpr_IV_35.7.d,</group>
+  </rule>
+
+  <rule id="100103" level="10">
+    <if_sid>100102</if_sid>
+    <field name="matched_category">^malware$</field>
+    <description>Mantis DNS: blocked malware-category query for $(qname) from $(client_ip)</description>
+    <group>mantis_dns_block,malware,</group>
+  </rule>
+
+  <rule id="100104" level="10">
+    <if_sid>100102</if_sid>
+    <field name="matched_category">^phishing$</field>
+    <description>Mantis DNS: blocked phishing-category query for $(qname) from $(client_ip)</description>
+    <group>mantis_dns_block,phishing,</group>
+  </rule>
+
+  <rule id="100105" level="8">
+    <if_sid>100102</if_sid>
+    <field name="tags">unmanaged</field>
+    <description>Mantis DNS: blocked query from an unmanaged-tagged device ($(client_name), $(client_ip))</description>
+    <group>mantis_dns_block,</group>
+  </rule>
+
+  <rule id="100106" level="10" frequency="5" timeframe="120">
+    <if_matched_sid>100102</if_matched_sid>
+    <same_field>client_ip</same_field>
+    <description>Mantis DNS: repeated blocked queries from $(client_ip) — possible compromised or misconfigured device</description>
+    <group>mantis_dns_block,pci_dss_11.4,</group>
+  </rule>
+
+</group>

@@ -828,6 +828,7 @@ ClientEntry {
 | Palo Alto Cortex XSIAM | Webhook | JSON | Native HTTP event ingestion |
 | Chronicle (Google SecOps) | Webhook | JSON (UDM mapping via ingestion API) | |
 | Panther | Pull API | JSON | Native REST poller |
+| Wazuh | Pull API → `<localfile>` JSON log tailing | JSON | No generic inbound webhook receiver exists on stock Wazuh; a polling script + `<wodle name="command">` bridges pull → local log. See `integrations/wazuh/README.md`. |
 | Any MSSP | Pull API | CEF | MSSP controls polling cadence |
 
 ---

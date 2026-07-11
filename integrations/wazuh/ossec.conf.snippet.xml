@@ -1,0 +1,31 @@
+<!--
+  Copyright (C) 2026 Blue Networks srl <support+github@bluenetworks.it>
+  Licensed under the GNU AGPLv3 — see repository LICENSE.
+
+  Add the two blocks below inside <ossec_config> in /var/ossec/etc/ossec.conf
+  on the Wazuh manager (or an agent with local access to a copy of the
+  Mantis control-plane API). See README.md in this directory for the full
+  setup, including where mantis_siem_pull.py and run-mantis-pull.sh should
+  live and what /etc/mantis/wazuh-integration.env must contain.
+-->
+
+<!-- Periodically pulls Mantis DNS SIEM events (design.md §20.3) into a
+     local JSON log file. Wazuh has no generic inbound webhook receiver,
+     so pull — not the Mantis "webhook push" feature — is the supported
+     integration path. -->
+<wodle name="command">
+  <disabled>no</disabled>
+  <tag>mantis-siem-pull</tag>
+  <command>/var/ossec/integrations/mantis/run-mantis-pull.sh</command>
+  <interval>1m</interval>
+  <ignore_output>no</ignore_output>
+  <run_on_start>yes</run_on_start>
+  <timeout>90</timeout>
+</wodle>
+
+<!-- Wazuh's built-in JSON decoder parses this natively; no <log_format>
+     other than "json" is needed for the fields to become searchable. -->
+<localfile>
+  <log_format>json</log_format>
+  <location>/var/ossec/logs/mantis/siem-events.json</location>
+</localfile>

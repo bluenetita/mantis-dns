@@ -18,7 +18,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi, type MockedFunction } from 'vitest';
-import { useBlockPageTemplate, useUpsertBlockPageTemplate } from '../../api/hooks';
+import { useBlockPageTemplate, useCompileBundle, useUpsertBlockPageTemplate } from '../../api/hooks';
 import { BlockPageCard } from '../BlockPageCard';
 import { renderWithProviders } from '../../test/utils';
 
@@ -28,6 +28,7 @@ vi.mock('../../api/hooks', async (importOriginal) => {
     ...actual,
     useBlockPageTemplate: vi.fn(),
     useUpsertBlockPageTemplate: vi.fn(),
+    useCompileBundle: vi.fn(),
   };
 });
 
@@ -36,15 +37,20 @@ vi.mock('@mantine/notifications', () => ({ notifications: { show: (...a: unknown
 
 const mockUseTemplate = useBlockPageTemplate as MockedFunction<typeof useBlockPageTemplate>;
 const mockUseUpsert = useUpsertBlockPageTemplate as MockedFunction<typeof useUpsertBlockPageTemplate>;
+const mockUseCompile = useCompileBundle as MockedFunction<typeof useCompileBundle>;
 const mutate = vi.fn();
+const compileMutate = vi.fn();
 
 beforeEach(() => {
   mockUseTemplate.mockReset();
   mockUseUpsert.mockReset();
+  mockUseCompile.mockReset();
   mutate.mockReset();
+  compileMutate.mockReset();
   notify.mockReset();
   mockUseTemplate.mockReturnValue({ data: null } as never);
   mockUseUpsert.mockReturnValue({ mutate, isPending: false } as never);
+  mockUseCompile.mockReturnValue({ mutate: compileMutate, isPending: false } as never);
 });
 
 describe('BlockPageCard', () => {
@@ -145,6 +151,32 @@ describe('BlockPageCard', () => {
       block_mode: 'BLOCK_MODE_REDIRECT',
       redirect_ipv4: '10.0.0.53',
     });
+  });
+
+  it('recompiles and republishes the bundle once the save succeeds', async () => {
+    mockUseTemplate.mockReturnValue({
+      data: {
+        block_mode: 'BLOCK_MODE_REDIRECT',
+        redirect_ipv4: '10.0.0.53',
+        redirect_ipv6: null,
+        ttl_seconds: 30,
+        title: null,
+        message: null,
+        logo_url: null,
+        brand_color: null,
+        contact_url: null,
+        show_domain: true,
+        show_category: true,
+      },
+    } as never);
+    // Simulate react-query invoking the upsert's onSuccess callback.
+    mutate.mockImplementation((_body, opts) => opts?.onSuccess?.(undefined, _body, undefined));
+
+    renderWithProviders(<BlockPageCard groupId="g1" canEdit />);
+    await userEvent.click(screen.getByRole('button', { name: 'Save block page' }));
+
+    await waitFor(() => expect(compileMutate).toHaveBeenCalledTimes(1));
+    expect(compileMutate.mock.calls[0][0]).toBe('g1');
   });
 
   it('hides the save button for non-editors', () => {

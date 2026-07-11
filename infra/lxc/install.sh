@@ -29,6 +29,11 @@
 # Re-running this script (e.g. after `git pull` to a new tag) redeploys the
 # code and restarts services but reuses the existing Postgres role/secrets in
 # /etc/mantis-control/mantis-control.env — delete that file to regenerate.
+# On a re-run it also backs up the database (pg_dump to
+# /var/backups/mantis-dns/) and keeps the previous app/venv as
+# app.previous/venv.previous before deploying, and checks that the new code
+# boots before switching traffic to it. If the health check fails, the script
+# exits with the exact commands to roll back — see lib-update.sh.
 #
 # NOT installed here: mantis-filter and Kea. Filter nodes belong at the
 # network edge (often a separate LXC/site) — install the standalone .deb from
@@ -38,6 +43,8 @@
 # host, pointed at this host's control API.
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # repo root
+# shellcheck source=infra/lxc/lib-update.sh
+. infra/lxc/lib-update.sh
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "run as root" >&2
@@ -110,7 +117,13 @@ mkdir -p "$ENV_DIR"
 
 if [ -f "$ENV_FILE" ]; then
   echo "==> $ENV_FILE exists — reusing secrets/DB credentials, redeploying code only."
+  IS_UPDATE=1
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
 else
+  IS_UPDATE=0
   echo "==> First install — provisioning Postgres role and generating secrets..."
   POSTGRES_DB=mantis
   POSTGRES_USER=mantis
@@ -173,9 +186,13 @@ id -u mantis >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --shell /
 chown mantis:mantis "$ENV_DIR"
 chmod 750 "$ENV_DIR"
 
+if [ "$IS_UPDATE" = "1" ]; then
+  backup_database "${DATABASE_URL:-}"
+fi
+
 echo "==> Deploying control plane..."
 mkdir -p "$INSTALL_DIR"
-rm -rf "$INSTALL_DIR/app" "$INSTALL_DIR/venv"
+rotate_code_dirs "$INSTALL_DIR"
 cp -r services/control "$INSTALL_DIR/app"
 python3 -m venv "$INSTALL_DIR/venv"
 # Installed in place (not editable) but the source tree stays at
@@ -188,8 +205,31 @@ chown -R mantis:mantis "$INSTALL_DIR"
 echo "==> Installing systemd unit..."
 cp infra/lxc/mantis-control.service /etc/systemd/system/mantis-control.service
 systemctl daemon-reload
-systemctl enable --now mantis-control
-systemctl restart mantis-control
+systemctl enable mantis-control
+systemctl stop mantis-control >/dev/null 2>&1 || true
+
+if [ "$IS_UPDATE" = "1" ]; then
+  echo "==> Checking control plane startup..."
+  if ! check_control_startup "$INSTALL_DIR"; then
+    echo "mantis-control startup check failed; see the Python traceback above." >&2
+    print_rollback_instructions "$INSTALL_DIR" mantis-control
+    exit 1
+  fi
+fi
+
+if ! systemctl restart mantis-control || ! wait_for_control "$INSTALL_DIR"; then
+  echo "mantis-control failed to become healthy. Service status and recent logs:"
+  systemctl status mantis-control --no-pager || true
+  journalctl -u mantis-control -n 120 --no-pager || true
+  if [ "$IS_UPDATE" = "1" ]; then
+    print_rollback_instructions "$INSTALL_DIR" mantis-control
+  fi
+  exit 1
+fi
+
+if [ "$IS_UPDATE" = "1" ]; then
+  discard_previous_generation "$INSTALL_DIR"
+fi
 
 echo "==> Building UI static assets (requires Node from apt above)..."
 ( cd apps/ui && npm ci --legacy-peer-deps && VITE_API_URL= npm run build )

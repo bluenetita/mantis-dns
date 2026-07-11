@@ -24,6 +24,10 @@
 #                       MANTIS_ENV=production. You must still set
 #                       CORS_ALLOW_ORIGINS (and IMAGE_PREFIX/MANTIS_VERSION if
 #                       not using the default registry) in .env yourself.
+#
+# To update an existing --prod deployment in place (DB-backed, with a
+# health-check + rollback instructions on failure), use scripts/update.sh
+# instead of re-running this script.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

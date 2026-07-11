@@ -36,7 +36,7 @@ from mantis_control.crypto import encrypt_secret
 from mantis_control.db import models
 from mantis_control.db.session import get_db
 from mantis_control.siem_delivery import deliver_test_event
-from mantis_control.ssrf_guard import check_url_safe
+from mantis_control.ssrf_guard import check_webhook_url_safe
 
 router = APIRouter()
 
@@ -100,7 +100,7 @@ def create_webhook(
     if scope is not None and payload.tenant_id is not None and payload.tenant_id != scope:
         raise HTTPException(403, "access denied — cannot create webhook for a different tenant")
     try:
-        check_url_safe(payload.url)
+        check_webhook_url_safe(payload.url)
     except ValueError as e:
         raise HTTPException(422, f"webhook URL rejected: {e}") from e
     webhook = models.SiemWebhook(
@@ -147,7 +147,7 @@ def update_webhook(
     changes = payload.model_dump(exclude_unset=True, exclude={"secret"})
     if "url" in changes:
         try:
-            check_url_safe(changes["url"])
+            check_webhook_url_safe(changes["url"])
         except ValueError as e:
             raise HTTPException(422, f"webhook URL rejected: {e}") from e
     for field, value in changes.items():

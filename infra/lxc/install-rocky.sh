@@ -37,6 +37,11 @@
 # Re-running this script (e.g. after `git pull` to a new tag) redeploys the
 # code and restarts services but reuses the existing Postgres role/secrets in
 # /etc/mantis-control/mantis-control.env — delete that file to regenerate.
+# On a re-run it also backs up the database (pg_dump to
+# /var/backups/mantis-dns/) and keeps the previous app/venv as
+# app.previous/venv.previous before deploying, and checks that the new code
+# boots before switching traffic to it. If the health check fails, the script
+# exits with the exact commands to roll back — see lib-update.sh.
 #
 # Set INSTALL_FILTER=0 to skip mantis-filter (control plane + UI only, e.g.
 # if this box is management-only and DNS edge nodes live elsewhere).
@@ -45,6 +50,8 @@
 # L2 broadcast/relay reachability from the container's network namespace.
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # repo root
+# shellcheck source=infra/lxc/lib-update.sh
+. infra/lxc/lib-update.sh
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "run as root" >&2
@@ -75,17 +82,6 @@ UI_ROOT=/var/www/mantis-dns
 ENV_DIR=/etc/mantis-control
 ENV_FILE="$ENV_DIR/mantis-control.env"
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-
-wait_for_control() {
-  for _ in $(seq 1 30); do
-    if "$INSTALL_DIR/venv/bin/python" -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=2).read()' >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 1
-  done
-
-  return 1
-}
 
 wait_for_tcp() {
   host="$1"
@@ -168,25 +164,6 @@ refresh_kea_env_var() {
   elif [ -z "$current" ] || [ "$current" = "http://kea:8080/" ] || [ "$current" = "http://kea:8004/" ] || [ "$current" = "http://kea:8006/" ] || [ "$current" = "http://127.0.0.1:8004/" ] || [ "$current" = "http://127.0.0.1:8006/" ]; then
     set_env_var "$key" "$default"
   fi
-}
-
-check_control_startup() {
-  (
-    cd "$INSTALL_DIR/app"
-    runuser -u mantis --preserve-environment -- "$INSTALL_DIR/venv/bin/python" - <<'PY'
-import asyncio
-
-from mantis_control.main import app, _lifespan
-
-
-async def main() -> None:
-    async with _lifespan(app):
-        pass
-
-
-asyncio.run(main())
-PY
-  )
 }
 
 parse_database_url() {
@@ -411,6 +388,7 @@ mkdir -p "$ENV_DIR"
 
 if [ -f "$ENV_FILE" ]; then
   echo "==> $ENV_FILE exists — reusing secrets/DB credentials, redeploying code only."
+  IS_UPDATE=1
   # shellcheck disable=SC1090
   source "$ENV_FILE"
 
@@ -441,6 +419,7 @@ if [ -f "$ENV_FILE" ]; then
   sync_postgres_role
   configure_postgres_password_auth
 else
+  IS_UPDATE=0
   echo "==> First install — provisioning Postgres role and generating secrets..."
   POSTGRES_DB=mantis
   POSTGRES_USER=mantis
@@ -524,13 +503,17 @@ id -u mantis >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --shell /
 chown mantis:mantis "$ENV_DIR"
 chmod 750 "$ENV_DIR"
 
+if [ "$IS_UPDATE" = "1" ]; then
+  backup_database "${DATABASE_URL:-}"
+fi
+
 echo "==> Deploying control plane..."
 mkdir -p "$INSTALL_DIR"
 # Sibling of app/venv, deliberately outside the `rm -rf` below — holds
 # FEED_STORAGE_DIR/BUNDLE_STORAGE_DIR, which must survive reinstalls (see
 # the ensure_env_var comment above).
 mkdir -p "$INSTALL_DIR/data/feed_domains" "$INSTALL_DIR/data/bundles"
-rm -rf "$INSTALL_DIR/app" "$INSTALL_DIR/venv"
+rotate_code_dirs "$INSTALL_DIR"
 cp -r services/control "$INSTALL_DIR/app"
 python3 -m venv "$INSTALL_DIR/venv"
 # Installed in place (not editable) but the source tree stays at
@@ -547,16 +530,26 @@ systemctl enable mantis-control
 systemctl stop mantis-control >/dev/null 2>&1 || true
 
 echo "==> Checking control plane startup..."
-if ! check_control_startup; then
-  echo "mantis-control startup check failed; see the Python traceback above."
+if ! check_control_startup "$INSTALL_DIR"; then
+  echo "mantis-control startup check failed; see the Python traceback above." >&2
+  if [ "$IS_UPDATE" = "1" ]; then
+    print_rollback_instructions "$INSTALL_DIR" mantis-control
+  fi
   exit 1
 fi
 
-if ! systemctl restart mantis-control || ! wait_for_control; then
+if ! systemctl restart mantis-control || ! wait_for_control "$INSTALL_DIR"; then
   echo "mantis-control failed to become healthy. Service status and recent logs:"
   systemctl status mantis-control --no-pager || true
   journalctl -u mantis-control -n 120 --no-pager || true
+  if [ "$IS_UPDATE" = "1" ]; then
+    print_rollback_instructions "$INSTALL_DIR" mantis-control
+  fi
   exit 1
+fi
+
+if [ "$IS_UPDATE" = "1" ]; then
+  discard_previous_generation "$INSTALL_DIR"
 fi
 
 echo "==> Building UI static assets (requires Node from dnf above)..."

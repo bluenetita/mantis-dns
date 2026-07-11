@@ -19,7 +19,9 @@ from mantis_control.ssrf_guard import (
     check_host_safe,
     check_probe_target_safe,
     check_url_safe,
+    check_webhook_url_safe,
     resolve_pinned_url,
+    resolve_pinned_webhook_url,
 )
 
 
@@ -60,8 +62,8 @@ def test_resolve_pinned_url_rejects_blocked_literal():
 
 def test_check_host_safe_blocks_rfc1918():
     """Unlike check_probe_target_safe, the generic host guard blocks private
-    ranges too — this is used for feed/webhook fetch targets, not DNS
-    resolver addresses."""
+    ranges too — this is used for feed fetch targets, not DNS resolver
+    addresses or SIEM webhooks (see check_webhook_url_safe)."""
     with pytest.raises(ValueError):
         check_host_safe("10.8.1.1")
 
@@ -81,3 +83,36 @@ def test_check_probe_target_safe_blocks_loopback():
 def test_check_probe_target_safe_blocks_metadata():
     with pytest.raises(ValueError):
         check_probe_target_safe("169.254.169.254")
+
+
+def test_check_webhook_url_safe_allows_private_target():
+    """Self-hosted SIEMs (e.g. Wazuh) are commonly reachable only on a
+    private/RFC-1918 address — the webhook guard must not block that."""
+    check_webhook_url_safe("https://10.8.1.20:9200/mantis-events")  # must not raise
+    check_webhook_url_safe("http://192.168.1.5:8080/hook")  # must not raise
+
+
+def test_check_webhook_url_safe_blocks_loopback():
+    with pytest.raises(ValueError):
+        check_webhook_url_safe("http://127.0.0.1/hook")
+
+
+def test_check_webhook_url_safe_blocks_metadata():
+    with pytest.raises(ValueError):
+        check_webhook_url_safe("http://169.254.169.254/hook")
+
+
+def test_check_webhook_url_safe_rejects_non_http_scheme():
+    with pytest.raises(ValueError):
+        check_webhook_url_safe("ftp://10.8.1.20/hook")
+
+
+def test_resolve_pinned_webhook_url_private_literal_is_unchanged():
+    pinned, host = resolve_pinned_webhook_url("https://10.8.1.20:9200/path")
+    assert pinned == "https://10.8.1.20:9200/path"
+    assert host == "10.8.1.20"
+
+
+def test_resolve_pinned_webhook_url_rejects_loopback_literal():
+    with pytest.raises(ValueError):
+        resolve_pinned_webhook_url("http://127.0.0.1/x")

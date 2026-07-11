@@ -39,7 +39,7 @@ from mantis_control.audit import write_audit_log
 from mantis_control.crypto import decrypt_secret
 from mantis_control.db import models
 from mantis_control.db.session import SessionLocal
-from mantis_control.ssrf_guard import resolve_pinned_url
+from mantis_control.ssrf_guard import resolve_pinned_webhook_url
 
 BACKOFF_SECONDS = [5, 30, 120, 600, 3600]
 MAX_CONSECUTIVE_FAILURES = 6
@@ -64,7 +64,7 @@ async def _post(webhook: models.SiemWebhook, body: bytes, content_type: str, cli
     # raises ValueError -> caught by caller as delivery failure. Fetch by
     # pinned IP (not the hostname) so a DNS re-resolution at connect time
     # can't redirect this request somewhere the guard didn't see.
-    pinned_url, original_host = resolve_pinned_url(webhook.url)
+    pinned_url, original_host = resolve_pinned_webhook_url(webhook.url)
     secret = decrypt_secret(webhook.secret_encrypted)
     signature = _sign(secret, body)
     headers = {

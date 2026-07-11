@@ -34,7 +34,7 @@ import {
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { useEffect, useRef, useState } from "react";
-import { useBlockPageTemplate, useUpsertBlockPageTemplate } from "../api/hooks";
+import { useBlockPageTemplate, useCompileBundle, useUpsertBlockPageTemplate } from "../api/hooks";
 import type { components } from "../api/schema";
 
 const LOGO_MAX_BYTES = 200 * 1024; // server caps the stored data URI at ~220KB post-base64
@@ -125,6 +125,7 @@ export function BlockPageCard({
 }) {
   const { data: template } = useBlockPageTemplate(groupId);
   const upsert = useUpsertBlockPageTemplate(groupId);
+  const compileBundle = useCompileBundle();
 
   const [form, setForm] = useState<Upsert>(DEFAULTS);
   const [logoUploading, setLogoUploading] = useState(false);
@@ -187,7 +188,19 @@ export function BlockPageCard({
   function save() {
     if (!groupId) return;
     upsert.mutate(form, {
-      onSuccess: () => notifications.show({ message: "Block page saved", color: "green" }),
+      onSuccess: () => {
+        // Hot-path fields (mode/redirect target/ttl) only take effect once compiled
+        // into the group's bundle — recompile immediately so "save" actually redirects.
+        compileBundle.mutate(groupId, {
+          onSuccess: () =>
+            notifications.show({ message: "Block page saved and published", color: "green" }),
+          onError: (e) =>
+            notifications.show({
+              message: `Block page saved, but publishing the bundle failed: ${String(e)}`,
+              color: "red",
+            }),
+        });
+      },
       onError: (e) => notifications.show({ message: String(e), color: "red" }),
     });
   }
@@ -199,7 +212,7 @@ export function BlockPageCard({
       </Title>
       <Text size="sm" c="dimmed" mb="md">
         What clients get for a blocked domain. Redirect mode points blocked web requests at the
-        filter node's block-page listener. Mode changes take effect on the next bundle compile;
+        filter node's block-page listener. Saving publishes the mode/redirect target immediately;
         branding updates apply within a minute.
       </Text>
 
@@ -356,7 +369,11 @@ export function BlockPageCard({
 
         {canEdit && (
           <Group>
-            <Button onClick={save} loading={upsert.isPending} disabled={missingRedirectIp}>
+            <Button
+              onClick={save}
+              loading={upsert.isPending || compileBundle.isPending}
+              disabled={missingRedirectIp}
+            >
               Save block page
             </Button>
           </Group>

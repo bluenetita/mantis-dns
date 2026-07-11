@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+from typing import Callable
 from urllib.parse import urlparse, urlunparse
 
 _BLOCKED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
@@ -105,8 +106,10 @@ def check_probe_target_safe(host: str) -> None:
             )
 
 
-def _safe_resolved_ips(host: str) -> list[tuple[socket.AddressFamily, str]]:
-    """Resolves *host*, returning (family, ip) pairs that pass the blocklist.
+def _safe_resolved_ips(
+    host: str, is_blocked: Callable[[str], bool] = _ip_is_blocked
+) -> list[tuple[socket.AddressFamily, str]]:
+    """Resolves *host*, returning (family, ip) pairs that pass *is_blocked*.
 
     Raises ValueError if resolution fails or every address is blocked.
     """
@@ -118,10 +121,10 @@ def _safe_resolved_ips(host: str) -> list[tuple[socket.AddressFamily, str]]:
     safe = [
         (family, str(sockaddr[0]))
         for family, _type, _proto, _canon, sockaddr in infos
-        if not _ip_is_blocked(str(sockaddr[0]))
+        if not is_blocked(str(sockaddr[0]))
     ]
     if not safe:
-        raise ValueError(f"host {host!r} resolves only to private/reserved addresses")
+        raise ValueError(f"host {host!r} resolves only to blocked addresses")
     return safe
 
 
@@ -165,6 +168,88 @@ def check_url_safe(url: str) -> None:
         raise ValueError("URL has no host component")
 
     check_host_safe(host)
+
+
+def check_webhook_url_safe(url: str) -> None:
+    """Raise ValueError if *url* is unsafe as a SIEM webhook target.
+
+    Deliberately narrower than `check_url_safe`: SIEM webhooks are an
+    admin-only, credential-bearing config (same trust tier as a DB or DHCP
+    upstream), and the target is very often a self-hosted SIEM (e.g. Wazuh)
+    on a private/RFC-1918 address on the same network as the control plane —
+    the exact case `check_url_safe` exists to reject for arbitrary
+    lower-trust fetches (see design.md §20 wazuh integration notes). Only
+    loopback and link-local/cloud-metadata addresses are blocked, matching
+    `check_probe_target_safe`'s reasoning above.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception as exc:
+        raise ValueError(f"unparseable URL: {exc}") from exc
+
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(
+            f"URL scheme {parsed.scheme!r} is not allowed; only http and https are permitted"
+        )
+
+    host = parsed.hostname
+    if not host:
+        raise ValueError("URL has no host component")
+
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+
+    if literal is not None:
+        if _ip_is_loopback_or_metadata(str(literal)):
+            raise ValueError(f"URL host {host!r} is a loopback or link-local/metadata address")
+        return
+
+    _safe_resolved_ips(host, is_blocked=_ip_is_loopback_or_metadata)
+
+
+def resolve_pinned_webhook_url(url: str) -> tuple[str, str]:
+    """Like `resolve_pinned_url`, but for SIEM webhook targets — see
+    `check_webhook_url_safe` for why the blocklist is narrower here."""
+    try:
+        parsed = urlparse(url)
+    except Exception as exc:
+        raise ValueError(f"unparseable URL: {exc}") from exc
+
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(
+            f"URL scheme {parsed.scheme!r} is not allowed; only http and https are permitted"
+        )
+
+    host = parsed.hostname
+    if not host:
+        raise ValueError("URL has no host component")
+
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+
+    if literal is not None:
+        if _ip_is_loopback_or_metadata(str(literal)):
+            raise ValueError(f"URL host {host!r} is a loopback or link-local/metadata address")
+        return url, host
+
+    family, ip_str = _safe_resolved_ips(host, is_blocked=_ip_is_loopback_or_metadata)[0]
+    pinned_host = f"[{ip_str}]" if family == socket.AF_INET6 else ip_str
+
+    userinfo = ""
+    if parsed.username:
+        userinfo = parsed.username
+        if parsed.password:
+            userinfo += f":{parsed.password}"
+        userinfo += "@"
+    port_part = f":{parsed.port}" if parsed.port else ""
+    new_netloc = f"{userinfo}{pinned_host}{port_part}"
+
+    pinned_url = urlunparse(parsed._replace(netloc=new_netloc))
+    return pinned_url, host
 
 
 def resolve_pinned_url(url: str) -> tuple[str, str]:
