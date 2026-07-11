@@ -50,6 +50,11 @@ ingress:
   tls:
     enabled: false
     secretName: ""
+  # ingress.yaml refuses to render a plaintext (no-TLS) ingress unless this is
+  # explicitly set — an admin session cookie and CSRF token going out over
+  # unencrypted HTTP is exactly the kind of thing that shouldn't be a silent
+  # default. Set true only for a deliberately internal-only/dev ingress.
+  allowInsecure: false
 
 # Secret containing: MANTIS_INTERNAL_TOKEN, MANTIS_SERVICE_TOKEN,
 # MANTIS_JWT_SECRET, MANTIS_WEBHOOK_SECRET_KEY, ADMIN_PASSWORD.

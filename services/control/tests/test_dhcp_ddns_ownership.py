@@ -137,3 +137,30 @@ def test_delete_does_not_remove_record_owned_by_a_different_client(db, zone):
     db.commit()
 
     assert _get_record(db, zone.id) is not None
+
+
+def test_upsert_with_blank_mac_does_not_repoint_owned_record(db, zone):
+    """A lease event missing HWADDR (blank mac) must be treated as an
+    unverifiable, different owner — not as "skip the ownership check"."""
+    _upsert_a_record(db, _scope(zone.id), "printer", "10.0.0.5", MAC_A)
+    db.commit()
+
+    _upsert_a_record(db, _scope(zone.id), "printer", "10.0.0.66", None)
+    db.commit()
+
+    rec = _get_record(db, zone.id)
+    assert rec.data == "10.0.0.5"          # untouched
+    assert rec.ddns_owner_mac == MAC_A     # ownership unchanged
+
+
+def test_delete_with_blank_mac_does_not_remove_any_record(db, zone):
+    """An expire/delete event without a mac can't prove ownership, so it must
+    not delete anything — not a DDNS-owned record, and not a record created
+    by hand through the zone API (ddns_owner_mac NULL) either."""
+    _upsert_a_record(db, _scope(zone.id), "printer", "10.0.0.5", MAC_A)
+    db.commit()
+
+    _delete_a_record(db, _scope(zone.id), "printer", "10.0.0.5", None)
+    db.commit()
+
+    assert _get_record(db, zone.id) is not None

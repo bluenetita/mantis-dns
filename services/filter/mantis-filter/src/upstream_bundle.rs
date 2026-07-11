@@ -50,7 +50,7 @@ use serde::Deserialize;
 use tracing::{debug, info, warn};
 
 use crate::health_monitor::HealthStore;
-use crate::Forwarder;
+use crate::{Forwarder, TtlPolicy};
 
 // ── Bundle JSON types ──────────────────────────────────────────────────────────
 
@@ -370,6 +370,17 @@ impl Forwarder for UpstreamBundleForwarder {
                 warn!("no resolver built for {resolver_id}, using fallback");
                 self.lookup_via_fallback(qname, qtype).await
             }
+        }
+    }
+
+    fn ttl_policy(&self) -> TtlPolicy {
+        match self.store.current() {
+            Some(bundle) => TtlPolicy {
+                min_ttl_s: bundle.tenant_policy.min_ttl_s,
+                max_ttl_s: bundle.tenant_policy.max_ttl_s,
+                negative_ttl_s: bundle.tenant_policy.negative_ttl_s,
+            },
+            None => TtlPolicy::default(),
         }
     }
 }

@@ -22,6 +22,20 @@ set -euo pipefail
 
 ENV_FILE="${MANTIS_ENV_FILE:-/etc/mantis/wazuh-integration.env}"
 if [[ -f "$ENV_FILE" ]]; then
+    # This file is `source`d, i.e. executed as shell — README.md says to
+    # chmod 600 it, but nothing here ever verified that before now. If that
+    # permission is ever misapplied (a bad deploy script, a package
+    # reinstall resetting perms, etc.), anyone who can write to a
+    # group/other-writable env file gets arbitrary shell execution as
+    # whatever user runs this wodle.
+    perms="$(stat -c '%a' "$ENV_FILE" 2>/dev/null)" || {
+        echo "run-mantis-pull: cannot stat $ENV_FILE" >&2
+        exit 1
+    }
+    if [[ "${perms: -2}" != "00" ]]; then
+        echo "run-mantis-pull: refusing to source $ENV_FILE — mode $perms is group/other-accessible (expected 600)" >&2
+        exit 1
+    fi
     # shellcheck disable=SC1090
     source "$ENV_FILE"
 else

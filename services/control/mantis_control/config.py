@@ -28,12 +28,21 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Dev-only defaults. Never used when MANTIS_ENV=production
+# Dev-only defaults. Never used outside a recognized dev environment
 # (_check_production_secrets below refuses to boot if any are still active).
 JWT_DEV_SECRET = "dev-insecure-secret-change-me"
 WEBHOOK_DEV_KEY_MATERIAL = "dev-insecure-webhook-key-change-me"
 INTERNAL_TOKEN_DEV_DEFAULT = "dev-insecure-internal-token"
 ADMIN_PASSWORD_DEV_DEFAULT = "change-me-now"
+
+# MANTIS_ENV values that opt OUT of the secure-secrets gate below. Deliberately
+# an allow-list rather than checking `MANTIS_ENV == "production"`: the old
+# exact-match check meant a typo'd or unrecognized value (e.g. "prod", "prd",
+# a stray space) silently landed on the "not production" branch and left dev
+# secrets active with zero warning. Anything not explicitly listed here now
+# gets the full secure-secrets check — including "staging" and other
+# not-quite-production labels, which should be held to the same bar.
+_DEV_ENV_VALUES = {"", "development", "dev", "local", "test"}
 
 
 class Settings(BaseSettings):
@@ -66,7 +75,10 @@ class Settings(BaseSettings):
 
     @property
     def is_production(self) -> bool:
-        return self.MANTIS_ENV.lower() == "production"
+        """True for anything other than a recognized dev/test label — see
+        _DEV_ENV_VALUES. Named `is_production` because that's the common
+        case, but really means "hold this deployment to the secure bar"."""
+        return self.MANTIS_ENV.strip().lower() not in _DEV_ENV_VALUES
 
     @property
     def cors_origins(self) -> list[str]:
@@ -81,10 +93,11 @@ settings = Settings()
 
 
 def _check_production_secrets() -> None:
-    """Refuse to start when MANTIS_ENV=production but dev-default secrets are
-    in use. Runs at import time (below) rather than only from the FastAPI
-    lifespan, so every entrypoint that touches mantis_control — the server,
-    alembic, a future CLI/worker — gets the same guarantee."""
+    """Refuse to start when MANTIS_ENV isn't a recognized dev/test label (see
+    _DEV_ENV_VALUES) but dev-default secrets are still in use. Runs at import
+    time (below) rather than only from the FastAPI lifespan, so every
+    entrypoint that touches mantis_control — the server, alembic, a future
+    CLI/worker — gets the same guarantee."""
     if not settings.is_production:
         return
     errors: list[str] = []
@@ -132,8 +145,8 @@ def _check_production_secrets() -> None:
             )
     if errors:
         raise RuntimeError(
-            "Refusing to start: MANTIS_ENV=production but insecure secrets detected: "
-            + "; ".join(errors)
+            f"Refusing to start: MANTIS_ENV={settings.MANTIS_ENV!r} is not a recognized "
+            "dev/test value but insecure secrets were detected: " + "; ".join(errors)
         )
 
 

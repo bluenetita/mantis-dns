@@ -3,6 +3,15 @@ server {
     server_name _;
     root /usr/share/nginx/html;
 
+    # Baseline hardening for the admin UI: no framing (clickjacking), no
+    # content-type sniffing, and a same-origin-only script/connect policy —
+    # the SPA only ever loads its own bundled JS (see index.html), so 'self'
+    # covers the real usage without needing 'unsafe-inline' for scripts.
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'" always;
+
     location /api/ {
         proxy_pass http://${CONTROL_UPSTREAM}/api/;
         proxy_set_header Host $host;
@@ -11,7 +20,22 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # /docs, /redoc, /openapi.json expose the full API schema (every endpoint,
+    # every parameter shape) — used to be proxied with no auth gate at all, so
+    # anyone who could reach the UI could pull it. auth_request re-checks the
+    # caller's session cookie against the control plane's own /auth/me before
+    # letting the subrequest through (see SettingsPage.tsx, which links here
+    # for logged-in admins).
+    location = /_docs_auth_check {
+        internal;
+        proxy_pass http://${CONTROL_UPSTREAM}/api/v1/auth/me;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Host $host;
+    }
+
     location ~ ^/(docs|redoc|openapi\.json)$ {
+        auth_request /_docs_auth_check;
         proxy_pass http://${CONTROL_UPSTREAM}$request_uri;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

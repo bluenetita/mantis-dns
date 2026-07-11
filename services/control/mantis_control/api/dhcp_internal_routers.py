@@ -129,7 +129,7 @@ def _upsert_a_record(db: Session, scope: DhcpScope, hostname: str, ip: str, mac:
         if existing.ddns_owner_mac is None:
             log.info("DDNS update for %s/%s ignored: record was not created via DDNS", zone.name, name)
             return
-        if mac and existing.ddns_owner_mac != mac:
+        if existing.ddns_owner_mac != mac:
             log.warning(
                 "DDNS update for %s/%s ignored: owned by a different client (%s != %s)",
                 zone.name, name, existing.ddns_owner_mac, mac,
@@ -160,17 +160,23 @@ def _delete_a_record(db: Session, scope: DhcpScope, hostname: str, ip: str, mac:
     if not name:
         return
 
+    if not mac:
+        # Without a mac we can't verify ownership at all — refuse to delete
+        # anything rather than matching on zone/name/ip alone, which would
+        # let a blank-mac expire event remove another client's DDNS record,
+        # or even a record created by hand through the zone API (ip reuse
+        # across clients is common enough on DHCP networks).
+        return
+
     filters = [
         DnsRecord.zone_id == zone.id,
         DnsRecord.name == name,
         DnsRecord.record_type == "A",
         DnsRecord.data == ip,
+        # Don't let a different client's expire/delete event remove a record
+        # it doesn't own even if it somehow supplied the matching ip.
+        DnsRecord.ddns_owner_mac == mac,
     ]
-    if mac:
-        # Extra defense-in-depth alongside the ip match above: don't let a
-        # different client's expire/delete event remove a record it doesn't
-        # own even if it somehow supplied the matching ip.
-        filters.append(DnsRecord.ddns_owner_mac == mac)
 
     deleted = db.query(DnsRecord).filter(*filters).delete()
     if deleted:

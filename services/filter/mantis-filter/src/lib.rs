@@ -52,6 +52,43 @@ use tracing::{debug, info, warn};
 
 pub type DotResolver = Resolver<TokioConnectionProvider>;
 
+/// How long to float/cap a positive answer's TTL, and how long to cache a
+/// negative (NXDOMAIN/NODATA) result. `UpstreamBundleForwarder` overrides
+/// this from the tenant's `UpstreamBundle.tenant_policy`; forwarders with no
+/// notion of a tenant policy (e.g. `DotForwarder`) get sane fixed defaults.
+#[derive(Clone, Copy, Debug)]
+pub struct TtlPolicy {
+    pub min_ttl_s: u32,
+    /// 0 means "no cap" (mirrors the `ttl_seconds` convention in
+    /// `apply_block_response`: 0 = unset, fall back to a default).
+    pub max_ttl_s: u32,
+    /// 0 means "use the fixed default" rather than "cache negatives for 0s"
+    /// — an operator leaving this unset shouldn't silently disable negative
+    /// caching altogether.
+    pub negative_ttl_s: u32,
+}
+
+impl Default for TtlPolicy {
+    fn default() -> Self {
+        Self { min_ttl_s: 0, max_ttl_s: 0, negative_ttl_s: 60 }
+    }
+}
+
+impl TtlPolicy {
+    fn clamp_positive(&self, ttl: u32) -> u32 {
+        let ttl = ttl.max(self.min_ttl_s);
+        if self.max_ttl_s > 0 {
+            ttl.min(self.max_ttl_s)
+        } else {
+            ttl
+        }
+    }
+
+    fn negative_ttl(&self) -> u32 {
+        if self.negative_ttl_s > 0 { self.negative_ttl_s } else { 60 }
+    }
+}
+
 /// Abstraction over upstream resolution. Returns the full answer-section record
 /// set for any qtype so the filter node forwards AAAA, MX, TXT, PTR, etc.
 /// exactly as received from the upstream resolver.
@@ -67,6 +104,10 @@ pub trait Forwarder: Send + Sync {
         qtype: RecordType,
         categories: &[String],
     ) -> Result<Vec<Record>>;
+
+    fn ttl_policy(&self) -> TtlPolicy {
+        TtlPolicy::default()
+    }
 }
 
 pub struct DotForwarder(DotResolver);
@@ -365,9 +406,19 @@ pub async fn zone_refresh_loop(
 
 // ── UDP server ─────────────────────────────────────────────────────────────────
 
+/// Maximum UDP queries answered concurrently. Without this bound, a single
+/// slow query (upstream resolution to a black-holed/slow nameserver) used to
+/// stall the one `recv_from` loop for its full timeout — a handful of such
+/// queries per second was enough to starve every other client on the node.
+/// Excess queries beyond this bound are dropped rather than queued; the
+/// client's stub resolver retries or falls back to TCP.
+pub(crate) const MAX_CONCURRENT_UDP_QUERIES: usize = 2000;
+
 pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<()> {
     let local_addr = socket.local_addr()?;
     info!("mantis-filter UDP DNS listener bound on {local_addr}");
+    let socket = Arc::new(socket);
+    let sem = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_UDP_QUERIES));
     let mut buf = [0u8; 4096];
 
     loop {
@@ -380,25 +431,39 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
             }
         };
 
-        let bundle = state.store.current();
-        let response = build_response(
-            &query,
-            bundle.as_deref(),
-            &state.zones,
-            peer.ip(),
-            &state.cache,
-            state.forwarder.as_ref(),
-            &state.telemetry,
-        )
-        .await;
-        match response.to_bytes() {
-            Ok(bytes) => {
-                if let Err(e) = socket.send_to(&bytes, peer).await {
-                    warn!("UDP send_to {peer} failed: {e}");
-                }
+        let permit = match sem.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                debug!(
+                    "UDP concurrency limit ({MAX_CONCURRENT_UDP_QUERIES}) reached, dropping query from {peer}"
+                );
+                continue;
             }
-            Err(e) => warn!("failed to encode UDP response for {peer}: {e}"),
-        }
+        };
+        let state = state.clone();
+        let socket = socket.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            let bundle = state.store.current();
+            let response = build_response(
+                &query,
+                bundle.as_deref(),
+                &state.zones,
+                peer.ip(),
+                &state.cache,
+                state.forwarder.as_ref(),
+                &state.telemetry,
+            )
+            .await;
+            match response.to_bytes() {
+                Ok(bytes) => {
+                    if let Err(e) = socket.send_to(&bytes, peer).await {
+                        warn!("UDP send_to {peer} failed: {e}");
+                    }
+                }
+                Err(e) => warn!("failed to encode UDP response for {peer}: {e}"),
+            }
+        });
     }
 }
 
@@ -664,7 +729,10 @@ fn apply_block_response(bundle: &Bundle, qname: &str, qtype: RecordType, respons
 }
 
 /// Resolves any qtype through the cache then forwarder. Returns `true` on
-/// cache hit. Propagates NXDOMAIN vs NODATA correctly.
+/// cache hit. Propagates NXDOMAIN vs NODATA correctly. Caches negative
+/// (NXDOMAIN/NODATA) results too — without this, a flood of queries for
+/// random non-existent subdomains never hits the cache and forces an
+/// upstream round-trip on every single packet.
 async fn resolve_records(
     qname: &str,
     qtype: RecordType,
@@ -675,17 +743,29 @@ async fn resolve_records(
 ) -> bool {
     let qtype_u16 = u16::from(qtype);
 
-    if let Some(records) = cache.get(qname, qtype_u16) {
-        response.set_response_code(ResponseCode::NoError);
-        for rec in records {
-            response.add_answer(rec);
+    if let Some(hit) = cache.get(qname, qtype_u16) {
+        match hit {
+            cache::CacheLookup::Records(records) => {
+                response.set_response_code(ResponseCode::NoError);
+                for rec in records {
+                    response.add_answer(rec);
+                }
+            }
+            cache::CacheLookup::Negative(cache::NegativeKind::NxDomain) => {
+                response.set_response_code(ResponseCode::NXDomain);
+            }
+            cache::CacheLookup::Negative(cache::NegativeKind::NoData) => {
+                response.set_response_code(ResponseCode::NoError);
+            }
         }
         return true;
     }
 
+    let policy = forwarder.ttl_policy();
     match forwarder.lookup(qname, qtype, categories).await {
         Ok(records) => {
-            let ttl = records.iter().map(|r| r.ttl()).min().unwrap_or(60);
+            let raw_ttl = records.iter().map(|r| r.ttl()).min().unwrap_or(60);
+            let ttl = policy.clamp_positive(raw_ttl);
             cache.put(
                 qname.to_string(),
                 qtype_u16,
@@ -707,10 +787,22 @@ async fn resolve_records(
             match resolve_err {
                 Some(re) if re.is_nx_domain() => {
                     response.set_response_code(ResponseCode::NXDomain);
+                    cache.put_negative(
+                        qname.to_string(),
+                        qtype_u16,
+                        cache::NegativeKind::NxDomain,
+                        Duration::from_secs(u64::from(policy.negative_ttl())),
+                    );
                 }
                 Some(re) if re.is_no_records_found() => {
                     // NODATA: name exists, no records of this type.
                     response.set_response_code(ResponseCode::NoError);
+                    cache.put_negative(
+                        qname.to_string(),
+                        qtype_u16,
+                        cache::NegativeKind::NoData,
+                        Duration::from_secs(u64::from(policy.negative_ttl())),
+                    );
                 }
                 _ => {
                     debug!("upstream resolution failed for {qname} ({qtype:?}): {e}");

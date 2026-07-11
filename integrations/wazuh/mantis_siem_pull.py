@@ -36,6 +36,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -101,14 +102,14 @@ def run(args: argparse.Namespace) -> int:
     total = 0
     pages = 0
     while True:
-        params = [f"limit={args.limit}", "format=json"]
+        params = {"limit": args.limit, "format": "json"}
         if cursor:
-            params.append(f"after_id={cursor}")
+            params["after_id"] = cursor
         if args.tenant_id:
-            params.append(f"tenant_id={args.tenant_id}")
+            params["tenant_id"] = args.tenant_id
         if args.decision:
-            params.append(f"decision={args.decision}")
-        url = f"{api_base}/siem/events?{'&'.join(params)}"
+            params["decision"] = args.decision
+        url = f"{api_base}/siem/events?{urllib.parse.urlencode(params)}"
 
         try:
             page = _get_json(url, token)

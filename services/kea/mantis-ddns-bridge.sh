@@ -24,11 +24,27 @@
 CTRL_URL="${MANTIS_CTRL_URL:-http://control:8000}"
 TOKEN="${MANTIS_INTERNAL_TOKEN:-}"
 
+# Every field below (hostname in particular) comes straight from a DHCP
+# client's own option data — fully attacker-controlled. Building JSON by hand
+# with string interpolation let a hostname containing a stray `"` inject
+# extra keys (e.g. a second "ip") that clobber the ones set here, since
+# json.loads keeps the last occurrence of a duplicate key. `jq -n --arg`
+# escapes each value properly regardless of content, so a malicious hostname
+# can only ever end up as the value of the "hostname" key.
 _post() {
+    event="$1" addr="$2" hostname="$3" hwaddr="$4" subnet_id="$5"
+    payload="$(jq -nc \
+        --arg event "${event}" \
+        --arg ip "${addr}" \
+        --arg hostname "${hostname}" \
+        --arg mac "${hwaddr}" \
+        --argjson subnet_id "${subnet_id:-0}" \
+        '{event:$event, ip:$ip, hostname:$hostname, mac:$mac, subnet_id:$subnet_id}' \
+        2>/dev/null)" || return 0
     curl -sf -X POST "${CTRL_URL}/api/v1/internal/dhcp-event" \
         -H "Content-Type: application/json" \
         -H "X-Internal-Token: ${TOKEN}" \
-        -d "$1" >/dev/null 2>&1 || true
+        -d "${payload}" >/dev/null 2>&1 || true
 }
 
 case "${CALLOUT_NAME}" in
@@ -42,7 +58,7 @@ case "${CALLOUT_NAME}" in
             eval "STATE=\${LEASES4_AT${N}_STATE}"
             # State 0 = active; only create DDNS records for live leases
             if [ "${STATE}" = "0" ] && [ -n "${HOSTNAME}" ] && [ -n "${ADDR}" ]; then
-                _post "{\"event\":\"add\",\"ip\":\"${ADDR}\",\"hostname\":\"${HOSTNAME}\",\"mac\":\"${HWADDR}\",\"subnet_id\":${SUBNET_ID:-0}}"
+                _post "add" "${ADDR}" "${HOSTNAME}" "${HWADDR}" "${SUBNET_ID:-0}"
             fi
             N=$((N + 1))
         done
@@ -52,7 +68,7 @@ case "${CALLOUT_NAME}" in
         HOSTNAME="${LEASE4_HOSTNAME:-}"
         HWADDR="${LEASE4_HWADDR:-}"
         if [ -n "${HOSTNAME}" ] && [ -n "${ADDR}" ]; then
-            _post "{\"event\":\"expire\",\"ip\":\"${ADDR}\",\"hostname\":\"${HOSTNAME}\",\"mac\":\"${HWADDR}\",\"subnet_id\":${LEASE4_SUBNET_ID:-0}}"
+            _post "expire" "${ADDR}" "${HOSTNAME}" "${HWADDR}" "${LEASE4_SUBNET_ID:-0}"
         fi
         ;;
     lease4_recover)
@@ -61,7 +77,7 @@ case "${CALLOUT_NAME}" in
         HOSTNAME="${LEASE4_HOSTNAME:-}"
         HWADDR="${LEASE4_HWADDR:-}"
         if [ -n "${HOSTNAME}" ] && [ -n "${ADDR}" ]; then
-            _post "{\"event\":\"add\",\"ip\":\"${ADDR}\",\"hostname\":\"${HOSTNAME}\",\"mac\":\"${HWADDR}\",\"subnet_id\":${LEASE4_SUBNET_ID:-0}}"
+            _post "add" "${ADDR}" "${HOSTNAME}" "${HWADDR}" "${LEASE4_SUBNET_ID:-0}"
         fi
         ;;
 esac

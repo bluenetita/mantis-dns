@@ -24,11 +24,18 @@ from mantis_control.api.auth_routers import UserCreate, UserUpdate, create_user,
 from mantis_control.db import models
 
 
-def test_require_service_token_open_when_unset(monkeypatch):
-    """Dev default: no MANTIS_SERVICE_TOKEN configured -> endpoint stays open."""
+def test_require_service_token_rejects_everything_when_unset(monkeypatch):
+    """An unconfigured MANTIS_SERVICE_TOKEN must fail closed, not open — these
+    M2M endpoints (bundle/routing-table/public-key/query-events) would
+    otherwise be reachable by anyone on the network in any deployment that
+    forgot to set the token."""
     monkeypatch.setattr(auth.settings, "MANTIS_SERVICE_TOKEN", "")
-    auth.require_service_token(authorization=None)
-    auth.require_service_token(authorization="Bearer anything")
+    with pytest.raises(HTTPException) as exc:
+        auth.require_service_token(authorization=None)
+    assert exc.value.status_code == 403
+    with pytest.raises(HTTPException) as exc:
+        auth.require_service_token(authorization="Bearer anything")
+    assert exc.value.status_code == 403
 
 
 def test_require_service_token_rejects_missing_header(monkeypatch):

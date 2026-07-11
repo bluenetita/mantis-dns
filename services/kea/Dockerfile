@@ -4,11 +4,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     gnupg \
+    jq \
     postgresql-client \
     lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -1sLf 'https://dl.cloudsmith.io/public/isc/kea-3-0/setup.deb.sh' | bash \
+# Cloudsmith's bootstrap script is generated per-distro/version server-side,
+# so there's no fixed release artifact to pin a checksum against — but
+# piping curl straight into bash means a failed/truncated download (or a
+# MITM'd/downgraded connection) executes whatever bytes arrive, silently, as
+# root. Download to a file first so a bad response fails loudly instead;
+# --proto/--tlsv1.2 rule out a protocol downgrade.
+RUN kea_setup_script="$(mktemp)" \
+    && curl -fsSL --proto '=https' --tlsv1.2 \
+        'https://dl.cloudsmith.io/public/isc/kea-3-0/setup.deb.sh' \
+        -o "$kea_setup_script" \
+    && [ -s "$kea_setup_script" ] \
+    && head -c2 "$kea_setup_script" | grep -q '^#!' \
+    && bash "$kea_setup_script" \
+    && rm -f "$kea_setup_script" \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
         isc-kea-dhcp4 \

@@ -320,10 +320,17 @@ pub async fn run_router_tcp_server(listener: TcpListener, router: Arc<TenantRout
 }
 
 /// Binds a single shared UDP DNS listener and routes each query to the
-/// tenant matching the peer's source IP.
+/// tenant matching the peer's source IP. Spawns one task per query, bounded
+/// by `MAX_CONCURRENT_UDP_QUERIES` (see lib.rs) — the same fix as
+/// `run_udp_server`: a single serial `recv_from` loop that awaits upstream
+/// resolution in-line lets a handful of slow/black-holed queries stall DNS
+/// service for every tenant sharing this listener.
 pub async fn run_router_udp_server(socket: UdpSocket, router: Arc<TenantRouter>) -> Result<()> {
     let local_addr = socket.local_addr()?;
     info!("mantis-filter multi-tenant DNS listener bound on {local_addr}");
+    let socket = Arc::new(socket);
+    let sem = Arc::new(tokio::sync::Semaphore::new(crate::MAX_CONCURRENT_UDP_QUERIES));
+    let empty_zones: Arc<ZoneStore> = Arc::new(ZoneStore::empty());
     let mut buf = [0u8; 4096];
 
     loop {
@@ -336,31 +343,45 @@ pub async fn run_router_udp_server(socket: UdpSocket, router: Arc<TenantRouter>)
             }
         };
 
+        let permit = match sem.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                debug!(
+                    "UDP concurrency limit ({}) reached, dropping query from {peer}",
+                    crate::MAX_CONCURRENT_UDP_QUERIES
+                );
+                continue;
+            }
+        };
+
         let matched = router.match_route(peer.ip());
         if matched.is_none() {
             debug!("no tenant route matched source IP {}", peer.ip());
         }
         let bundle = matched.as_ref().and_then(|(s, _)| s.current());
-        let empty_zones = ZoneStore::empty();
-        let zones = matched.as_ref().map(|(_, z)| z.as_ref()).unwrap_or(&empty_zones);
-
-        let response = build_response(
-            &query,
-            bundle.as_deref(),
-            zones,
-            peer.ip(),
-            &router.cache,
-            router.forwarder.as_ref(),
-            &router.telemetry,
-        )
-        .await;
-        match response.to_bytes() {
-            Ok(bytes) => {
-                if let Err(e) = socket.send_to(&bytes, peer).await {
-                    warn!("send_to {peer} failed: {e}");
+        let zones = matched.map(|(_, z)| z).unwrap_or_else(|| empty_zones.clone());
+        let router = router.clone();
+        let socket = socket.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            let response = build_response(
+                &query,
+                bundle.as_deref(),
+                &zones,
+                peer.ip(),
+                &router.cache,
+                router.forwarder.as_ref(),
+                &router.telemetry,
+            )
+            .await;
+            match response.to_bytes() {
+                Ok(bytes) => {
+                    if let Err(e) = socket.send_to(&bytes, peer).await {
+                        warn!("send_to {peer} failed: {e}");
+                    }
                 }
+                Err(e) => warn!("failed to encode response for {peer}: {e}"),
             }
-            Err(e) => warn!("failed to encode response for {peer}: {e}"),
-        }
+        });
     }
 }

@@ -84,13 +84,20 @@ def clear_auth_cookies(response: Response) -> None:
 
 # Shared secret authenticating filter-node -> control-plane machine calls
 # (/public-key, /routing-table, /local-zones, /groups/{id}/bundle GET,
-# /upstream-bundle/{id}, /query-events). Empty by default: these endpoints
-# predate auth and stay open.
+# /upstream-bundle/{id}, /query-events). Fails closed when unset: an
+# unconfigured MANTIS_SERVICE_TOKEN used to be treated as "this deployment
+# hasn't turned auth on yet" and let the check pass unconditionally — any
+# install that forgot to set it (anything not labeled MANTIS_ENV=production)
+# left compiled policy bundles, zone data, the signing public key, and the
+# telemetry-ingest endpoint open to anyone on the network. Set a real token
+# (see .env.example) even for local/dev use.
 def require_service_token(authorization: str | None = Header(None)) -> None:
-    if not settings.MANTIS_SERVICE_TOKEN:
-        return
     token = authorization.removeprefix("Bearer ") if authorization else None
-    if not token or not hmac.compare_digest(token, settings.MANTIS_SERVICE_TOKEN):
+    if (
+        not token
+        or not settings.MANTIS_SERVICE_TOKEN
+        or not hmac.compare_digest(token, settings.MANTIS_SERVICE_TOKEN)
+    ):
         raise HTTPException(403, "invalid or missing service token")
 
 

@@ -1,4 +1,7 @@
 {{- if .Values.ingress.enabled }}
+{{- if and (not .Values.ingress.tls.enabled) (not .Values.ingress.allowInsecure) }}
+{{- fail "ingress.enabled is true but ingress.tls.enabled is false: this would serve the admin UI (session cookie + CSRF token) over plaintext HTTP. Set ingress.tls.enabled=true with a valid secretName, or ingress.allowInsecure=true to acknowledge this is intentional (e.g. a purely internal ingress)." }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

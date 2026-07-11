@@ -89,9 +89,17 @@ jobs:
         run: cross build --release -p mantis-filter --target ${{ matrix.target }}
 
       - name: Install nfpm
+        # Pinned to the published checksum for this exact release asset
+        # (github.com/goreleaser/nfpm/releases/download/v2.40.0/checksums.txt)
+        # instead of installing whatever bytes curl happens to return —
+        # this used to dpkg -i an unverified .deb as root with no integrity
+        # check at all.
+        env:
+          NFPM_DEB_SHA256: fbfba0c289267aaf8cbb6481d2b4efb84323d384df57cf9106b8c17e0b65d629
         run: |
-          curl -sSLo /tmp/nfpm.deb \
+          curl -sSLo /tmp/nfpm.deb --proto '=https' --tlsv1.2 \
             https://github.com/goreleaser/nfpm/releases/download/v2.40.0/nfpm_2.40.0_amd64.deb
+          echo "${NFPM_DEB_SHA256}  /tmp/nfpm.deb" | sha256sum -c -
           sudo dpkg -i /tmp/nfpm.deb
 
       - name: Package .deb

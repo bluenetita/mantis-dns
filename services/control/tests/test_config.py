@@ -36,6 +36,25 @@ def test_non_production_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     config._check_production_secrets()  # all dev defaults, but not production
 
 
+@pytest.mark.parametrize("value", ["development", "dev", "local", "test", "DEVELOPMENT", " dev "])
+def test_recognized_dev_labels_never_raise(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setattr(config.settings, "MANTIS_ENV", value)
+    config._check_production_secrets()  # all dev defaults, but a recognized dev label
+
+
+@pytest.mark.parametrize("value", ["prod", "prd", "Production", " production", "staging"])
+def test_unrecognized_or_mistyped_env_value_is_treated_as_production(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """A typo'd or unlisted MANTIS_ENV value (e.g. "prod" instead of
+    "production") must be treated as production and fail the secure-secrets
+    gate — not silently fall through to "not production" and leave dev
+    secrets active with zero warning."""
+    monkeypatch.setattr(config.settings, "MANTIS_ENV", value)
+    with pytest.raises(RuntimeError):
+        config._check_production_secrets()
+
+
 def test_production_with_all_dev_defaults_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config.settings, "MANTIS_ENV", "production")
     with pytest.raises(RuntimeError) as exc_info:

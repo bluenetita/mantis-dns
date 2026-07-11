@@ -21,6 +21,15 @@ spec:
         - name: control
           image: "{{ .Values.image.registry }}-control:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Dockerfile.prod already creates and switches to a non-root
+          # "mantis" user, so runAsNonRoot doesn't need an explicit
+          # runAsUser to pass admission. No capability is needed at all —
+          # this listens on an unprivileged app port.
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: {{ .Values.control.port }}
           env:

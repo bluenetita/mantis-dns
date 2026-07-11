@@ -25,7 +25,7 @@ pub mod gen {
 pub use gen::{Action, BlockMode, BlockResponse, Bundle, CategorySet, FailurePolicy};
 
 use anyhow::{bail, Result};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use prost::Message;
 
 #[derive(thiserror::Error, Debug)]
@@ -38,6 +38,14 @@ pub enum VerifyError {
 
 /// Verifies a bundle's ed25519 signature. The signature is computed over the
 /// serialized message with `signature` zeroed, so we clear it before re-encoding.
+///
+/// Uses `verify_strict` (not the permissive `verify`) for the same reason
+/// `upstream_bundle.rs::fetch_upstream_bundle` does: `verify` accepts
+/// non-canonical/cofactored signature encodings, which drops the SUF-CMA
+/// (strong unforgeability) guarantee — a single message could have more than
+/// one valid signature. Not exploitable into a bypass with today's single
+/// pinned key, but there's no reason to accept the weaker guarantee here
+/// when the sibling verification path already doesn't.
 pub fn verify(bundle: &Bundle, public_key: &VerifyingKey) -> Result<()> {
     if bundle.signature.len() != 64 {
         bail!(VerifyError::MissingSignature);
@@ -49,7 +57,7 @@ pub fn verify(bundle: &Bundle, public_key: &VerifyingKey) -> Result<()> {
     let bytes = unsigned.encode_to_vec();
 
     public_key
-        .verify(&bytes, &sig)
+        .verify_strict(&bytes, &sig)
         .map_err(|_| VerifyError::InvalidSignature)?;
     Ok(())
 }

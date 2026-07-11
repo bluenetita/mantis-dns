@@ -27,9 +27,29 @@ use std::time::{Duration, Instant};
 
 use hickory_proto::rr::Record;
 
+/// Which kind of negative answer a cached NXDOMAIN/NODATA result represents,
+/// so a cache hit can set the right response code without re-asking upstream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NegativeKind {
+    NxDomain,
+    NoData,
+}
+
+enum CacheEntryKind {
+    Records(Vec<Record>),
+    Negative(NegativeKind),
+}
+
 struct CacheEntry {
-    records: Vec<Record>,
+    kind: CacheEntryKind,
     expires_at: Instant,
+}
+
+/// Result of a cache lookup: either the cached positive records, or a
+/// negative answer (NXDOMAIN/NODATA) cached from a prior upstream response.
+pub enum CacheLookup {
+    Records(Vec<Record>),
+    Negative(NegativeKind),
 }
 
 pub struct DnsCache {
@@ -45,17 +65,20 @@ impl DnsCache {
         }
     }
 
-    pub fn get(&self, qname: &str, qtype: u16) -> Option<Vec<Record>> {
+    pub fn get(&self, qname: &str, qtype: u16) -> Option<CacheLookup> {
         let map = self.map.read().unwrap_or_else(|e| e.into_inner());
         let entry = map.get(&(qname.to_string(), qtype))?;
         if entry.expires_at <= Instant::now() {
             return None;
         }
-        Some(entry.records.clone())
+        Some(match &entry.kind {
+            CacheEntryKind::Records(records) => CacheLookup::Records(records.clone()),
+            CacheEntryKind::Negative(kind) => CacheLookup::Negative(*kind),
+        })
     }
 
-    pub fn put(&self, qname: String, qtype: u16, records: Vec<Record>, ttl: Duration) {
-        if ttl.is_zero() || records.is_empty() {
+    fn insert(&self, qname: String, qtype: u16, kind: CacheEntryKind, ttl: Duration) {
+        if ttl.is_zero() {
             return;
         }
         let mut map = self.map.write().unwrap_or_else(|e| e.into_inner());
@@ -74,10 +97,25 @@ impl DnsCache {
         map.insert(
             key,
             CacheEntry {
-                records,
+                kind,
                 expires_at: Instant::now() + ttl,
             },
         );
+    }
+
+    pub fn put(&self, qname: String, qtype: u16, records: Vec<Record>, ttl: Duration) {
+        if records.is_empty() {
+            return;
+        }
+        self.insert(qname, qtype, CacheEntryKind::Records(records), ttl);
+    }
+
+    /// Caches a negative (NXDOMAIN/NODATA) upstream answer. Without this, a
+    /// flood of queries for random non-existent subdomains ("water torture")
+    /// never hits the cache and forces an upstream round-trip on every single
+    /// packet — amplifying attacker traffic straight into the resolver pool.
+    pub fn put_negative(&self, qname: String, qtype: u16, kind: NegativeKind, ttl: Duration) {
+        self.insert(qname, qtype, CacheEntryKind::Negative(kind), ttl);
     }
 
     pub fn purge_expired(&self) {
@@ -108,8 +146,38 @@ mod tests {
             vec![rec.clone()],
             Duration::from_secs(60),
         );
-        let hit = cache.get("example.com", u16::from(RecordType::A));
-        assert_eq!(hit.unwrap().len(), 1);
+        match cache.get("example.com", u16::from(RecordType::A)) {
+            Some(CacheLookup::Records(records)) => assert_eq!(records.len(), 1),
+            other => panic!("expected a positive cache hit, got {}", other.is_some()),
+        }
+    }
+
+    #[test]
+    fn put_negative_then_get_returns_the_same_kind() {
+        let cache = DnsCache::new(10);
+        cache.put_negative(
+            "doesnotexist.example".into(),
+            u16::from(RecordType::A),
+            NegativeKind::NxDomain,
+            Duration::from_secs(60),
+        );
+        match cache.get("doesnotexist.example", u16::from(RecordType::A)) {
+            Some(CacheLookup::Negative(NegativeKind::NxDomain)) => {}
+            _ => panic!("expected a cached NXDOMAIN"),
+        }
+    }
+
+    #[test]
+    fn negative_cache_entry_expires() {
+        let cache = DnsCache::new(10);
+        cache.put_negative(
+            "doesnotexist.example".into(),
+            u16::from(RecordType::A),
+            NegativeKind::NoData,
+            Duration::from_millis(1),
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        assert!(cache.get("doesnotexist.example", u16::from(RecordType::A)).is_none());
     }
 
     #[test]

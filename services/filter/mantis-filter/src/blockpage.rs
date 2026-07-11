@@ -250,7 +250,7 @@ fn render_page(template: Option<&BlockTemplate>, domain: &str, category: Option<
     let color = sanitize_color(t.brand_color.as_deref()).unwrap_or_else(|| "#c0392b".to_string());
 
     let mut body = String::new();
-    if let Some(logo) = t.logo_url.as_deref().filter(|s| !s.is_empty()) {
+    if let Some(logo) = t.logo_url.as_deref().filter(|s| !s.is_empty()).and_then(sanitize_url) {
         body.push_str(&format!(
             "<img class=\"logo\" src=\"{}\" alt=\"\">",
             escape_html(logo)
@@ -273,7 +273,7 @@ fn render_page(template: Option<&BlockTemplate>, domain: &str, category: Option<
             ));
         }
     }
-    if let Some(url) = t.contact_url.as_deref().filter(|s| !s.is_empty()) {
+    if let Some(url) = t.contact_url.as_deref().filter(|s| !s.is_empty()).and_then(sanitize_url) {
         body.push_str(&format!(
             "<p class=\"contact\"><a href=\"{0}\">Request access or contact your administrator</a></p>",
             escape_html(url)
@@ -323,6 +323,18 @@ fn escape_html(s: &str) -> String {
     out
 }
 
+/// Only allows http(s) URLs for branding links/images. `escape_html` stops
+/// these values from breaking out of the surrounding HTML attribute, but it
+/// doesn't stop a `javascript:`/`data:` URI from still running when the
+/// visitor clicks it — this closes that off. These values come from the
+/// control plane's per-tenant branding config, so this matters only if that
+/// connection or the stored value itself is compromised.
+fn sanitize_url(url: &str) -> Option<&str> {
+    let trimmed = url.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    (lower.starts_with("http://") || lower.starts_with("https://")).then_some(trimmed)
+}
+
 /// Accepts only a simple `#rgb`/`#rrggbb` hex color so a stored brand color
 /// can't inject arbitrary CSS into the page.
 fn sanitize_color(color: Option<&str>) -> Option<String> {
@@ -368,5 +380,27 @@ mod tests {
         assert_eq!(sanitize_color(Some("#aabbcc")), Some("#aabbcc".to_string()));
         assert_eq!(sanitize_color(Some("red;}body{display:none")), None);
         assert_eq!(sanitize_color(Some("#xyz")), None);
+    }
+
+    #[test]
+    fn rejects_non_http_schemes_for_branding_urls() {
+        assert_eq!(sanitize_url("https://example.com/logo.png"), Some("https://example.com/logo.png"));
+        assert_eq!(sanitize_url("HTTP://Example.COM"), Some("HTTP://Example.COM"));
+        assert_eq!(sanitize_url("javascript:alert(1)"), None);
+        assert_eq!(sanitize_url("data:text/html,<script>alert(1)</script>"), None);
+        assert_eq!(sanitize_url("//evil.example/logo.png"), None);
+    }
+
+    #[test]
+    fn drops_javascript_scheme_logo_and_contact_url_instead_of_rendering_them() {
+        let t = BlockTemplate {
+            logo_url: Some("javascript:alert(document.cookie)".to_string()),
+            contact_url: Some("javascript:alert(1)".to_string()),
+            ..Default::default()
+        };
+        let html = render_page(Some(&t), "ads.example", None);
+        assert!(!html.contains("javascript:"));
+        assert!(!html.contains("class=\"logo\""));
+        assert!(!html.contains("class=\"contact\""));
     }
 }

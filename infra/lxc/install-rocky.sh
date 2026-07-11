@@ -203,7 +203,26 @@ install_local_kea() {
   echo "==> Installing local ISC Kea DHCP services..."
 
   if ! command -v kea-dhcp4 >/dev/null || ! command -v kea-admin >/dev/null; then
-    curl -1sLf 'https://dl.cloudsmith.io/public/isc/kea-3-0/setup.rpm.sh' | bash
+    # Cloudsmith's bootstrap script content is generated per-distro/version
+    # server-side, so there's no fixed release artifact to pin a checksum
+    # against — but piping curl straight into bash still means a failed or
+    # truncated download (or a MITM'd/downgraded connection) executes
+    # whatever bytes happen to arrive, silently, as root. Downloading to a
+    # file first lets us fail loudly on a bad/incomplete response instead,
+    # and --proto/--tlsv1.2 rule out a protocol downgrade.
+    kea_setup_script="$(mktemp)"
+    trap 'rm -f "$kea_setup_script"' RETURN
+    if ! curl -fsSL --proto '=https' --tlsv1.2 \
+        'https://dl.cloudsmith.io/public/isc/kea-3-0/setup.rpm.sh' \
+        -o "$kea_setup_script"; then
+      echo "Failed to download the Kea repo bootstrap script from Cloudsmith." >&2
+      exit 1
+    fi
+    if [ ! -s "$kea_setup_script" ] || ! head -c2 "$kea_setup_script" | grep -q '^#!'; then
+      echo "Kea repo bootstrap script is empty or doesn't look like a shell script; aborting." >&2
+      exit 1
+    fi
+    bash "$kea_setup_script"
     dnf -y install isc-kea-dhcp4 isc-kea-dhcp6 isc-kea-admin isc-kea-hooks isc-kea-pgsql
   fi
 
@@ -372,7 +391,7 @@ dnf config-manager --set-enabled crb 2>/dev/null || dnf config-manager --set-ena
 
 echo "==> Installing packages (postgresql, python3, nodejs, nginx$( [ "$INSTALL_FILTER" = "1" ] && echo ', cargo' ))..."
 dnf -y module enable nodejs:20 2>/dev/null || true
-PKGS="postgresql-server postgresql-contrib python3 python3-pip nodejs nginx gettext openssl ca-certificates curl policycoreutils-python-utils firewalld"
+PKGS="postgresql-server postgresql-contrib python3 python3-pip nodejs nginx gettext openssl ca-certificates curl jq policycoreutils-python-utils firewalld"
 if [ "$INSTALL_FILTER" = "1" ]; then
   PKGS="$PKGS cargo"
 fi
