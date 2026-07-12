@@ -29,7 +29,6 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone
-from urllib.parse import urlparse
 from typing import Any, cast
 
 import httpx
@@ -42,7 +41,6 @@ log = logging.getLogger(__name__)
 KEA_CTRL_URL = os.getenv("KEA_CTRL_URL", "http://kea:8004/")
 KEA4_CTRL_URL = os.getenv("KEA4_CTRL_URL", KEA_CTRL_URL)
 KEA6_CTRL_URL = os.getenv("KEA6_CTRL_URL", "http://kea:8006/")
-KEA_CTRL_BIND_ADDRESS = os.getenv("KEA_CTRL_BIND_ADDRESS", "0.0.0.0")
 KEA_HOOKS_DIR = os.getenv("KEA_HOOKS_DIR", "/usr/lib/kea/hooks").rstrip("/")
 
 _PG_CFG = {
@@ -79,32 +77,6 @@ def _assign_unique_kea_ids(scopes: list[DhcpScope]) -> dict[str, int]:
         used.add(candidate)
         assigned[scope.id] = candidate
     return assigned
-
-
-def _url_port(url: str, default: int) -> int:
-    parsed = urlparse(url)
-    return parsed.port or default
-
-
-def _control_sockets(kind: str) -> list[dict[str, Any]]:
-    if kind == "dhcp6":
-        return [
-            {
-                "socket-type": "http",
-                "socket-address": os.getenv("KEA6_CTRL_BIND_ADDRESS", KEA_CTRL_BIND_ADDRESS),
-                "socket-port": int(os.getenv("KEA6_CTRL_PORT", str(_url_port(KEA6_CTRL_URL, 8006)))),
-            },
-            {"socket-type": "unix", "socket-name": "/var/run/kea/kea6-ctrl-socket"},
-        ]
-
-    return [
-        {
-            "socket-type": "http",
-            "socket-address": os.getenv("KEA4_CTRL_BIND_ADDRESS", KEA_CTRL_BIND_ADDRESS),
-            "socket-port": int(os.getenv("KEA4_CTRL_PORT", str(_url_port(KEA4_CTRL_URL, 8004)))),
-        },
-        {"socket-type": "unix", "socket-name": "/var/run/kea/kea4-ctrl-socket"},
-    ]
 
 
 def _build_option_data(scope: DhcpScope, filter_node_ip: str) -> list[dict[str, Any]]:
@@ -252,9 +224,9 @@ def build_dhcp4_config(db: Session, filter_node_ip: str = "") -> dict[str, Any]:
     return {
         "Dhcp4": {
             "interfaces-config": {"interfaces": ["*"], "dhcp-socket-type": "udp"},
+            "multi-threading": {"enable-multi-threading": True},
             "hooks-libraries": ha_hooks,
             "lease-database": {"type": "postgresql", **_PG_CFG},
-            "control-sockets": _control_sockets("dhcp4"),
             "expired-leases-processing": {
                 "reclaim-timer-wait-time": 10,
                 "flush-reclaimed-timer-wait-time": 25,

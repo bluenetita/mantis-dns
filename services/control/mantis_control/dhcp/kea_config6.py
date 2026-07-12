@@ -28,7 +28,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from mantis_control.dhcp.kea_config import _control_sockets, kea_command
+from mantis_control.dhcp.kea_config import kea_command
 from mantis_control.db.models import DhcpScope6
 
 log = logging.getLogger(__name__)
@@ -132,8 +132,8 @@ def build_dhcp6_config(db: Session, filter_node_ip: str = "") -> dict[str, Any]:
     return {
         "Dhcp6": {
             "interfaces-config": {"interfaces": ["*"]},
+            "multi-threading": {"enable-multi-threading": True},
             "lease-database": {"type": "postgresql", **_PG_CFG},
-            "control-sockets": _control_sockets("dhcp6"),
             "expired-leases-processing": {
                 "reclaim-timer-wait-time": 10,
                 "flush-reclaimed-timer-wait-time": 25,
