@@ -17,7 +17,10 @@
 
 `push_full_config()` mirrors Mantis DB state into kea-dhcp4's live subnet4
 list using the `subnet_cmds` hook's incremental commands (subnet4-add /
-subnet4-update / subnet4-del), diffed against subnet4-list.
+subnet4-update / subnet4-del), diffed against subnet4-list. Host
+reservations are synced separately via the `host_cmds` hook's
+reservation-add/-del — subnet_cmds rejects inline "reservations" in a
+subnet4-add/-update payload.
 
 This deliberately avoids `config-set`: config-set replaces the *entire*
 Dhcp4 config, including control-sockets, and Kea validates a new
@@ -142,7 +145,10 @@ def _build_reservations(scope: DhcpScope) -> list[dict[str, Any]]:
 
 
 def _build_subnet4(scope: DhcpScope, kea_id: int, filter_node_ip: str) -> dict[str, Any]:
-    """Build a single subnet4 entry, the unit subnet4-add/-update operate on."""
+    """Build a single subnet4 entry, the unit subnet4-add/-update operate on.
+    Must NOT include "reservations" — subnet_cmds rejects inline reservations
+    ("must not specify host reservations with 'subnet4-add'"); those are
+    synced separately via host_cmds (see `_sync_reservations4`)."""
     subnet: dict[str, Any] = {
         "id": kea_id,
         "subnet": scope.subnet,
@@ -150,7 +156,6 @@ def _build_subnet4(scope: DhcpScope, kea_id: int, filter_node_ip: str) -> dict[s
         "valid-lifetime": scope.lease_time_s,
         "max-valid-lifetime": scope.max_lease_time_s,
         "option-data": _build_option_data(scope, filter_node_ip),
-        "reservations": _build_reservations(scope),
     }
     if scope.renew_time_s is not None:
         subnet["renew-timer"] = scope.renew_time_s
@@ -210,18 +215,53 @@ async def _synced_kea_subnet_ids(service: list[str]) -> set[int]:
     return {s["id"] for s in subnets}
 
 
+async def _sync_reservations4(kea_id: int, reservations: list[dict[str, Any]]) -> None:
+    """Reconcile one subnet's host reservations against Kea via host_cmds,
+    keyed on hw-address (the identifier reservation-del/-add key on)."""
+    result = await kea_command("reservation-get-all", service=["dhcp4"], arguments={"subnet-id": kea_id})
+    if result.get("result") not in (0, 3):  # 3 == CONTROL_RESULT_EMPTY
+        raise RuntimeError(f"Kea reservation-get-all failed (subnet-id={kea_id}): {result.get('text', result)}")
+    existing_macs = {h["hw-address"] for h in (result.get("arguments") or {}).get("hosts", [])}
+    desired_macs = {r["hw-address"] for r in reservations}
+
+    for mac in existing_macs - desired_macs:
+        result = await kea_command("reservation-del", service=["dhcp4"], arguments={
+            "subnet-id": kea_id, "identifier-type": "hw-address", "identifier": mac,
+        })
+        if result.get("result") not in (0, 3):
+            raise RuntimeError(f"Kea reservation-del rejected (mac={mac}): {result.get('text', result)}")
+
+    for r in reservations:
+        mac = r["hw-address"]
+        if mac in existing_macs:
+            # No reservation-update command exists — refresh via del then add.
+            result = await kea_command("reservation-del", service=["dhcp4"], arguments={
+                "subnet-id": kea_id, "identifier-type": "hw-address", "identifier": mac,
+            })
+            if result.get("result") not in (0, 3):
+                raise RuntimeError(f"Kea reservation-del (refresh) rejected (mac={mac}): {result.get('text', result)}")
+        result = await kea_command("reservation-add", service=["dhcp4"], arguments={
+            "reservation": {**r, "subnet-id": kea_id},
+        })
+        if result.get("result") != 0:
+            raise RuntimeError(f"Kea reservation-add rejected (mac={mac}): {result.get('text', result)}")
+
+
 async def push_full_config(db: Session) -> None:
     """Sync kea-dhcp4's live subnet4 list to Mantis DB state via subnet_cmds
-    (subnet4-add/-update/-del), diffed against subnet4-list. See module
-    docstring for why this replaced a config-set-based full push."""
+    (subnet4-add/-update/-del), diffed against subnet4-list, then reconcile
+    each surviving subnet's reservations via host_cmds. See module docstring
+    for why this replaced a config-set-based full push."""
     filter_ip = os.getenv("MANTIS_FILTER_NODE_IP", "")
     scopes = db.query(DhcpScope).filter(DhcpScope.enabled.is_(True)).all()
     kea_ids = _assign_unique_kea_ids(scopes)
 
     desired: dict[int, dict[str, Any]] = {}
+    reservations_by_id: dict[int, list[dict[str, Any]]] = {}
     for scope in scopes:
         kea_id = kea_ids[scope.id]
         desired[kea_id] = _build_subnet4(scope, kea_id, filter_ip)
+        reservations_by_id[kea_id] = _build_reservations(scope)
         scope.kea_subnet_id = kea_id
     db.commit()
 
@@ -237,6 +277,7 @@ async def push_full_config(db: Session) -> None:
         result = await kea_command(command, service=["dhcp4"], arguments={"subnet4": [subnet]})
         if result.get("result") != 0:
             raise RuntimeError(f"Kea {command} rejected (id={kea_id}): {result.get('text', result)}")
+        await _sync_reservations4(kea_id, reservations_by_id[kea_id])
 
     now = datetime.now(timezone.utc)
     db.query(DhcpScope).filter(DhcpScope.enabled.is_(True)).update(

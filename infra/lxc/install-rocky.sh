@@ -232,6 +232,7 @@ install_local_kea() {
   run_script_lib="$(find /usr/lib64 /usr/lib -name libdhcp_run_script.so -print -quit 2>/dev/null || true)"
   pgsql_lib="$(find /usr/lib64 /usr/lib -name libdhcp_pgsql.so -print -quit 2>/dev/null || true)"
   subnet_cmds_lib="$(find /usr/lib64 /usr/lib -name libdhcp_subnet_cmds.so -print -quit 2>/dev/null || true)"
+  host_cmds_lib="$(find /usr/lib64 /usr/lib -name libdhcp_host_cmds.so -print -quit 2>/dev/null || true)"
 
   if [ -z "$lease_cmds_lib" ]; then
     echo "Kea lease_cmds hook not found after installing isc-kea-hooks." >&2
@@ -241,11 +242,15 @@ install_local_kea() {
     echo "Kea PostgreSQL lease-backend hook (libdhcp_pgsql.so) not found after installing isc-kea-pgsql." >&2
     exit 1
   fi
-  # The control plane pushes scope changes with subnet4-add/-update/-del
-  # (see kea_config.py) rather than config-set, so this hook is mandatory,
-  # not optional.
+  # The control plane pushes scope changes with subnet4-add/-update/-del and
+  # reservation-add/-del (see kea_config.py) rather than config-set, so
+  # these hooks are mandatory, not optional.
   if [ -z "$subnet_cmds_lib" ]; then
     echo "Kea subnet_cmds hook (libdhcp_subnet_cmds.so) not found after installing isc-kea-hooks." >&2
+    exit 1
+  fi
+  if [ -z "$host_cmds_lib" ]; then
+    echo "Kea host_cmds hook (libdhcp_host_cmds.so) not found after installing isc-kea-hooks." >&2
     exit 1
   fi
 
@@ -257,13 +262,13 @@ install_local_kea() {
   # (a guarded-path check) — /usr/local/bin is rejected at load time.
   ddns_bridge_dest="/usr/share/kea/scripts/mantis-ddns-bridge.sh"
 
-  hooks4_json='[{"library": "'"$pgsql_lib"'"}, {"library": "'"$lease_cmds_lib"'"}, {"library": "'"$subnet_cmds_lib"'"}'
+  hooks4_json='[{"library": "'"$pgsql_lib"'"}, {"library": "'"$lease_cmds_lib"'"}, {"library": "'"$subnet_cmds_lib"'"}, {"library": "'"$host_cmds_lib"'"}'
   if [ -n "$run_script_lib" ] && [ -f services/kea/mantis-ddns-bridge.sh ]; then
     install -Dm755 services/kea/mantis-ddns-bridge.sh "$ddns_bridge_dest"
     hooks4_json="${hooks4_json}, {\"library\": \"${run_script_lib}\", \"parameters\": {\"name\": \"${ddns_bridge_dest}\", \"sync\": false}}"
   fi
   hooks4_json="${hooks4_json}]"
-  hooks6_json='[{"library": "'"$pgsql_lib"'"}, {"library": "'"$subnet_cmds_lib"'"}]'
+  hooks6_json='[{"library": "'"$pgsql_lib"'"}, {"library": "'"$subnet_cmds_lib"'"}, {"library": "'"$host_cmds_lib"'"}]'
 
   render_kea_config services/kea/kea-dhcp4.conf /etc/kea/kea-dhcp4.conf "$hooks4_json"
   render_kea_config services/kea/kea-dhcp6.conf /etc/kea/kea-dhcp6.conf "$hooks6_json"

@@ -19,7 +19,8 @@ Mirrors kea_config.py for DHCPv4 but targets kea-dhcp6: `push_full_config6()`
 syncs kea-dhcp6's live subnet6 list to `DhcpScope6` rows via the
 `subnet_cmds` hook's incremental commands (subnet6-add/-update/-del) rather
 than a config-set full replace — see kea_config.py's module docstring for
-why config-set can't be used here.
+why config-set can't be used here. Reservations sync separately via
+host_cmds, same as v4.
 """
 from __future__ import annotations
 
@@ -83,7 +84,10 @@ def _build_reservations6(scope: DhcpScope6) -> list[dict[str, Any]]:
 
 
 def _build_subnet6(scope: DhcpScope6, kea_id: int, filter_node_ip: str) -> dict[str, Any]:
-    """Build a single subnet6 entry, the unit subnet6-add/-update operate on."""
+    """Build a single subnet6 entry, the unit subnet6-add/-update operate on.
+    Must NOT include "reservations" — subnet_cmds rejects inline reservations,
+    same as subnet4-add (see kea_config.py); those are synced separately via
+    host_cmds (see `_sync_reservations6`)."""
     pd_pools = []
     if scope.pd_prefix and scope.pd_prefix_len is not None:
         pd_pools.append({
@@ -99,7 +103,6 @@ def _build_subnet6(scope: DhcpScope6, kea_id: int, filter_node_ip: str) -> dict[
         "preferred-lifetime": scope.preferred_lifetime_s,
         "valid-lifetime": scope.valid_lifetime_s,
         "option-data": _build_option_data6(scope, filter_node_ip),
-        "reservations": _build_reservations6(scope),
     }
     if pd_pools:
         sn["pd-pools"] = pd_pools
@@ -113,17 +116,53 @@ def _build_subnet6(scope: DhcpScope6, kea_id: int, filter_node_ip: str) -> dict[
     return sn
 
 
+async def _sync_reservations6(kea_id: int, reservations: list[dict[str, Any]]) -> None:
+    """Reconcile one subnet's host reservations against Kea via host_cmds,
+    keyed on duid — v6 hosts can carry multiple ip-addresses, so (unlike v4)
+    ip-address isn't a usable identifier for reservation-del."""
+    result = await kea_command("reservation-get-all", service=["dhcp6"], arguments={"subnet-id": kea_id})
+    if result.get("result") not in (0, 3):  # 3 == CONTROL_RESULT_EMPTY
+        raise RuntimeError(f"Kea reservation-get-all failed (subnet-id={kea_id}): {result.get('text', result)}")
+    existing_duids = {h["duid"] for h in (result.get("arguments") or {}).get("hosts", [])}
+    desired_duids = {r["duid"] for r in reservations}
+
+    for duid in existing_duids - desired_duids:
+        result = await kea_command("reservation-del", service=["dhcp6"], arguments={
+            "subnet-id": kea_id, "identifier-type": "duid", "identifier": duid,
+        })
+        if result.get("result") not in (0, 3):
+            raise RuntimeError(f"Kea reservation-del rejected (duid={duid}): {result.get('text', result)}")
+
+    for r in reservations:
+        duid = r["duid"]
+        if duid in existing_duids:
+            # No reservation-update command exists — refresh via del then add.
+            result = await kea_command("reservation-del", service=["dhcp6"], arguments={
+                "subnet-id": kea_id, "identifier-type": "duid", "identifier": duid,
+            })
+            if result.get("result") not in (0, 3):
+                raise RuntimeError(f"Kea reservation-del (refresh) rejected (duid={duid}): {result.get('text', result)}")
+        result = await kea_command("reservation-add", service=["dhcp6"], arguments={
+            "reservation": {**r, "subnet-id": kea_id},
+        })
+        if result.get("result") != 0:
+            raise RuntimeError(f"Kea reservation-add rejected (duid={duid}): {result.get('text', result)}")
+
+
 async def push_full_config6(db: Session) -> None:
     """Sync kea-dhcp6's live subnet6 list to Mantis DB state via subnet_cmds
-    (subnet6-add/-update/-del), diffed against subnet6-list."""
+    (subnet6-add/-update/-del), diffed against subnet6-list, then reconcile
+    each surviving subnet's reservations via host_cmds."""
     filter_ip = os.getenv("MANTIS_FILTER_NODE_IP", "")
     scopes = db.query(DhcpScope6).filter(DhcpScope6.enabled.is_(True)).all()
     kea_ids = _assign_unique_kea_ids6(scopes)
 
     desired: dict[int, dict[str, Any]] = {}
+    reservations_by_id: dict[int, list[dict[str, Any]]] = {}
     for scope in scopes:
         kea_id = kea_ids[scope.id]
         desired[kea_id] = _build_subnet6(scope, kea_id, filter_ip)
+        reservations_by_id[kea_id] = _build_reservations6(scope)
         scope.kea_subnet_id = kea_id
     db.commit()
 
@@ -139,6 +178,7 @@ async def push_full_config6(db: Session) -> None:
         result = await kea_command(command, service=["dhcp6"], arguments={"subnet6": [subnet]})
         if result.get("result") != 0:
             raise RuntimeError(f"Kea {command} rejected (id={kea_id}): {result.get('text', result)}")
+        await _sync_reservations6(kea_id, reservations_by_id[kea_id])
 
     now = datetime.now(timezone.utc)
     db.query(DhcpScope6).filter(DhcpScope6.enabled.is_(True)).update(

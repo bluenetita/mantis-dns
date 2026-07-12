@@ -176,7 +176,7 @@ async def test_push_full_config_adds_updates_and_deletes_subnets(monkeypatch):
     await kea_config.push_full_config(db)
 
     commands = {c[0] for c in calls}
-    assert commands == {"subnet4-list", "subnet4-del", "subnet4-update", "subnet4-add"}
+    assert commands == {"subnet4-list", "subnet4-del", "subnet4-update", "subnet4-add", "reservation-get-all"}
 
     del_call = next(c for c in calls if c[0] == "subnet4-del")
     assert del_call[2] == {"id": stale_id}
@@ -189,8 +189,51 @@ async def test_push_full_config_adds_updates_and_deletes_subnets(monkeypatch):
     assert add_call[2]["subnet4"][0]["id"] == added_id
     assert add_call[2]["subnet4"][0]["subnet"] == added.subnet
 
+    # subnet_cmds rejects inline "reservations" on subnet4-add/-update.
+    assert "reservations" not in update_call[2]["subnet4"][0]
+    assert "reservations" not in add_call[2]["subnet4"][0]
+
     assert kept.kea_subnet_id == kept_id
     assert added.kea_subnet_id == added_id
+
+
+def _static_lease(mac: str, ip: str, enabled: bool = True) -> SimpleNamespace:
+    return SimpleNamespace(
+        enabled=enabled, mac_address=mac, ip_address=ip,
+        hostname=None, client_id=None, next_server=None, boot_filename=None, options=[],
+    )
+
+
+async def test_push_full_config_syncs_reservations_via_host_cmds(monkeypatch):
+    """Reservations must go through reservation-add/-del (host_cmds), not
+    inline in subnet4-add/-update, since Kea rejects the latter outright."""
+    scope = _scope("11111111-2222-3333-4444-555555555555", "10.0.0.0/24")
+    scope.static_leases = [_static_lease("aa:bb:cc:dd:ee:01", "10.0.0.50")]
+    kea_id = kea_config._scope_kea_id(scope.id)
+    db = _fake_db([scope])
+    calls = []
+
+    async def fake_kea_command(command, service=None, arguments=None):
+        calls.append((command, service, arguments))
+        if command == "subnet4-list":
+            return {"result": 0, "arguments": {"subnets": [{"id": kea_id, "subnet": scope.subnet}]}}
+        if command == "reservation-get-all":
+            return {"result": 0, "arguments": {"hosts": [
+                {"hw-address": "aa:bb:cc:dd:ee:99", "ip-address": "10.0.0.99", "subnet-id": kea_id},
+            ]}}
+        return {"result": 0}
+
+    monkeypatch.setattr(kea_config, "kea_command", fake_kea_command)
+
+    await kea_config.push_full_config(db)
+
+    res_del = next(c for c in calls if c[0] == "reservation-del")
+    assert res_del[2] == {"subnet-id": kea_id, "identifier-type": "hw-address", "identifier": "aa:bb:cc:dd:ee:99"}
+
+    res_add = next(c for c in calls if c[0] == "reservation-add")
+    assert res_add[2] == {"reservation": {
+        "hw-address": "aa:bb:cc:dd:ee:01", "ip-address": "10.0.0.50", "subnet-id": kea_id,
+    }}
 
 
 async def test_push_full_config_raises_on_rejected_command(monkeypatch):
@@ -268,7 +311,7 @@ async def test_push_full_config6_adds_updates_and_deletes_subnets(monkeypatch):
     await kea_config6.push_full_config6(db)
 
     commands = {c[0] for c in calls}
-    assert commands == {"subnet6-list", "subnet6-del", "subnet6-update", "subnet6-add"}
+    assert commands == {"subnet6-list", "subnet6-del", "subnet6-update", "subnet6-add", "reservation-get-all"}
 
     del_call = next(c for c in calls if c[0] == "subnet6-del")
     assert del_call[2] == {"id": stale_id}
@@ -279,5 +322,44 @@ async def test_push_full_config6_adds_updates_and_deletes_subnets(monkeypatch):
     add_call = next(c for c in calls if c[0] == "subnet6-add")
     assert add_call[2]["subnet6"][0]["id"] == added_id
 
+    # subnet_cmds rejects inline "reservations" on subnet6-add/-update.
+    assert "reservations" not in update_call[2]["subnet6"][0]
+    assert "reservations" not in add_call[2]["subnet6"][0]
+
     assert kept.kea_subnet_id == kept_id
     assert added.kea_subnet_id == added_id
+
+
+def _reservation6(duid: str, ip: str, enabled: bool = True) -> SimpleNamespace:
+    return SimpleNamespace(enabled=enabled, duid=duid, ip_address=ip, hostname=None)
+
+
+async def test_push_full_config6_syncs_reservations_via_host_cmds(monkeypatch):
+    scope = _scope6("11111111-2222-3333-4444-555555555555", "2001:db8:1::/64")
+    scope.reservations6 = [_reservation6("01:02:03:04:05:06", "2001:db8:1::50")]
+    kea_id = kea_config6._scope_kea_id6(scope.id)
+    db = _fake_db([scope])
+    calls = []
+
+    async def fake_kea_command(command, service=None, arguments=None):
+        calls.append((command, service, arguments))
+        if command == "subnet6-list":
+            return {"result": 0, "arguments": {"subnets": [{"id": kea_id, "subnet": scope.subnet}]}}
+        if command == "reservation-get-all":
+            return {"result": 0, "arguments": {"hosts": [
+                {"duid": "aa:aa:aa:aa:aa:aa", "ip-addresses": ["2001:db8:1::99"], "subnet-id": kea_id},
+            ]}}
+        return {"result": 0}
+
+    monkeypatch.setattr(kea_config, "kea_command", fake_kea_command)
+    monkeypatch.setattr(kea_config6, "kea_command", fake_kea_command)
+
+    await kea_config6.push_full_config6(db)
+
+    res_del = next(c for c in calls if c[0] == "reservation-del")
+    assert res_del[2] == {"subnet-id": kea_id, "identifier-type": "duid", "identifier": "aa:aa:aa:aa:aa:aa"}
+
+    res_add = next(c for c in calls if c[0] == "reservation-add")
+    assert res_add[2] == {"reservation": {
+        "duid": "01:02:03:04:05:06", "ip-addresses": ["2001:db8:1::50"], "subnet-id": kea_id,
+    }}
