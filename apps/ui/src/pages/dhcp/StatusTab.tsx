@@ -16,36 +16,15 @@
  */
 
 import { Badge, Card, Group, Loader, Progress, Stack, Table, Text, Title } from "@mantine/core";
-import { useDhcpStats, useKeasStatus } from "../../api/hooks";
+import { useDhcpStats } from "../../api/hooks";
+import { KeaStatusCard } from "./KeaStatusCard";
 
 export function StatusTab() {
-  const { data: status, isLoading: statusLoading } = useKeasStatus();
   const { data: stats = [], isLoading: statsLoading } = useDhcpStats();
 
   return (
     <Stack gap="lg">
-      <Card withBorder p="md">
-        <Title order={5} mb="sm">Kea daemon</Title>
-        {statusLoading ? (
-          <Loader size="xs" />
-        ) : status?.ok ? (
-          <Stack gap={4}>
-            <Group gap="xs">
-              <Badge color="green" size="sm">Running</Badge>
-              <Text size="sm" c="dimmed">{status.version ?? "version unknown"}</Text>
-            </Group>
-            <Text size="xs" c="dimmed">{status.url}</Text>
-          </Stack>
-        ) : (
-          <Stack gap={4}>
-            <Group gap="xs">
-              <Badge color="red" size="sm">Unreachable</Badge>
-              {status?.error && <Text size="xs" c="dimmed">{status.error}</Text>}
-            </Group>
-            {status?.url && <Text size="xs" c="dimmed">{status.url}</Text>}
-          </Stack>
-        )}
-      </Card>
+      <KeaStatusCard />
 
       <Card withBorder p="md">
         <Title order={5} mb="sm">Subnet utilisation</Title>
