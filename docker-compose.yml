@@ -72,6 +72,7 @@ services:
       - GROUP_ID=${GROUP_ID:-}
       - DNS_BIND_ADDR=0.0.0.0:1053
       - MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN:-}
+      - MANTIS_CONTROL_PUBLIC_KEY_SHA256=${MANTIS_CONTROL_PUBLIC_KEY_SHA256:-}
       - UPSTREAM_BUNDLE_TENANT=${UPSTREAM_BUNDLE_TENANT:-*}
       # Co-hosted block-page HTTP listener (docs/design-block-page.md). Only
       # started when set (blank = disabled, matching mantis-filter's own

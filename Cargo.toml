@@ -28,3 +28,4 @@ ipnet = "2"
 serde = { version = "1", features = ["derive"] }
 base64 = "0.22"
 hex = "0.4"
+sha2 = "0.10"

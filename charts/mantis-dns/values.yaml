@@ -30,6 +30,12 @@ control:
   adminEmail: admin@mantis.local
   filterNodeIp: ""
   groupId: ""
+  persistence:
+    enabled: true
+    storageClassName: ""
+    size: 1Gi
+    accessModes:
+      - ReadWriteOnce
 
 ui:
   replicaCount: 1

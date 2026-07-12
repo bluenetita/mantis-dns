@@ -1,0 +1,18 @@
+{{- if .Values.control.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "mantis-dns.fullname" . }}-control-data
+  labels:
+    {{- include "mantis-dns.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control
+spec:
+  accessModes:
+    {{- toYaml .Values.control.persistence.accessModes | nindent 4 }}
+  {{- if .Values.control.persistence.storageClassName }}
+  storageClassName: {{ .Values.control.persistence.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.control.persistence.size | quote }}
+{{- end }}

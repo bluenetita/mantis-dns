@@ -288,12 +288,15 @@ Requires=postgresql.service
 
 [Service]
 Type=simple
+User=kea
+Group=kea
 EnvironmentFile=${ENV_FILE}
 Environment=MANTIS_CTRL_URL=http://127.0.0.1:8000
 ExecStart=${kea_dhcp4_bin} -c /etc/kea/kea-dhcp4.conf
 Restart=on-failure
 RestartSec=2
-ExecStartPre=/usr/bin/install -d -m 750 /var/run/kea
+RuntimeDirectory=kea
+RuntimeDirectoryMode=0750
 AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
 
@@ -310,12 +313,15 @@ Requires=postgresql.service
 
 [Service]
 Type=simple
+User=kea
+Group=kea
 EnvironmentFile=${ENV_FILE}
 Environment=MANTIS_CTRL_URL=http://127.0.0.1:8000
 ExecStart=${kea_dhcp6_bin} -c /etc/kea/kea-dhcp6.conf
 Restart=on-failure
 RestartSec=2
-ExecStartPre=/usr/bin/install -d -m 750 /var/run/kea
+RuntimeDirectory=kea
+RuntimeDirectoryMode=0750
 AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
 

@@ -18,7 +18,17 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, ForeignKey, Identity, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Identity,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -256,13 +266,19 @@ class User(Base):
     table — admin > operator > viewer, see auth.py for the enforcement."""
 
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "role = 'admin' OR tenant_id IS NOT NULL",
+            name="ck_users_non_admin_requires_tenant",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     email: Mapped[str] = mapped_column(String(255), unique=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(20), default="viewer")  # admin | operator | viewer
-    # NULL = unrestricted; admin role always unrestricted regardless of value.
-    # Non-admin with tenant_id set is scoped to that tenant only.
+    # NULL = unrestricted; restricted by ck_users_non_admin_requires_tenant to
+    # admin users only. Non-admin users are scoped to exactly one tenant.
     tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
 

@@ -26,15 +26,15 @@ pub mod upstream_bundle;
 pub mod zone_store;
 
 pub use telemetry::{QueryEventInput, TelemetryEmitter};
-pub use zone_store::{fetch_and_publish_zone, fetch_local_zone_records, LocalZoneRecordDto, ZoneLookup, ZoneStore};
+pub use zone_store::{
+    fetch_and_publish_zone, fetch_local_zone_records, LocalZoneRecordDto, ZoneLookup, ZoneStore,
+};
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mantis_bundle::{BlockMode, Bundle, BundleStore};
-use mantis_policy::BloomFilter;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
 use cache::DnsCache;
 use ed25519_dalek::VerifyingKey;
@@ -45,7 +45,10 @@ use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::Resolver;
+use mantis_bundle::{BlockMode, Bundle, BundleStore};
+use mantis_policy::BloomFilter;
 use prost::Message as _;
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
 use tracing::{debug, info, warn};
@@ -70,7 +73,11 @@ pub struct TtlPolicy {
 
 impl Default for TtlPolicy {
     fn default() -> Self {
-        Self { min_ttl_s: 0, max_ttl_s: 0, negative_ttl_s: 60 }
+        Self {
+            min_ttl_s: 0,
+            max_ttl_s: 0,
+            negative_ttl_s: 60,
+        }
     }
 }
 
@@ -85,7 +92,11 @@ impl TtlPolicy {
     }
 
     fn negative_ttl(&self) -> u32 {
-        if self.negative_ttl_s > 0 { self.negative_ttl_s } else { 60 }
+        if self.negative_ttl_s > 0 {
+            self.negative_ttl_s
+        } else {
+            60
+        }
     }
 }
 
@@ -129,7 +140,12 @@ impl DotForwarder {
 
 #[async_trait::async_trait]
 impl Forwarder for DotForwarder {
-    async fn lookup(&self, qname: &str, qtype: RecordType, _categories: &[String]) -> Result<Vec<Record>> {
+    async fn lookup(
+        &self,
+        qname: &str,
+        qtype: RecordType,
+        _categories: &[String],
+    ) -> Result<Vec<Record>> {
         let name: Name = qname.parse().context("invalid qname")?;
         let lookup = self.0.lookup(name, qtype).await?;
         Ok(lookup.records().to_vec())
@@ -319,11 +335,40 @@ pub async fn fetch_public_key(control_url: &str) -> Result<VerifyingKey> {
         .error_for_status()?
         .bytes()
         .await?;
+    if let Ok(expected_pin) = std::env::var("MANTIS_CONTROL_PUBLIC_KEY_SHA256") {
+        verify_public_key_pin(bytes.as_ref(), &expected_pin)?;
+    }
     let arr: [u8; 32] = bytes
         .as_ref()
         .try_into()
         .context("public key response was not 32 bytes")?;
     Ok(VerifyingKey::from_bytes(&arr)?)
+}
+
+fn normalize_sha256_pin(pin: &str) -> String {
+    pin.trim()
+        .strip_prefix("sha256:")
+        .unwrap_or_else(|| pin.trim())
+        .chars()
+        .filter(|c| *c != ':')
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn verify_public_key_pin(bytes: &[u8], expected_pin: &str) -> Result<()> {
+    let expected = normalize_sha256_pin(expected_pin);
+    if expected.is_empty() {
+        return Ok(());
+    }
+    if expected.len() != 64 || !expected.chars().all(|c| c.is_ascii_hexdigit()) {
+        bail!("MANTIS_CONTROL_PUBLIC_KEY_SHA256 must be a sha256 hex digest");
+    }
+
+    let actual = hex::encode(Sha256::digest(bytes));
+    if actual != expected {
+        bail!("control-plane public key sha256 pin mismatch");
+    }
+    Ok(())
 }
 
 /// Re-fetches the control plane's public key and updates `keys` in place if
@@ -333,7 +378,9 @@ pub async fn fetch_public_key(control_url: &str) -> Result<VerifyingKey> {
 pub async fn refresh_public_key(keys: &PublicKeyStore, control_url: &str) -> Result<()> {
     let fetched = fetch_public_key(control_url).await?;
     if fetched != keys.current() {
-        info!("control-plane public key changed — updating (was this an intentional key rotation?)");
+        info!(
+            "control-plane public key changed — updating (was this an intentional key rotation?)"
+        );
         keys.set(fetched);
     }
     Ok(())
@@ -346,9 +393,10 @@ pub async fn fetch_and_publish_bundle(
     group_id: &str,
 ) -> Result<()> {
     let client = reqwest::Client::new();
-    let resp = with_service_token(client.get(format!("{control_url}/api/v1/groups/{group_id}/bundle")))
-        .send()
-        .await?;
+    let resp =
+        with_service_token(client.get(format!("{control_url}/api/v1/groups/{group_id}/bundle")))
+            .send()
+            .await?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         debug!("no bundle compiled yet for group {group_id}");
         return Ok(());
@@ -612,13 +660,17 @@ pub(crate) async fn build_response(
             for rec in records {
                 response.add_answer(rec);
             }
-            emit_zone_telemetry(telemetry, bundle, &client_ip, &qname, &qtype_str, &response, start);
+            emit_zone_telemetry(
+                telemetry, bundle, &client_ip, &qname, &qtype_str, &response, start,
+            );
             return response;
         }
         ZoneLookup::NxDomain => {
             response.set_authoritative(true);
             response.set_response_code(ResponseCode::NXDomain);
-            emit_zone_telemetry(telemetry, bundle, &client_ip, &qname, &qtype_str, &response, start);
+            emit_zone_telemetry(
+                telemetry, bundle, &client_ip, &qname, &qtype_str, &response, start,
+            );
             return response;
         }
         ZoneLookup::NotLocal => {}
@@ -836,6 +888,21 @@ mod tests {
         let new_key = test_key(2);
         store.set(new_key);
         assert_eq!(store.current(), new_key);
+    }
+
+    #[test]
+    fn public_key_pin_accepts_matching_sha256() {
+        let bytes = [42u8; 32];
+        let pin = hex::encode(Sha256::digest(bytes));
+        verify_public_key_pin(&bytes, &pin).unwrap();
+        verify_public_key_pin(&bytes, &format!("sha256:{pin}")).unwrap();
+    }
+
+    #[test]
+    fn public_key_pin_rejects_mismatch() {
+        let bytes = [42u8; 32];
+        let wrong = "00".repeat(32);
+        assert!(verify_public_key_pin(&bytes, &wrong).is_err());
     }
 
     #[test]

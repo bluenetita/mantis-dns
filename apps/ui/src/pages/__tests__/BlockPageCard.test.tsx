@@ -105,6 +105,31 @@ describe('BlockPageCard', () => {
     expect(iframe.srcdoc).not.toContain('<script>evil');
   });
 
+  it('drops non-http contact/logo URLs from the sandboxed live preview', () => {
+    mockUseTemplate.mockReturnValue({
+      data: {
+        block_mode: 'BLOCK_MODE_REDIRECT',
+        redirect_ipv4: '10.0.0.53',
+        redirect_ipv6: null,
+        ttl_seconds: 30,
+        title: null,
+        message: null,
+        logo_url: 'javascript:alert(document.cookie)',
+        brand_color: null,
+        contact_url: 'javascript:alert(1)',
+        show_domain: true,
+        show_category: true,
+      },
+    } as never);
+
+    renderWithProviders(<BlockPageCard groupId="g1" canEdit />);
+    const iframe = screen.getByTitle('Block page preview') as HTMLIFrameElement;
+    expect(iframe).toHaveAttribute('sandbox', '');
+    expect(iframe.srcdoc).not.toContain('javascript:');
+    expect(iframe.srcdoc).not.toContain('class="logo"');
+    expect(iframe.srcdoc).not.toContain('class="contact"');
+  });
+
   it('blocks save when REDIRECT has no redirect IP', () => {
     mockUseTemplate.mockReturnValue({
       data: {

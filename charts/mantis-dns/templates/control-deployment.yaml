@@ -83,6 +83,15 @@ spec:
             {{- end }}
             - name: DATABASE_URL
               value: {{ include "mantis-dns.databaseUrl" . | quote }}
+            - name: MANTIS_SIGNING_KEY_PATH
+              value: /data/signing_key.bin
+            - name: FEED_STORAGE_DIR
+              value: /data/feed_domains
+            - name: BUNDLE_STORAGE_DIR
+              value: /data/bundles
+          volumeMounts:
+            - name: control-data
+              mountPath: /data
           resources:
             {{- toYaml .Values.control.resources | nindent 12 }}
           readinessProbe:
@@ -95,3 +104,11 @@ spec:
               path: /health
               port: {{ .Values.control.port }}
             initialDelaySeconds: 15
+      volumes:
+        - name: control-data
+          {{ if .Values.control.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "mantis-dns.fullname" . }}-control-data
+          {{ else }}
+          emptyDir: {}
+          {{ end }}

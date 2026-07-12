@@ -146,7 +146,14 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         scheduler.shutdown(wait=False)
 
 
-app = FastAPI(title="Mantis-DNS Control Plane", version="0.1.0", lifespan=_lifespan)
+app = FastAPI(
+    title="Mantis-DNS Control Plane",
+    version="0.1.0",
+    lifespan=_lifespan,
+    docs_url=None if settings.is_production else "/docs",
+    redoc_url=None if settings.is_production else "/redoc",
+    openapi_url=None if settings.is_production else "/openapi.json",
+)
 
 # CSRF check runs inside the CORS layer so its 403 responses still get CORS
 # headers attached (added first == innermost; see Starlette middleware order).

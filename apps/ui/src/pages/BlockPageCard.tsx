@@ -81,6 +81,24 @@ function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
+function sanitizeHostedUrl(url: string | null | undefined): string | null {
+  const trimmed = url?.trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+  return lower.startsWith("http://") || lower.startsWith("https://") ? trimmed : null;
+}
+
+function sanitizeLogoUrl(url: string | null | undefined): string | null {
+  const trimmed = url?.trim();
+  if (!trimmed) return null;
+  if (isImageDataUri(trimmed)) return trimmed;
+  return sanitizeHostedUrl(trimmed);
+}
+
+function isImageDataUri(url: string): boolean {
+  return /^data:image\/(?:png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/]+=*$/i.test(url);
+}
+
 /** Mirrors the filter node's render_page (blockpage.rs) closely enough to
  * preview branding. Sample domain/category stand in for a real blocked query. */
 function previewHtml(t: Upsert): string {
@@ -92,15 +110,15 @@ function previewHtml(t: Upsert): string {
     t.message || "This site has been blocked by your network's content policy."
   );
   let body = "";
-  if (t.logo_url) body += `<img class="logo" src="${escapeHtml(t.logo_url)}" alt="">`;
+  const logoUrl = sanitizeLogoUrl(t.logo_url);
+  if (logoUrl) body += `<img class="logo" src="${escapeHtml(logoUrl)}" alt="">`;
   body += `<h1>${title}</h1><p class="msg">${message}</p>`;
   if (t.show_domain)
     body += `<p class="domain">Requested site: <strong>ads.example.com</strong></p>`;
   if (t.show_category) body += `<p class="reason">Category: <strong>advertising</strong></p>`;
-  if (t.contact_url)
-    body += `<p class="contact"><a href="${escapeHtml(
-      t.contact_url
-    )}">Request access or contact your administrator</a></p>`;
+  const contactUrl = sanitizeHostedUrl(t.contact_url);
+  if (contactUrl)
+    body += `<p class="contact"><a href="${escapeHtml(contactUrl)}">Request access or contact your administrator</a></p>`;
 
   return `<!doctype html><html><head><meta charset="utf-8"><style>
 :root{color-scheme:light dark}
@@ -355,6 +373,7 @@ export function BlockPageCard({
               </Text>
               <iframe
                 title="Block page preview"
+                sandbox=""
                 srcDoc={previewHtml(form)}
                 style={{
                   width: "100%",

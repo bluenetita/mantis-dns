@@ -156,6 +156,8 @@ KEA_HOOKS_DIR=${KEA_HOOKS_DIR:-/usr/lib/kea/hooks}
 ADMIN_EMAIL=${ADMIN_EMAIL}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 MANTIS_SIGNING_KEY_PATH=${ENV_DIR}/signing_key.bin
+FEED_STORAGE_DIR=${INSTALL_DIR}/data/feed_domains
+BUNDLE_STORAGE_DIR=${INSTALL_DIR}/data/bundles
 EOF
   chmod 600 "$ENV_FILE"
   echo "Generated ADMIN_PASSWORD (shown once): ${ADMIN_PASSWORD}"
@@ -171,6 +173,12 @@ ensure_env_var KEA_HOOKS_DIR "${KEA_HOOKS_DIR:-/usr/lib/kea/hooks}"
 # filter node's cached public key (they only fetch it once at startup) until
 # someone notices bundles are being rejected and restarts them by hand.
 ensure_env_var MANTIS_SIGNING_KEY_PATH "${ENV_DIR}/signing_key.bin"
+# Same hazard as MANTIS_SIGNING_KEY_PATH above: these defaults must not
+# resolve inside $INSTALL_DIR/app, which is replaced on every reinstall.
+# Keeping feed domains and compiled bundles in a durable sibling directory
+# prevents the DB from claiming feeds/bundles exist after their files vanished.
+ensure_env_var FEED_STORAGE_DIR "${INSTALL_DIR}/data/feed_domains"
+ensure_env_var BUNDLE_STORAGE_DIR "${INSTALL_DIR}/data/bundles"
 refresh_kea_env_var KEA_CTRL_URL "$REQUESTED_KEA_CTRL_URL" ""
 refresh_kea_env_var KEA4_CTRL_URL "$REQUESTED_KEA4_CTRL_URL" ""
 refresh_kea_env_var KEA6_CTRL_URL "$REQUESTED_KEA6_CTRL_URL" ""
@@ -192,6 +200,7 @@ fi
 
 echo "==> Deploying control plane..."
 mkdir -p "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR/data/feed_domains" "$INSTALL_DIR/data/bundles"
 rotate_code_dirs "$INSTALL_DIR"
 cp -r services/control "$INSTALL_DIR/app"
 python3 -m venv "$INSTALL_DIR/venv"

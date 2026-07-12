@@ -17,7 +17,7 @@ services:
     image: postgres:17-alpine
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-mantis}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mantis}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?required}
       - POSTGRES_DB=${POSTGRES_DB:-mantis}
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -31,11 +31,14 @@ services:
   control:
     image: ${IMAGE_PREFIX:-ghcr.io/mantis-dns/mantis-dns}-control:${MANTIS_VERSION:-latest}
     ports:
-      - "8000:8000"
+      # Loopback-only escape hatch for local operations; public traffic should
+      # enter through the UI/nginx proxy so API docs/schema are not exposed
+      # directly and all browser traffic stays same-origin.
+      - "127.0.0.1:8000:8000"
     environment:
       - PYTHONUNBUFFERED=1
       - MANTIS_ENV=production
-      - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-mantis}:${POSTGRES_PASSWORD:-mantis}@postgres:5432/${POSTGRES_DB:-mantis}
+      - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-mantis}:${POSTGRES_PASSWORD:?required}@postgres:5432/${POSTGRES_DB:-mantis}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:?set to your UI origin(s), e.g. https://dns.example.com}
       - KEA_CTRL_URL=http://kea:8004/
       - KEA4_CTRL_URL=http://kea:8004/
@@ -50,7 +53,7 @@ services:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_USER=${POSTGRES_USER:-mantis}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mantis}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?required}
       - POSTGRES_DB=${POSTGRES_DB:-mantis}
       # Must be absolute paths on a volume that survives container
       # recreation (a new image on `docker compose up -d` gets a fresh
@@ -98,6 +101,7 @@ services:
       - GROUP_ID=${GROUP_ID:-}
       - DNS_BIND_ADDR=0.0.0.0:1053
       - MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN:?required}
+      - MANTIS_CONTROL_PUBLIC_KEY_SHA256=${MANTIS_CONTROL_PUBLIC_KEY_SHA256:-}
       - BLOCKPAGE_BIND_ADDR=${BLOCKPAGE_BIND_ADDR:-}
     restart: unless-stopped
     deploy:

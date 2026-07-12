@@ -50,7 +50,7 @@ def list_categories(user: models.User = Depends(get_current_user)) -> list[schem
 def create_tenant(
     payload: schemas.TenantCreate,
     db: Session = Depends(get_db),
-    user: models.User = Depends(require_role("admin", "operator")),
+    user: models.User = Depends(require_role("admin")),
 ) -> models.Tenant:
     tenant = models.Tenant(name=payload.name)
     db.add(tenant)
