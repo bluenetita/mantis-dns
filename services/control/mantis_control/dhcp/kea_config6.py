@@ -28,7 +28,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from mantis_control.dhcp.kea_config import kea_command
+from mantis_control.dhcp.kea_config import KEA_HOOKS_DIR, _control_sockets, kea_command
 from mantis_control.db.models import DhcpScope6
 
 log = logging.getLogger(__name__)
@@ -40,6 +40,13 @@ _PG_CFG = {
     "user": os.getenv("POSTGRES_USER", "mantis"),
     "password": os.getenv("POSTGRES_PASSWORD", "mantis"),
 }
+
+
+def _mandatory_hooks6() -> list[dict[str, Any]]:
+    """kea-dhcp6 needs the PostgreSQL lease-backend hook for the same reason
+    as v4 (see kea_config.py's `_mandatory_hooks4`) — Kea 3.x ships it as a
+    hook library, and config-set replaces hooks-libraries wholesale."""
+    return [{"library": f"{KEA_HOOKS_DIR}/libdhcp_pgsql.so"}]
 
 
 def _scope_kea_id6(scope_uuid: str) -> int:
@@ -133,7 +140,9 @@ def build_dhcp6_config(db: Session, filter_node_ip: str = "") -> dict[str, Any]:
         "Dhcp6": {
             "interfaces-config": {"interfaces": ["*"]},
             "multi-threading": {"enable-multi-threading": True},
+            "hooks-libraries": _mandatory_hooks6(),
             "lease-database": {"type": "postgresql", **_PG_CFG},
+            "control-sockets": _control_sockets("dhcp6"),
             "expired-leases-processing": {
                 "reclaim-timer-wait-time": 10,
                 "flush-reclaimed-timer-wait-time": 25,

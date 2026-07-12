@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 from typing import Any, cast
 
 import httpx
@@ -41,6 +42,7 @@ log = logging.getLogger(__name__)
 KEA_CTRL_URL = os.getenv("KEA_CTRL_URL", "http://kea:8004/")
 KEA4_CTRL_URL = os.getenv("KEA4_CTRL_URL", KEA_CTRL_URL)
 KEA6_CTRL_URL = os.getenv("KEA6_CTRL_URL", "http://kea:8006/")
+KEA_CTRL_BIND_ADDRESS = os.getenv("KEA_CTRL_BIND_ADDRESS", "0.0.0.0")
 KEA_HOOKS_DIR = os.getenv("KEA_HOOKS_DIR", "/usr/lib/kea/hooks").rstrip("/")
 
 _PG_CFG = {
@@ -57,6 +59,44 @@ _PG_CFG = {
 def _scope_kea_id(scope_uuid: str) -> int:
     """Stable positive integer Kea subnet4.id derived deterministically from UUID."""
     return int(scope_uuid.replace("-", "")[:7], 16) % (2 ** 30)
+
+
+def _url_port(url: str, default: int) -> int:
+    parsed = urlparse(url)
+    return parsed.port or default
+
+
+def _control_sockets(kind: str) -> list[dict[str, Any]]:
+    if kind == "dhcp6":
+        return [
+            {
+                "socket-type": "http",
+                "socket-address": os.getenv("KEA6_CTRL_BIND_ADDRESS", KEA_CTRL_BIND_ADDRESS),
+                "socket-port": int(os.getenv("KEA6_CTRL_PORT", str(_url_port(KEA6_CTRL_URL, 8006)))),
+            },
+            {"socket-type": "unix", "socket-name": "/var/run/kea/kea6-ctrl-socket"},
+        ]
+
+    return [
+        {
+            "socket-type": "http",
+            "socket-address": os.getenv("KEA4_CTRL_BIND_ADDRESS", KEA_CTRL_BIND_ADDRESS),
+            "socket-port": int(os.getenv("KEA4_CTRL_PORT", str(_url_port(KEA4_CTRL_URL, 8004)))),
+        },
+        {"socket-type": "unix", "socket-name": "/var/run/kea/kea4-ctrl-socket"},
+    ]
+
+
+def _mandatory_hooks4() -> list[dict[str, Any]]:
+    """Hooks kea-dhcp4 cannot run without: Kea 3.x moved the PostgreSQL lease
+    backend out of the daemon binary into a hook library, and lease_cmds is
+    needed for lease_sync.py's lease4-get-all/lease4-get-page calls. config-set
+    replaces hooks-libraries wholesale, so these must be resent on every push
+    or Kea unloads them and the postgresql lease-database stops resolving."""
+    return [
+        {"library": f"{KEA_HOOKS_DIR}/libdhcp_pgsql.so"},
+        {"library": f"{KEA_HOOKS_DIR}/libdhcp_lease_cmds.so"},
+    ]
 
 
 def _assign_unique_kea_ids(scopes: list[DhcpScope]) -> dict[str, int]:
@@ -136,9 +176,8 @@ def _build_reservations(scope: DhcpScope) -> list[dict[str, Any]]:
 # ── HA hooks block builder ─────────────────────────────────────────────────────
 
 def _build_ha_hooks(ha: "DhcpHaConfig") -> list[dict[str, Any]]:
-    """Return the two Kea hook library entries needed for HA (lease_cmds + ha)."""
+    """Return the ha hook library entry (lease_cmds is already in `_mandatory_hooks4`)."""
     return [
-        {"library": f"{KEA_HOOKS_DIR}/libdhcp_lease_cmds.so"},
         {
             "library": f"{KEA_HOOKS_DIR}/libdhcp_ha.so",
             "parameters": {
@@ -225,8 +264,9 @@ def build_dhcp4_config(db: Session, filter_node_ip: str = "") -> dict[str, Any]:
         "Dhcp4": {
             "interfaces-config": {"interfaces": ["*"], "dhcp-socket-type": "udp"},
             "multi-threading": {"enable-multi-threading": True},
-            "hooks-libraries": ha_hooks,
+            "hooks-libraries": _mandatory_hooks4() + ha_hooks,
             "lease-database": {"type": "postgresql", **_PG_CFG},
+            "control-sockets": _control_sockets("dhcp4"),
             "expired-leases-processing": {
                 "reclaim-timer-wait-time": 10,
                 "flush-reclaimed-timer-wait-time": 25,
