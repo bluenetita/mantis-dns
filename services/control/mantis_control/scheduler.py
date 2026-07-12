@@ -31,25 +31,44 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from mantis_control.config import FEED_STORAGE_DIR
 from mantis_control.db.models import Feed
 from mantis_control.db.session import SessionLocal
-from mantis_control.feeds.ingest import fetch_and_ingest
+from mantis_control.feeds.ingest import feed_lock, fetch_and_ingest
 
 scheduler = AsyncIOScheduler()
+
+
+_shutting_down = False
+
+
+def mark_shutting_down() -> None:
+    """Call right before scheduler.shutdown() — see _DropCancelledJobErrors
+    below for why this flag exists rather than dropping CancelledError
+    unconditionally."""
+    global _shutting_down
+    _shutting_down = True
 
 
 class _DropCancelledJobErrors(logging.Filter):
     """AsyncIOExecutor.shutdown() (scheduler.shutdown()) cancels every
     pending job future outright — including ones submitted moments
     earlier by kick_feed_now() that haven't had a chance to start
-    running yet. That cancellation happens *before* our job coroutine
-    ever executes, so there's no `await` inside our own code where a
-    try/except could intercept it. APScheduler's executor then logs
-    the resulting CancelledError as `ERROR ... Error running job ...`
-    unconditionally (see BaseExecutor._run_job_error), even though it's
+    running yet, *and* ones that are already mid-run (AsyncIOExecutor
+    keeps a future in `_pending_futures`, and therefore cancellable,
+    until it's done — verified against the installed apscheduler
+    source). APScheduler's executor logs the resulting CancelledError
+    as `ERROR ... Error running job ...` unconditionally (see
+    BaseExecutor._run_job_error / run_coroutine_job), even though it's
     an expected side effect of shutdown (e.g. the install/update
     startup check, which enters and immediately exits the app's
-    lifespan) rather than a real failure. Drop just those records."""
+    lifespan) rather than a real failure.
+
+    Only suppress those records while we're actually inside
+    scheduler.shutdown() (see `mark_shutting_down`) — a CancelledError
+    logged at any other time is a genuine mid-run job failure/interruption
+    and must stay visible, not be silently dropped forever."""
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if not _shutting_down:
+            return True
         exc = record.exc_info[1] if record.exc_info else None
         return not isinstance(exc, asyncio.CancelledError)
 
@@ -76,16 +95,20 @@ async def run_ingest(feed_id: str) -> None:
     finally:
         db.close()
 
-    async with httpx.AsyncClient() as client:
-        result = await fetch_and_ingest(feed, FEED_STORAGE_DIR, client)
+    # See feed_lock's docstring — serializes this run against a concurrent
+    # manual "sync now" call for the same feed, held across the fetch and
+    # the commit below.
+    async with feed_lock(feed_id):
+        async with httpx.AsyncClient() as client:
+            result = await fetch_and_ingest(feed, FEED_STORAGE_DIR, client)
 
-    if result.status == "updated":
-        db = SessionLocal()
-        try:
-            db.merge(feed)
-            db.commit()
-        finally:
-            db.close()
+        if result.status == "updated":
+            db = SessionLocal()
+            try:
+                db.merge(feed)
+                db.commit()
+            finally:
+                db.close()
 
 
 def schedule_feed(feed: Feed) -> None:

@@ -26,7 +26,7 @@ from mantis_control.auth import get_current_user, require_role
 from mantis_control.config import FEED_STORAGE_DIR
 from mantis_control.db import models
 from mantis_control.db.session import get_db
-from mantis_control.feeds.ingest import fetch_and_ingest
+from mantis_control.feeds.ingest import fetch_and_ingest, feed_lock
 from mantis_control.scheduler import sync_feed_schedule, unschedule_feed
 from mantis_control.ssrf_guard import check_url_safe
 
@@ -166,12 +166,18 @@ async def ingest_feed(
     if feed is None:
         raise HTTPException(404, "feed not found")
 
-    async with httpx.AsyncClient() as client:
-        result = await fetch_and_ingest(feed, FEED_STORAGE_DIR, client)
+    # Serializes this "sync now" against the feed's own recurring scheduler
+    # job (scheduler.run_ingest) — without it, both can fetch/write the same
+    # feed concurrently and leave the file and DB row reflecting different
+    # fetches. Held across the fetch *and* the commit below, matching
+    # run_ingest's lock scope.
+    async with feed_lock(feed_id):
+        async with httpx.AsyncClient() as client:
+            result = await fetch_and_ingest(feed, FEED_STORAGE_DIR, client)
 
-    if result.status == "updated":
-        db.commit()
-    else:
-        db.rollback()
+        if result.status == "updated":
+            db.commit()
+        else:
+            db.rollback()
 
     return IngestOut(status=result.status, domain_count=result.domain_count, reason=result.reason)

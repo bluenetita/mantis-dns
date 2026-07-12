@@ -21,12 +21,13 @@ import { useDisclosure } from "@mantine/hooks";
 import { modals } from "@mantine/modals";
 import { notifications } from "@mantine/notifications";
 import { IconBolt, IconPlus } from "@tabler/icons-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   useCreateDhcpScope6,
   useDeleteDhcpScope6,
   useDhcpPush6,
   useDhcpScopes6,
+  useKeaInterfaces6,
   useUpdateDhcpScope6,
   type DhcpScope6,
 } from "../../../api/hooks";
@@ -83,6 +84,18 @@ function Scope6Form({
     })
   );
 
+  const { data: ifaceData } = useKeaInterfaces6();
+  const interfaceOptions = useMemo(() => {
+    const opts = (ifaceData?.interfaces ?? []).map((i) => ({
+      value: i.name,
+      label: i.addresses.length ? `${i.name} — ${i.addresses.join(", ")}` : i.name,
+    }));
+    if (initial?.interface && !opts.some((o) => o.value === initial.interface)) {
+      opts.push({ value: initial.interface, label: `${initial.interface} (not currently detected)` });
+    }
+    return opts;
+  }, [ifaceData, initial?.interface]);
+
   return (
     <form onSubmit={submit}>
       <Stack gap="sm">
@@ -102,7 +115,23 @@ function Scope6Form({
         </Group>
         <TextInput label="DNS servers" placeholder="2001:4860:4860::8888" {...form.getInputProps("dns_servers")} />
         <TextInput label="Domain name" {...form.getInputProps("domain_name")} />
-        <TextInput label="Interface (optional)" placeholder="eth0" {...form.getInputProps("interface")} />
+        {ifaceData?.ok && interfaceOptions.length > 0 ? (
+          <Select
+            label="Interface (optional)"
+            placeholder="Select interface"
+            data={interfaceOptions}
+            searchable
+            clearable
+            {...form.getInputProps("interface")}
+          />
+        ) : (
+          <TextInput
+            label="Interface (optional)"
+            placeholder="eth0"
+            description={ifaceData && !ifaceData.ok ? "Couldn't reach Kea to list interfaces — enter manually." : undefined}
+            {...form.getInputProps("interface")}
+          />
+        )}
         <Group grow>
           <NumberInput label="Preferred lifetime (s)" min={60} {...form.getInputProps("preferred_lifetime_s")} />
           <NumberInput label="Valid lifetime (s)" min={60} {...form.getInputProps("valid_lifetime_s")} />

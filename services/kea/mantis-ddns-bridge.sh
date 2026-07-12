@@ -16,9 +16,10 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 # Kea run_script hook — fires for each lease event and notifies the Mantis
-# control plane so it can create/remove DNS A records for DDNS-enabled scopes.
+# control plane so it can create/remove DNS A/AAAA records for DDNS-enabled
+# scopes. Wired into both kea-dhcp4 and kea-dhcp6 (see entrypoint.sh).
 #
-# Called by kea-dhcp4 as: /usr/local/bin/mantis-ddns-bridge.sh
+# Called by kea-dhcp4/kea-dhcp6 as: /usr/local/bin/mantis-ddns-bridge.sh
 # Kea sets CALLOUT_NAME and per-callout env vars before exec.
 
 CTRL_URL="${MANTIS_CTRL_URL:-http://control:8000}"
@@ -31,16 +32,30 @@ TOKEN="${MANTIS_INTERNAL_TOKEN:-}"
 # json.loads keeps the last occurrence of a duplicate key. `jq -n --arg`
 # escapes each value properly regardless of content, so a malicious hostname
 # can only ever end up as the value of the "hostname" key.
+#
+# family "4" identifies by mac (hwaddr); family "6" identifies by duid —
+# DHCPv6 leases are DUID-keyed, not MAC-keyed (see dhcp_internal_routers.py).
 _post() {
-    event="$1" addr="$2" hostname="$3" hwaddr="$4" subnet_id="$5"
-    payload="$(jq -nc \
-        --arg event "${event}" \
-        --arg ip "${addr}" \
-        --arg hostname "${hostname}" \
-        --arg mac "${hwaddr}" \
-        --argjson subnet_id "${subnet_id:-0}" \
-        '{event:$event, ip:$ip, hostname:$hostname, mac:$mac, subnet_id:$subnet_id}' \
-        2>/dev/null)" || return 0
+    event="$1" family="$2" addr="$3" hostname="$4" identifier="$5" subnet_id="$6"
+    if [ "${family}" = "6" ]; then
+        payload="$(jq -nc \
+            --arg event "${event}" \
+            --arg ip "${addr}" \
+            --arg hostname "${hostname}" \
+            --arg duid "${identifier}" \
+            --argjson subnet_id "${subnet_id:-0}" \
+            '{event:$event, ip:$ip, hostname:$hostname, family:"6", duid:$duid, subnet_id:$subnet_id}' \
+            2>/dev/null)" || return 0
+    else
+        payload="$(jq -nc \
+            --arg event "${event}" \
+            --arg ip "${addr}" \
+            --arg hostname "${hostname}" \
+            --arg mac "${identifier}" \
+            --argjson subnet_id "${subnet_id:-0}" \
+            '{event:$event, ip:$ip, hostname:$hostname, family:"4", mac:$mac, subnet_id:$subnet_id}' \
+            2>/dev/null)" || return 0
+    fi
     curl -sf -X POST "${CTRL_URL}/api/v1/internal/dhcp-event" \
         -H "Content-Type: application/json" \
         -H "X-Internal-Token: ${TOKEN}" \
@@ -58,7 +73,7 @@ case "${CALLOUT_NAME}" in
             eval "STATE=\${LEASES4_AT${N}_STATE}"
             # State 0 = active; only create DDNS records for live leases
             if [ "${STATE}" = "0" ] && [ -n "${HOSTNAME}" ] && [ -n "${ADDR}" ]; then
-                _post "add" "${ADDR}" "${HOSTNAME}" "${HWADDR}" "${SUBNET_ID:-0}"
+                _post "add" "4" "${ADDR}" "${HOSTNAME}" "${HWADDR}" "${SUBNET_ID:-0}"
             fi
             N=$((N + 1))
         done
@@ -68,7 +83,7 @@ case "${CALLOUT_NAME}" in
         HOSTNAME="${LEASE4_HOSTNAME:-}"
         HWADDR="${LEASE4_HWADDR:-}"
         if [ -n "${HOSTNAME}" ] && [ -n "${ADDR}" ]; then
-            _post "expire" "${ADDR}" "${HOSTNAME}" "${HWADDR}" "${LEASE4_SUBNET_ID:-0}"
+            _post "expire" "4" "${ADDR}" "${HOSTNAME}" "${HWADDR}" "${LEASE4_SUBNET_ID:-0}"
         fi
         ;;
     lease4_recover)
@@ -77,7 +92,43 @@ case "${CALLOUT_NAME}" in
         HOSTNAME="${LEASE4_HOSTNAME:-}"
         HWADDR="${LEASE4_HWADDR:-}"
         if [ -n "${HOSTNAME}" ] && [ -n "${ADDR}" ]; then
-            _post "add" "${ADDR}" "${HOSTNAME}" "${HWADDR}" "${LEASE4_SUBNET_ID:-0}"
+            _post "add" "4" "${ADDR}" "${HOSTNAME}" "${HWADDR}" "${LEASE4_SUBNET_ID:-0}"
+        fi
+        ;;
+    leases6_committed)
+        N=0
+        while [ "${N}" -lt "${LEASES6_SIZE:-0}" ]; do
+            eval "ADDR=\${LEASES6_AT${N}_ADDRESS}"
+            eval "HOSTNAME=\${LEASES6_AT${N}_HOSTNAME}"
+            eval "DUID=\${LEASES6_AT${N}_DUID}"
+            eval "SUBNET_ID=\${LEASES6_AT${N}_SUBNET_ID}"
+            eval "STATE=\${LEASES6_AT${N}_STATE}"
+            eval "TYPE=\${LEASES6_AT${N}_TYPE}"
+            # State 0 = active; only IA_NA leases map to a single host address
+            # — IA_PD (prefix delegation) has no single-host meaning for DDNS.
+            if [ "${STATE}" = "0" ] && [ "${TYPE}" = "IA_NA" ] \
+                && [ -n "${HOSTNAME}" ] && [ -n "${ADDR}" ]; then
+                _post "add" "6" "${ADDR}" "${HOSTNAME}" "${DUID}" "${SUBNET_ID:-0}"
+            fi
+            N=$((N + 1))
+        done
+        ;;
+    lease6_expire)
+        ADDR="${LEASE6_ADDRESS:-}"
+        HOSTNAME="${LEASE6_HOSTNAME:-}"
+        DUID="${LEASE6_DUID:-}"
+        TYPE="${LEASE6_TYPE:-}"
+        if [ "${TYPE}" = "IA_NA" ] && [ -n "${HOSTNAME}" ] && [ -n "${ADDR}" ]; then
+            _post "expire" "6" "${ADDR}" "${HOSTNAME}" "${DUID}" "${LEASE6_SUBNET_ID:-0}"
+        fi
+        ;;
+    lease6_recover)
+        ADDR="${LEASE6_ADDRESS:-}"
+        HOSTNAME="${LEASE6_HOSTNAME:-}"
+        DUID="${LEASE6_DUID:-}"
+        TYPE="${LEASE6_TYPE:-}"
+        if [ "${TYPE}" = "IA_NA" ] && [ -n "${HOSTNAME}" ] && [ -n "${ADDR}" ]; then
+            _post "add" "6" "${ADDR}" "${HOSTNAME}" "${DUID}" "${LEASE6_SUBNET_ID:-0}"
         fi
         ;;
 esac

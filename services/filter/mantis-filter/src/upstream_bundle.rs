@@ -130,21 +130,26 @@ impl UpstreamBundleStore {
         }
     }
 
+    /// The version check and the publish are one atomic `rcu`, not a
+    /// separate load-then-store — see BundleStore::try_publish in
+    /// mantis-bundle for why a plain load-check-store here would let a
+    /// lower-version bundle overwrite a higher one under concurrent publish.
     pub fn publish(&self, bundle: UpstreamBundle) {
-        if let Some(existing) = self.current.load().as_ref() {
-            if bundle.version <= existing.version {
-                debug!(
-                    "upstream bundle for tenant {} unchanged (v{})",
-                    bundle.tenant_id, bundle.version
-                );
-                return;
-            }
+        let bundle = Arc::new(bundle);
+        let incoming_version = bundle.version;
+        let tenant_id = bundle.tenant_id.clone();
+
+        let prev = self.current.rcu(|existing| match existing {
+            Some(current) if incoming_version <= current.version => existing.clone(),
+            _ => Some(Arc::clone(&bundle)),
+        });
+
+        let published = prev.as_ref().is_none_or(|p| incoming_version > p.version);
+        if published {
+            info!("upstream bundle published for tenant {tenant_id} v{incoming_version}");
+        } else {
+            debug!("upstream bundle for tenant {tenant_id} unchanged (v{incoming_version})");
         }
-        info!(
-            "upstream bundle published for tenant {} v{}",
-            bundle.tenant_id, bundle.version
-        );
-        self.current.store(Some(Arc::new(bundle)));
     }
 
     pub fn current(&self) -> Option<Arc<UpstreamBundle>> {

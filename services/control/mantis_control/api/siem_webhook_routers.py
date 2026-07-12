@@ -94,17 +94,17 @@ def create_webhook(
     db: Session = Depends(get_db),
     admin: models.User = Depends(require_role("admin")),
 ) -> models.SiemWebhook:
-    # Scoped admins can only create webhooks for their own tenant.
-    scope = user_tenant_filter(admin)
-    effective_tenant = scope if scope is not None else payload.tenant_id
-    if scope is not None and payload.tenant_id is not None and payload.tenant_id != scope:
-        raise HTTPException(403, "access denied — cannot create webhook for a different tenant")
+    # require_role("admin") means every caller here is a global admin —
+    # user_tenant_filter/check_tenant_access return unrestricted (None) for
+    # every admin regardless of that admin's own tenant_id (see auth.py), so
+    # there's no such thing as a "scoped admin" today. payload.tenant_id is
+    # simply which tenant this webhook belongs to.
     try:
         check_webhook_url_safe(payload.url)
     except ValueError as e:
         raise HTTPException(422, f"webhook URL rejected: {e}") from e
     webhook = models.SiemWebhook(
-        tenant_id=effective_tenant,
+        tenant_id=payload.tenant_id,
         name=payload.name,
         url=payload.url,
         secret_encrypted=encrypt_secret(payload.secret),

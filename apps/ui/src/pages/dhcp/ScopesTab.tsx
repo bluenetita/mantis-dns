@@ -21,12 +21,13 @@ import { useDisclosure } from "@mantine/hooks";
 import { modals } from "@mantine/modals";
 import { notifications } from "@mantine/notifications";
 import { IconBolt, IconPlus } from "@tabler/icons-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   useCreateDhcpScope,
   useDeleteDhcpScope,
   useDhcpPush,
   useDhcpScopes,
+  useKeaInterfaces,
   useUpdateDhcpScope,
   type DhcpScope,
 } from "../../api/hooks";
@@ -95,6 +96,18 @@ function ScopeForm({
     onSave(payload);
   });
 
+  const { data: ifaceData } = useKeaInterfaces();
+  const interfaceOptions = useMemo(() => {
+    const opts = (ifaceData?.interfaces ?? []).map((i) => ({
+      value: i.name,
+      label: i.addresses.length ? `${i.name} — ${i.addresses.join(", ")}` : i.name,
+    }));
+    if (initial?.interface && !opts.some((o) => o.value === initial.interface)) {
+      opts.push({ value: initial.interface, label: `${initial.interface} (not currently detected)` });
+    }
+    return opts;
+  }, [ifaceData, initial?.interface]);
+
   return (
     <form onSubmit={submit}>
       <Stack gap="sm">
@@ -145,7 +158,23 @@ function ScopeForm({
           <TextInput label="PXE next-server (siaddr)" placeholder="192.168.1.10" {...form.getInputProps("pxe_next_server")} />
           <TextInput label="PXE boot filename" placeholder="pxelinux.0" {...form.getInputProps("pxe_boot_filename")} />
         </Group>
-        <TextInput label="Interface (optional)" placeholder="eth0" {...form.getInputProps("interface")} />
+        {ifaceData?.ok && interfaceOptions.length > 0 ? (
+          <Select
+            label="Interface (optional)"
+            placeholder="Select interface"
+            data={interfaceOptions}
+            searchable
+            clearable
+            {...form.getInputProps("interface")}
+          />
+        ) : (
+          <TextInput
+            label="Interface (optional)"
+            placeholder="eth0"
+            description={ifaceData && !ifaceData.ok ? "Couldn't reach Kea to list interfaces — enter manually." : undefined}
+            {...form.getInputProps("interface")}
+          />
+        )}
         <Switch label="Enabled" {...form.getInputProps("enabled", { type: "checkbox" })} />
         <Group justify="flex-end" mt="sm">
           <Button variant="default" onClick={onCancel}>Cancel</Button>

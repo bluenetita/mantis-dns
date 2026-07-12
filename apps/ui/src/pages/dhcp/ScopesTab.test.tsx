@@ -24,6 +24,7 @@ import {
   useDeleteDhcpScope,
   useDhcpPush,
   useDhcpScopes,
+  useKeaInterfaces,
   useUpdateDhcpScope,
   type DhcpScope,
 } from "../../api/hooks";
@@ -38,6 +39,7 @@ vi.mock("../../api/hooks", async (importOriginal) => {
     useUpdateDhcpScope: vi.fn(),
     useDeleteDhcpScope: vi.fn(),
     useDhcpPush: vi.fn(),
+    useKeaInterfaces: vi.fn(),
   };
 });
 
@@ -50,6 +52,7 @@ const mockUseCreateDhcpScope = useCreateDhcpScope as MockedFunction<typeof useCr
 const mockUseUpdateDhcpScope = useUpdateDhcpScope as MockedFunction<typeof useUpdateDhcpScope>;
 const mockUseDeleteDhcpScope = useDeleteDhcpScope as MockedFunction<typeof useDeleteDhcpScope>;
 const mockUseDhcpPush = useDhcpPush as MockedFunction<typeof useDhcpPush>;
+const mockUseKeaInterfaces = useKeaInterfaces as MockedFunction<typeof useKeaInterfaces>;
 
 const tenantOptions = [{ value: "t1", label: "Acme" }];
 const zoneOptions = [{ value: "z1", label: "corp.local" }];
@@ -94,9 +97,11 @@ beforeEach(() => {
   mockUseUpdateDhcpScope.mockReset();
   mockUseDeleteDhcpScope.mockReset();
   mockUseDhcpPush.mockReset();
+  mockUseKeaInterfaces.mockReset();
   mockUseCreateDhcpScope.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
   mockUseUpdateDhcpScope.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
   mockUseDeleteDhcpScope.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
+  mockUseKeaInterfaces.mockReturnValue({ data: { ok: false, interfaces: [] } } as never);
   mockUseDhcpPush.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
 });
 
@@ -124,6 +129,28 @@ describe("ScopesTab", () => {
     await user.click(screen.getByRole("button", { name: /add scope/i }));
     expect(await screen.findByRole("heading", { name: "Add scope" })).toBeInTheDocument();
     expect(screen.getByLabelText(/^Name/)).toHaveValue("");
+  });
+
+  it("shows the interface field as free text when Kea's interface list is unavailable", async () => {
+    const user = userEvent.setup();
+    mockUseDhcpScopes.mockReturnValue({ data: [], isLoading: false } as never);
+    mockUseKeaInterfaces.mockReturnValue({ data: { ok: false, interfaces: [] } } as never);
+    renderWithProviders(<ScopesTab tenantOptions={tenantOptions} zoneOptions={zoneOptions} />);
+    await user.click(screen.getByRole("button", { name: /add scope/i }));
+    expect(await screen.findByRole("textbox", { name: /interface/i })).toBeInTheDocument();
+  });
+
+  it("shows the interface field as a dropdown of Kea's detected interfaces", async () => {
+    const user = userEvent.setup();
+    mockUseDhcpScopes.mockReturnValue({ data: [], isLoading: false } as never);
+    mockUseKeaInterfaces.mockReturnValue({
+      data: { ok: true, interfaces: [{ name: "eth1", addresses: ["10.50.0.1"], up: true }] },
+    } as never);
+    renderWithProviders(<ScopesTab tenantOptions={tenantOptions} zoneOptions={zoneOptions} />);
+    await user.click(screen.getByRole("button", { name: /add scope/i }));
+    const field = await screen.findByPlaceholderText("Select interface");
+    await user.click(field);
+    expect(await screen.findByText("eth1 — 10.50.0.1")).toBeInTheDocument();
   });
 
   it("opens the edit modal prefilled with the scope's values", async () => {

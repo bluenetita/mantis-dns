@@ -24,6 +24,7 @@ import {
   useDeleteDhcpScope6,
   useDhcpPush6,
   useDhcpScopes6,
+  useKeaInterfaces6,
   useUpdateDhcpScope6,
   type DhcpScope6,
 } from "../../../api/hooks";
@@ -38,6 +39,7 @@ vi.mock("../../../api/hooks", async (importOriginal) => {
     useUpdateDhcpScope6: vi.fn(),
     useDeleteDhcpScope6: vi.fn(),
     useDhcpPush6: vi.fn(),
+    useKeaInterfaces6: vi.fn(),
   };
 });
 
@@ -50,6 +52,7 @@ const mockUseCreateDhcpScope6 = useCreateDhcpScope6 as MockedFunction<typeof use
 const mockUseUpdateDhcpScope6 = useUpdateDhcpScope6 as MockedFunction<typeof useUpdateDhcpScope6>;
 const mockUseDeleteDhcpScope6 = useDeleteDhcpScope6 as MockedFunction<typeof useDeleteDhcpScope6>;
 const mockUseDhcpPush6 = useDhcpPush6 as MockedFunction<typeof useDhcpPush6>;
+const mockUseKeaInterfaces6 = useKeaInterfaces6 as MockedFunction<typeof useKeaInterfaces6>;
 
 const tenantOptions = [{ value: "t1", label: "Acme" }];
 
@@ -90,10 +93,12 @@ beforeEach(() => {
   mockUseUpdateDhcpScope6.mockReset();
   mockUseDeleteDhcpScope6.mockReset();
   mockUseDhcpPush6.mockReset();
+  mockUseKeaInterfaces6.mockReset();
   mockUseCreateDhcpScope6.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
   mockUseUpdateDhcpScope6.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
   mockUseDeleteDhcpScope6.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
   mockUseDhcpPush6.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
+  mockUseKeaInterfaces6.mockReturnValue({ data: { ok: false, interfaces: [] } } as never);
 });
 
 describe("Scope6sTab", () => {

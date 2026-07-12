@@ -364,7 +364,7 @@ pub async fn run_router_udp_server(socket: UdpSocket, router: Arc<TenantRouter>)
         let socket = socket.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            let response = build_response(
+            let mut response = build_response(
                 &query,
                 bundle.as_deref(),
                 &zones,
@@ -374,6 +374,7 @@ pub async fn run_router_udp_server(socket: UdpSocket, router: Arc<TenantRouter>)
                 &router.telemetry,
             )
             .await;
+            crate::enforce_udp_size_limit(&query, &mut response);
             match response.to_bytes() {
                 Ok(bytes) => {
                     if let Err(e) = socket.send_to(&bytes, peer).await {

@@ -38,7 +38,7 @@ from mantis_control.audit import write_audit_log
 from mantis_control.auth import check_tenant_access, require_role, user_tenant_filter
 from mantis_control.db.models import DhcpHaConfig, DhcpOption, DhcpRelayConfig, DhcpScope, DhcpStaticLease
 from mantis_control.db.session import get_db
-from mantis_control.dhcp.kea_config import KEA4_CTRL_URL, kea_command, try_push
+from mantis_control.dhcp.kea_config import KEA4_CTRL_URL, kea_command, list_kea_interfaces, try_push
 
 router = APIRouter(prefix="/dhcp", tags=["dhcp"])
 log = logging.getLogger(__name__)
@@ -642,6 +642,17 @@ async def kea_status(user: Any = Depends(require_role("viewer"))) -> dict[str, A
         }
     except Exception as exc:
         return {"ok": False, "url": KEA4_CTRL_URL, "error": str(exc)}
+
+
+@router.get("/kea/interfaces")
+async def kea_interfaces(user: Any = Depends(require_role("viewer"))) -> dict[str, Any]:
+    """List network interfaces kea-dhcp4 can see, for the scope Interface
+    field's dropdown. Degrades gracefully (ok: False) if Kea is unreachable —
+    scopes should stay editable during a Kea outage."""
+    try:
+        return {"ok": True, "interfaces": await list_kea_interfaces(["dhcp4"])}
+    except Exception as exc:
+        return {"ok": False, "interfaces": [], "error": str(exc)}
 
 
 # ── HA configuration ───────────────────────────────────────────────────────────

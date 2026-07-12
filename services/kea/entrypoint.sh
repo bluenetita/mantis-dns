@@ -86,15 +86,17 @@ if [ -z "$HOST_CMDS_LIB" ]; then
 fi
 
 HOOKS4_JSON="[{\"library\":\"${PGSQL_LIB}\"}, {\"library\":\"${LEASE_CMDS_LIB}\"}, {\"library\":\"${SUBNET_CMDS_LIB}\"}, {\"library\":\"${HOST_CMDS_LIB}\"}"
-HOOKS6_JSON="[{\"library\":\"${PGSQL_LIB}\"}, {\"library\":\"${SUBNET_CMDS_LIB}\"}, {\"library\":\"${HOST_CMDS_LIB}\"}]"
+HOOKS6_JSON="[{\"library\":\"${PGSQL_LIB}\"}, {\"library\":\"${SUBNET_CMDS_LIB}\"}, {\"library\":\"${HOST_CMDS_LIB}\"}"
 
 if [ -n "$RUN_SCRIPT_LIB" ] && [ -f /usr/share/kea/scripts/mantis-ddns-bridge.sh ]; then
     echo "run_script hook found at ${RUN_SCRIPT_LIB} — DDNS bridge active."
     HOOKS4_JSON="${HOOKS4_JSON}, {\"library\":\"${RUN_SCRIPT_LIB}\",\"parameters\":{\"name\":\"/usr/share/kea/scripts/mantis-ddns-bridge.sh\",\"sync\":false}}"
+    HOOKS6_JSON="${HOOKS6_JSON}, {\"library\":\"${RUN_SCRIPT_LIB}\",\"parameters\":{\"name\":\"/usr/share/kea/scripts/mantis-ddns-bridge.sh\",\"sync\":false}}"
 else
     echo "run_script hook not found — DDNS bridge disabled."
 fi
 HOOKS4_JSON="${HOOKS4_JSON}]"
+HOOKS6_JSON="${HOOKS6_JSON}]"
 
 # Write DHCPv4 runtime config.
 sed \

@@ -328,6 +328,10 @@ class DnsRecord(Base):
     # DHCP client could set its hostname option to an existing name (e.g.
     # another host's "printer") and hijack that name's A record.
     ddns_owner_mac: Mapped[str | None] = mapped_column(String(17), nullable=True)
+    # Same idea as ddns_owner_mac but for DHCPv6 DDNS (AAAA records) — keyed
+    # on DUID rather than MAC, since v6 leases are DUID-identified and DUIDs
+    # don't fit the 17-char MAC column.
+    ddns_owner_duid: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 

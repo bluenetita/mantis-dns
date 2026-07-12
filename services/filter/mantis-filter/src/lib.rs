@@ -38,7 +38,7 @@ use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
 use cache::DnsCache;
 use ed25519_dalek::VerifyingKey;
-use hickory_proto::op::{Message, MessageType, ResponseCode};
+use hickory_proto::op::{Edns, Message, MessageType, ResponseCode};
 use hickory_proto::rr::rdata::{A, AAAA};
 use hickory_proto::rr::{Name, RData, Record, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
@@ -493,7 +493,7 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
         tokio::spawn(async move {
             let _permit = permit;
             let bundle = state.store.current();
-            let response = build_response(
+            let mut response = build_response(
                 &query,
                 bundle.as_deref(),
                 &state.zones,
@@ -503,6 +503,7 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
                 &state.telemetry,
             )
             .await;
+            enforce_udp_size_limit(&query, &mut response);
             match response.to_bytes() {
                 Ok(bytes) => {
                     if let Err(e) = socket.send_to(&bytes, peer).await {
@@ -611,6 +612,17 @@ pub use upstream_bundle::{
     UpstreamBundleStore,
 };
 
+/// Whether to resolve normally (bypassing policy) during the bootstrap
+/// window before this process's first bundle has loaded. See the
+/// `bundle is None` branch of `build_response` for the full rationale.
+/// Defaults to false (ServFail) — the safe default matches what every
+/// deployment already gets today, so this is opt-in only.
+fn bootstrap_fail_open() -> bool {
+    std::env::var("MANTIS_BOOTSTRAP_FAIL_OPEN")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false)
+}
+
 /// Adds the MANTIS_SERVICE_TOKEN bearer header to outbound M2M requests.
 pub fn with_service_token(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
     if let Ok(tok) = std::env::var("MANTIS_SERVICE_TOKEN") {
@@ -677,7 +689,22 @@ pub(crate) async fn build_response(
     }
 
     let Some(bundle) = bundle else {
-        response.set_response_code(ResponseCode::ServFail);
+        // No bundle has loaded yet — this only happens in the window before
+        // this process's very first successful fetch+verify: try_publish
+        // never clears the store back to None on a later failed refresh, so
+        // once any bundle has loaded, the last-known-good one stays active
+        // and this branch is never reached again for the life of the
+        // process. There's no Bundle to read on_load_failure from yet (the
+        // field lives on the bundle itself), so the bootstrap-window
+        // behavior is controlled by MANTIS_BOOTSTRAP_FAIL_OPEN instead —
+        // defaulting to closed (ServFail) since resolving with no policy
+        // applied at all is unsafe for a tenant that hasn't even completed
+        // provisioning yet.
+        if bootstrap_fail_open() {
+            resolve_records(&qname, qtype, &[], cache, forwarder, &mut response).await;
+        } else {
+            response.set_response_code(ResponseCode::ServFail);
+        }
         return response;
     };
 
@@ -715,6 +742,50 @@ pub(crate) async fn build_response(
     });
 
     response
+}
+
+/// Highest EDNS0 payload size this server will ever advertise/honor, even if
+/// a client asks for more — keeps worst-case UDP responses well clear of
+/// common path-MTU/fragmentation limits.
+const MAX_UDP_PAYLOAD: u16 = 4096;
+
+/// RFC 1035 §4.2.1 / RFC 6891: a UDP response must not exceed the
+/// requester's advertised max payload (EDNS0 OPT in the query), or 512
+/// bytes for a classic (non-EDNS) query. Without this, an oversized answer
+/// set (many records, a long CNAME chain) just ships as an oversized UDP
+/// datagram — silently dropped by strict middleboxes/firewalls, or
+/// fragmented, with the client never learning to retry over TCP.
+///
+/// Call this on the UDP send path only (right before `to_bytes()`); TCP has
+/// no such limit and must not have its answers dropped.
+pub(crate) fn enforce_udp_size_limit(query: &Message, response: &mut Message) {
+    let max_payload = match query.extensions().as_ref() {
+        Some(edns) => {
+            let negotiated = edns.max_payload().clamp(512, MAX_UDP_PAYLOAD);
+            // RFC 6891 §6.1.1: echo an OPT record back so the client knows
+            // this server understood EDNS0 and what payload size to expect.
+            let mut resp_edns = Edns::new();
+            resp_edns.set_max_payload(negotiated);
+            response.set_edns(resp_edns);
+            negotiated
+        }
+        None => 512,
+    } as usize;
+
+    let fits = matches!(response.to_bytes(), Ok(bytes) if bytes.len() <= max_payload);
+    if fits {
+        return;
+    }
+
+    response.set_truncated(true);
+    while !response.answers().is_empty() {
+        response.answers_mut().pop();
+        match response.to_bytes() {
+            Ok(bytes) if bytes.len() <= max_payload => break,
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
 }
 
 /// Synthesizes the DNS answer for a blocked query per the bundle's
@@ -815,9 +886,32 @@ async fn resolve_records(
 
     let policy = forwarder.ttl_policy();
     match forwarder.lookup(qname, qtype, categories).await {
-        Ok(records) => {
+        Ok(records) if records.is_empty() => {
+            // Some Forwarder impls (any custom implementation, and the test
+            // MockForwarder) signal NODATA via Ok(vec![]) rather than the
+            // is_no_records_found() error path below. cache.put() no-ops on
+            // an empty Vec, so without this branch this answer is served
+            // correctly once but never negative-cached — every repeat query
+            // forces a fresh upstream round-trip, defeating the negative-
+            // caching DoS mitigation this cache otherwise provides.
+            response.set_response_code(ResponseCode::NoError);
+            cache.put_negative(
+                qname.to_string(),
+                qtype_u16,
+                cache::NegativeKind::NoData,
+                Duration::from_secs(u64::from(policy.negative_ttl())),
+            );
+        }
+        Ok(mut records) => {
             let raw_ttl = records.iter().map(|r| r.ttl()).min().unwrap_or(60);
             let ttl = policy.clamp_positive(raw_ttl);
+            // Apply the clamped TTL to the records themselves, not just the
+            // cache entry's expiry — otherwise a tenant's min/max_ttl_s
+            // policy only shrinks our own cache lifetime while the client's
+            // resolver still caches the raw, unclamped upstream TTL.
+            for rec in &mut records {
+                rec.set_ttl(ttl);
+            }
             cache.put(
                 qname.to_string(),
                 qtype_u16,
@@ -869,6 +963,7 @@ async fn resolve_records(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hickory_proto::op::Query;
 
     fn test_key(seed: u8) -> VerifyingKey {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
@@ -903,6 +998,163 @@ mod tests {
         let bytes = [42u8; 32];
         let wrong = "00".repeat(32);
         assert!(verify_public_key_pin(&bytes, &wrong).is_err());
+    }
+
+    struct EmptyOkForwarder;
+
+    #[async_trait::async_trait]
+    impl Forwarder for EmptyOkForwarder {
+        async fn lookup(
+            &self,
+            _qname: &str,
+            _qtype: RecordType,
+            _categories: &[String],
+        ) -> Result<Vec<Record>> {
+            // Some Forwarder impls signal NODATA this way rather than via
+            // an is_no_records_found() error — see resolve_records.
+            Ok(vec![])
+        }
+    }
+
+    fn a_query(qname: &str) -> Message {
+        let mut query = Message::new();
+        query.set_message_type(MessageType::Query);
+        query.add_query(Query::query(qname.parse().unwrap(), RecordType::A));
+        query
+    }
+
+    fn oversized_response(n: usize) -> Message {
+        let mut response = Message::new();
+        response.set_message_type(MessageType::Response);
+        response.set_response_code(ResponseCode::NoError);
+        let name: Name = "bulky.example.".parse().unwrap();
+        for i in 0..n {
+            response.add_answer(Record::from_rdata(
+                name.clone(),
+                60,
+                RData::A(A(std::net::Ipv4Addr::new(10, 0, (i / 256) as u8, (i % 256) as u8))),
+            ));
+        }
+        response
+    }
+
+    #[test]
+    fn udp_size_limit_leaves_small_response_untouched() {
+        let query = a_query("small.example.");
+        let mut response = oversized_response(1);
+        enforce_udp_size_limit(&query, &mut response);
+        assert!(!response.truncated());
+        assert_eq!(response.answers().len(), 1);
+        assert!(response.to_bytes().unwrap().len() <= 512);
+    }
+
+    #[test]
+    fn udp_size_limit_truncates_and_sets_tc_without_edns() {
+        // No EDNS in the query -> classic 512-byte ceiling. 60 A records is
+        // comfortably over that.
+        let query = a_query("bulky.example.");
+        let mut response = oversized_response(60);
+        assert!(response.to_bytes().unwrap().len() > 512, "test fixture must actually be oversized");
+
+        enforce_udp_size_limit(&query, &mut response);
+
+        assert!(response.truncated(), "TC bit must be set when answers were dropped");
+        assert!(response.answers().len() < 60, "some answers must have been dropped");
+        let bytes = response.to_bytes().unwrap();
+        assert!(bytes.len() <= 512, "final response must fit the negotiated payload, got {}", bytes.len());
+    }
+
+    #[test]
+    fn udp_size_limit_honors_larger_edns_payload_and_echoes_opt() {
+        // Same oversized answer set, but the client advertised EDNS0 with a
+        // payload large enough to hold it — must NOT be truncated, and the
+        // response must carry an echoed OPT record (RFC 6891 §6.1.1).
+        let mut query = a_query("bulky.example.");
+        let mut edns = Edns::new();
+        edns.set_max_payload(4096);
+        query.set_edns(edns);
+
+        let mut response = oversized_response(60);
+        enforce_udp_size_limit(&query, &mut response);
+
+        assert!(!response.truncated());
+        assert_eq!(response.answers().len(), 60);
+        assert!(response.extensions().is_some(), "server must echo an OPT record when the query had one");
+        assert!(response.to_bytes().unwrap().len() <= 4096);
+    }
+
+    #[test]
+    fn udp_size_limit_clamps_edns_payload_to_server_ceiling() {
+        // A client advertising an absurdly large payload must not get a
+        // response bigger than MAX_UDP_PAYLOAD.
+        let mut query = a_query("bulky.example.");
+        let mut edns = Edns::new();
+        edns.set_max_payload(65535);
+        query.set_edns(edns);
+
+        let mut response = oversized_response(400); // large enough to exceed 4096 too
+        enforce_udp_size_limit(&query, &mut response);
+
+        let bytes = response.to_bytes().unwrap();
+        assert!(bytes.len() <= MAX_UDP_PAYLOAD as usize, "got {} bytes", bytes.len());
+        assert!(response.truncated());
+    }
+
+    #[tokio::test]
+    async fn no_bundle_loaded_yet_respects_bootstrap_fail_open_env_var() {
+        // Single test (not two) because MANTIS_BOOTSTRAP_FAIL_OPEN is
+        // process-global env state and cargo runs tests in the same binary
+        // concurrently by default — two separate tests toggling it would
+        // race each other's reads.
+        async fn query_with_no_bundle() -> Message {
+            build_response(
+                &a_query("bootstrap.example."),
+                None,
+                &ZoneStore::empty(),
+                "127.0.0.1".parse().unwrap(),
+                &DnsCache::new(10),
+                &EmptyOkForwarder,
+                &TelemetryEmitter::noop(),
+            )
+            .await
+        }
+
+        // No MANTIS_BOOTSTRAP_FAIL_OPEN set — must preserve today's safe
+        // default (ServFail) for the pre-first-load bootstrap window.
+        std::env::remove_var("MANTIS_BOOTSTRAP_FAIL_OPEN");
+        assert_eq!(query_with_no_bundle().await.response_code(), ResponseCode::ServFail);
+
+        std::env::set_var("MANTIS_BOOTSTRAP_FAIL_OPEN", "true");
+        // EmptyOkForwarder returns Ok(vec![]) — NOERROR/NODATA, not ServFail,
+        // proving the query was actually forwarded rather than blocked.
+        assert_eq!(query_with_no_bundle().await.response_code(), ResponseCode::NoError);
+        std::env::remove_var("MANTIS_BOOTSTRAP_FAIL_OPEN");
+    }
+
+    #[tokio::test]
+    async fn resolve_records_negative_caches_an_empty_ok_answer() {
+        let cache = DnsCache::new(10);
+        let forwarder = EmptyOkForwarder;
+        let mut response = Message::new();
+
+        let hit = resolve_records(
+            "empty-ok.example.",
+            RecordType::AAAA,
+            &[],
+            &cache,
+            &forwarder,
+            &mut response,
+        )
+        .await;
+
+        assert!(!hit, "first call is a cache miss, not a hit");
+        assert_eq!(response.answers().len(), 0);
+        // The key assertion: an Ok(vec![]) upstream answer must still land
+        // in the cache as NODATA, not silently skip caching entirely.
+        match cache.get("empty-ok.example.", u16::from(RecordType::AAAA)) {
+            Some(cache::CacheLookup::Negative(cache::NegativeKind::NoData)) => {}
+            other => panic!("expected a cached NODATA entry, got {}", other.is_some()),
+        }
     }
 
     #[test]

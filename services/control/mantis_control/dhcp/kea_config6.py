@@ -24,6 +24,7 @@ host_cmds, same as v4.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -35,6 +36,10 @@ from mantis_control.dhcp.kea_config import _synced_kea_subnet_ids, kea_command
 from mantis_control.db.models import DhcpScope6
 
 log = logging.getLogger(__name__)
+
+# See kea_config.py's _push_lock — same rationale, separate lock since v4
+# and v6 pushes hit independent Kea daemons and shouldn't block each other.
+_push_lock6 = asyncio.Lock()
 
 
 def _scope_kea_id6(scope_uuid: str) -> int:
@@ -153,8 +158,15 @@ async def push_full_config6(db: Session) -> None:
     """Sync kea-dhcp6's live subnet6 list to Mantis DB state via subnet_cmds
     (subnet6-add/-update/-del), diffed against subnet6-list, then reconcile
     each surviving subnet's reservations via host_cmds."""
+    async with _push_lock6:
+        await _push_full_config6_locked(db)
+
+
+async def _push_full_config6_locked(db: Session) -> None:
     filter_ip = os.getenv("MANTIS_FILTER_NODE_IP", "")
     scopes = db.query(DhcpScope6).filter(DhcpScope6.enabled.is_(True)).all()
+    # See kea_config.py's push_full_config for why this needs a stable order.
+    scopes = sorted(scopes, key=lambda s: s.id)
     kea_ids = _assign_unique_kea_ids6(scopes)
 
     desired: dict[int, dict[str, Any]] = {}

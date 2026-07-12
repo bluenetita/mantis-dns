@@ -80,20 +80,36 @@ impl BundleStore {
     /// Verifies `bundle` and, if valid, atomically publishes it as current.
     /// Rejects (and leaves the old bundle in place) if verification fails or
     /// if `bundle` is not newer than what's already loaded.
+    ///
+    /// The version check and the publish are one atomic `rcu` operation, not
+    /// a separate load-then-store — a plain load-check-store here would let
+    /// two racing publishers each pass the check against the same stale
+    /// snapshot, so a lower-version bundle whose store happens to land second
+    /// could silently overwrite a higher-version one that already published.
     pub fn try_publish(&self, bundle: Bundle, public_key: &VerifyingKey) -> Result<()> {
         verify(&bundle, public_key)?;
 
-        if let Some(existing) = self.current.load().as_ref() {
-            if bundle.version <= existing.version {
+        let bundle = std::sync::Arc::new(bundle);
+        let incoming_version = bundle.version;
+
+        // rcu's closure may re-run under contention, but only the winning
+        // attempt's return value is ever stored — see `Self::current`'s doc.
+        // When rejecting, returning `existing.clone()` unchanged makes the
+        // "swap" a no-op (same Arc pointer), not an actual replacement.
+        let prev = self.current.rcu(|existing| match existing {
+            Some(current) if incoming_version <= current.version => existing.clone(),
+            _ => Some(std::sync::Arc::clone(&bundle)),
+        });
+
+        if let Some(prev) = prev {
+            if incoming_version <= prev.version {
                 bail!(
                     "refusing to publish stale bundle: incoming version {} <= current {}",
-                    bundle.version,
-                    existing.version
+                    incoming_version,
+                    prev.version
                 );
             }
         }
-
-        self.current.store(Some(std::sync::Arc::new(bundle)));
         Ok(())
     }
 
@@ -146,5 +162,42 @@ mod store_tests {
     fn empty_store_has_no_current() {
         let store = BundleStore::empty();
         assert!(store.current().is_none());
+    }
+
+    #[test]
+    fn concurrent_publishes_never_regress_the_version() {
+        // Many threads race to publish distinct versions against the same
+        // (initially empty) store, released together via a Barrier to
+        // maximize contention on the very first publish — the case a plain
+        // load-then-store handles incorrectly, since every thread's initial
+        // load sees an empty store and none of them would see each other's
+        // writes without the atomic retry `rcu` provides.
+        let signing_key = SigningKey::from_bytes(&[9u8; 32]);
+        let public_key = signing_key.verifying_key();
+        let store = std::sync::Arc::new(BundleStore::empty());
+
+        const N: u64 = 64;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(N as usize));
+        let handles: Vec<_> = (1..=N)
+            .map(|version| {
+                let store = std::sync::Arc::clone(&store);
+                let barrier = std::sync::Arc::clone(&barrier);
+                let bundle = signed(version, &signing_key);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    // A publish can legitimately fail if another thread's
+                    // higher version already won — only assert on success.
+                    let _ = store.try_publish(bundle, &public_key);
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Whatever interleaving occurred, the highest version submitted must
+        // be what's live at the end — a lower version can never have won a
+        // race against a higher one that also published.
+        assert_eq!(store.current().unwrap().version, N);
     }
 }

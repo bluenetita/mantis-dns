@@ -45,7 +45,7 @@ from mantis_control.config import settings
 from mantis_control.db.models import Feed, User
 from mantis_control.db.session import SessionLocal
 from mantis_control.feeds.seed import seed_catalog
-from mantis_control.scheduler import kick_feed_now, schedule_feed, scheduler
+from mantis_control.scheduler import kick_feed_now, mark_shutting_down, schedule_feed, scheduler
 from mantis_control.siem_delivery import run_webhook_delivery_cycle
 from mantis_control.dhcp.lease_sync import sync_dhcp_leases
 
@@ -143,6 +143,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        mark_shutting_down()
         scheduler.shutdown(wait=False)
 
 

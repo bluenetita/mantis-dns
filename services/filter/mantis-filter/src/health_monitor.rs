@@ -96,10 +96,15 @@ impl HealthStore {
 
     pub(crate) fn update(&self, pool_id: &str, resolver_id: &str, snap: MemberHealthSnapshot) {
         let key = (pool_id.to_string(), resolver_id.to_string());
-        let old = self.inner.load();
-        let mut next = (**old).clone();
-        next.insert(key, snap);
-        self.inner.store(Arc::new(next));
+        // rcu (not load+store) so two members' concurrent probe results
+        // can't race: a plain load-clone-store here would let the second
+        // store silently discard the first writer's update since both
+        // start from the same base map.
+        self.inner.rcu(|old| {
+            let mut next = (**old).clone();
+            next.insert(key.clone(), snap.clone());
+            next
+        });
     }
 
     /// Returns resolver IDs of healthy members ordered by the pool's member

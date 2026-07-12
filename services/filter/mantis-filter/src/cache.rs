@@ -67,12 +67,29 @@ impl DnsCache {
 
     pub fn get(&self, qname: &str, qtype: u16) -> Option<CacheLookup> {
         let map = self.map.read().unwrap_or_else(|e| e.into_inner());
-        let entry = map.get(&(qname.to_string(), qtype))?;
-        if entry.expires_at <= Instant::now() {
+        // DNS names are case-insensitive (RFC 1035/4343) — some clients vary
+        // case per query (0x20 anti-spoofing) or simply send mixed case, and
+        // without normalizing here "Example.com"/"example.com" would occupy
+        // separate cache slots and never share a hit.
+        let entry = map.get(&(qname.to_ascii_lowercase(), qtype))?;
+        let now = Instant::now();
+        if entry.expires_at <= now {
             return None;
         }
+        // Report the TTL actually remaining, not the TTL the entry was
+        // inserted with — otherwise a record cached 55s ago with TTL=60
+        // still claims TTL=60 on a hit, overstating freshness to whatever
+        // resolver/client caches this answer downstream.
+        let remaining_ttl = u32::try_from(entry.expires_at.duration_since(now).as_secs())
+            .unwrap_or(u32::MAX);
         Some(match &entry.kind {
-            CacheEntryKind::Records(records) => CacheLookup::Records(records.clone()),
+            CacheEntryKind::Records(records) => {
+                let mut records = records.clone();
+                for rec in &mut records {
+                    rec.set_ttl(remaining_ttl);
+                }
+                CacheLookup::Records(records)
+            }
             CacheEntryKind::Negative(kind) => CacheLookup::Negative(*kind),
         })
     }
@@ -82,7 +99,7 @@ impl DnsCache {
             return;
         }
         let mut map = self.map.write().unwrap_or_else(|e| e.into_inner());
-        let key = (qname, qtype);
+        let key = (qname.to_ascii_lowercase(), qtype);
         if map.len() >= self.max_entries && !map.contains_key(&key) {
             let now = Instant::now();
             let victim = map
@@ -206,6 +223,20 @@ mod tests {
         );
         std::thread::sleep(Duration::from_millis(5));
         assert!(cache.get("example.com", u16::from(RecordType::A)).is_none());
+    }
+
+    #[test]
+    fn lookup_is_case_insensitive() {
+        let cache = DnsCache::new(10);
+        let rec = a_record("Example.com", Ipv4Addr::new(1, 2, 3, 4));
+        cache.put(
+            "Example.com".into(),
+            u16::from(RecordType::A),
+            vec![rec],
+            Duration::from_secs(60),
+        );
+        assert!(cache.get("example.com", u16::from(RecordType::A)).is_some());
+        assert!(cache.get("EXAMPLE.COM", u16::from(RecordType::A)).is_some());
     }
 
     #[test]

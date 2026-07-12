@@ -34,6 +34,7 @@ from mantis_control.audit import write_audit_log
 from mantis_control.auth import check_tenant_access, require_role, user_tenant_filter
 from mantis_control.db.models import DhcpScope6, DhcpStaticLease6
 from mantis_control.db.session import get_db
+from mantis_control.dhcp.kea_config import list_kea_interfaces
 from mantis_control.dhcp.kea_config6 import try_push6
 
 router = APIRouter(prefix="/dhcp6", tags=["dhcp6"])
@@ -397,3 +398,14 @@ async def manual_push6(
         return {"ok": False, "error": err}
     write_audit_log(db, "dhcp6.push", "kea6", "full-config", actor=user.email)
     return {"ok": True}
+
+
+@router.get("/kea/interfaces")
+async def kea_interfaces6(user: Any = Depends(require_role("viewer"))) -> dict[str, Any]:
+    """List network interfaces kea-dhcp6 can see, for the scope Interface
+    field's dropdown. Degrades gracefully (ok: False) if Kea is unreachable —
+    scopes should stay editable during a Kea outage."""
+    try:
+        return {"ok": True, "interfaces": await list_kea_interfaces(["dhcp6"])}
+    except Exception as exc:
+        return {"ok": False, "interfaces": [], "error": str(exc)}

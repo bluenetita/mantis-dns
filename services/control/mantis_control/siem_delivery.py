@@ -24,6 +24,7 @@ consecutive failures so a dead SIEM endpoint can't accumulate silently.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json as jsonlib
@@ -64,7 +65,10 @@ async def _post(webhook: models.SiemWebhook, body: bytes, content_type: str, cli
     # raises ValueError -> caught by caller as delivery failure. Fetch by
     # pinned IP (not the hostname) so a DNS re-resolution at connect time
     # can't redirect this request somewhere the guard didn't see.
-    pinned_url, original_host = resolve_pinned_webhook_url(webhook.url)
+    # resolve_pinned_webhook_url blocks on socket.getaddrinfo() — offload it
+    # so a slow/black-holed webhook host doesn't stall the shared event loop
+    # (this runs on every ~10s SIEM delivery tick, not just admin actions).
+    pinned_url, original_host = await asyncio.to_thread(resolve_pinned_webhook_url, webhook.url)
     secret = decrypt_secret(webhook.secret_encrypted)
     signature = _sign(secret, body)
     headers = {

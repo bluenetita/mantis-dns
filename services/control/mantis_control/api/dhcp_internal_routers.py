@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 from fastapi import Depends
 
 from mantis_control.config import settings
-from mantis_control.db.models import ClientEntry, DhcpScope, DnsRecord, DnsZone
+from mantis_control.db.models import ClientEntry, DhcpScope, DhcpScope6, DnsRecord, DnsZone
 from mantis_control.db.session import get_db
 
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -52,7 +52,9 @@ class DhcpEvent(BaseModel):
     event: str          # "add" | "expire"
     ip: str
     hostname: str
-    mac: str = ""
+    family: str = "4"   # "4" | "6" — which Kea daemon/scope table this event is from
+    mac: str = ""        # family "4": DHCP client hwaddr
+    duid: str = ""        # family "6": DHCP client DUID
     subnet_id: int = 0
 
 
@@ -79,6 +81,15 @@ def _mac_fmt(raw: str) -> str | None:
     if len(h) != 12:
         return raw
     return ":".join(h[i: i + 2] for i in range(0, 12, 2))
+
+
+def _duid_fmt(raw: str) -> str | None:
+    """Normalise a DUID to lowercase colon-separated hex. Kea already sends
+    LEASEx_DUID in that form; this just guards against case drift so the
+    same client's DUID always compares equal as an ownership key."""
+    if not raw:
+        return None
+    return raw.strip().lower()
 
 
 def _upsert_client_entry(
@@ -183,6 +194,80 @@ def _delete_a_record(db: Session, scope: DhcpScope, hostname: str, ip: str, mac:
         zone.updated_at = _now()
 
 
+def _upsert_aaaa_record(db: Session, scope: DhcpScope6, hostname: str, ip: str, duid: str | None) -> None:
+    """DHCPv6 counterpart of `_upsert_a_record` — same ownership protection,
+    keyed on DUID (`ddns_owner_duid`) instead of MAC, since v6 leases are
+    DUID-identified."""
+    zone = db.get(DnsZone, scope.ddns_zone_id)
+    if zone is None or not zone.enabled:
+        return
+    name = _rel_hostname(hostname, zone.name)
+    if not name:
+        return
+
+    existing = (
+        db.query(DnsRecord)
+        .filter(
+            DnsRecord.zone_id == zone.id,
+            DnsRecord.name == name,
+            DnsRecord.record_type == "AAAA",
+        )
+        .first()
+    )
+    now = _now()
+    if existing:
+        if existing.ddns_owner_duid is None:
+            log.info("DDNS update for %s/%s ignored: record was not created via DDNS", zone.name, name)
+            return
+        if existing.ddns_owner_duid != duid:
+            log.warning(
+                "DDNS update for %s/%s ignored: owned by a different client (%s != %s)",
+                zone.name, name, existing.ddns_owner_duid, duid,
+            )
+            return
+        existing.data = ip
+        existing.updated_at = now
+        if duid:
+            existing.ddns_owner_duid = duid
+    else:
+        db.add(DnsRecord(
+            zone_id=zone.id,
+            name=name,
+            record_type="AAAA",
+            data=ip,
+            ttl=scope.ddns_ttl_s,
+            enabled=True,
+            ddns_owner_duid=duid,
+        ))
+    zone.updated_at = now  # signal filter to refresh zone
+
+
+def _delete_aaaa_record(db: Session, scope: DhcpScope6, hostname: str, ip: str, duid: str | None) -> None:
+    zone = db.get(DnsZone, scope.ddns_zone_id)
+    if zone is None:
+        return
+    name = _rel_hostname(hostname, zone.name)
+    if not name:
+        return
+
+    if not duid:
+        # Same reasoning as _delete_a_record: no duid, no ownership proof,
+        # refuse to delete.
+        return
+
+    filters = [
+        DnsRecord.zone_id == zone.id,
+        DnsRecord.name == name,
+        DnsRecord.record_type == "AAAA",
+        DnsRecord.data == ip,
+        DnsRecord.ddns_owner_duid == duid,
+    ]
+
+    deleted = db.query(DnsRecord).filter(*filters).delete()
+    if deleted:
+        zone.updated_at = _now()
+
+
 # ── Endpoint ───────────────────────────────────────────────────────────────────
 
 @router.post("/dhcp-event", status_code=204)
@@ -191,12 +276,40 @@ def dhcp_event(
     db: Session = Depends(get_db),
     _: None = Depends(_verify_internal),
 ) -> None:
-    """Receives lease add/expire events from the Kea run_script hook.
+    """Receives lease add/expire events from the Kea run_script hook, for
+    both kea-dhcp4 (family="4") and kea-dhcp6 (family="6").
 
     For each event:
     - Always upserts ClientEntry (client registry)
-    - If the scope has ddns_enabled + ddns_zone_id, creates/removes A record
+    - If the scope has ddns_enabled + ddns_zone_id, creates/removes the
+      matching A (v4) or AAAA (v6) record
     """
+    hostname = body.hostname.strip() or None
+
+    if body.family == "6":
+        scope6 = (
+            db.query(DhcpScope6)
+            .filter(DhcpScope6.kea_subnet_id == body.subnet_id)
+            .first()
+        )
+        if scope6 is None:
+            log.debug("dhcp-event: subnet_id=%d not found in dhcp_scopes6", body.subnet_id)
+            return
+
+        duid = _duid_fmt(body.duid) if body.duid else None
+
+        if body.event == "add":
+            _upsert_client_entry(db, scope6.tenant_id, body.ip, hostname, None)
+            if scope6.ddns_enabled and scope6.ddns_zone_id and hostname:
+                _upsert_aaaa_record(db, scope6, hostname, body.ip, duid)
+
+        elif body.event in ("expire", "delete"):
+            if scope6.ddns_enabled and scope6.ddns_zone_id and hostname:
+                _delete_aaaa_record(db, scope6, hostname, body.ip, duid)
+
+        db.commit()
+        return
+
     scope = (
         db.query(DhcpScope)
         .filter(DhcpScope.kea_subnet_id == body.subnet_id)
@@ -208,7 +321,6 @@ def dhcp_event(
         return
 
     mac = _mac_fmt(body.mac) if body.mac else None
-    hostname = body.hostname.strip() or None
 
     if body.event == "add":
         _upsert_client_entry(db, scope.tenant_id, body.ip, hostname, mac)

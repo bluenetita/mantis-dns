@@ -994,6 +994,34 @@ export function useKeasStatus() {
   });
 }
 
+export interface KeaInterface {
+  name: string;
+  addresses: string[];
+  up: boolean;
+}
+
+export function useKeaInterfaces() {
+  return useQuery({
+    queryKey: ["kea-interfaces"],
+    queryFn: () =>
+      rawGet<{ ok: boolean; interfaces: KeaInterface[]; error?: string }>(
+        "/api/v1/dhcp/kea/interfaces"
+      ),
+    staleTime: 30_000,
+  });
+}
+
+export function useKeaInterfaces6() {
+  return useQuery({
+    queryKey: ["kea-interfaces6"],
+    queryFn: () =>
+      rawGet<{ ok: boolean; interfaces: KeaInterface[]; error?: string }>(
+        "/api/v1/dhcp6/kea/interfaces"
+      ),
+    staleTime: 30_000,
+  });
+}
+
 export function useDhcpPush() {
   const qc = useQueryClient();
   return useMutation({

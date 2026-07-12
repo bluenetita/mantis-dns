@@ -46,6 +46,7 @@ restart without touching data.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -57,6 +58,12 @@ from sqlalchemy.orm import Session
 from mantis_control.db.models import DhcpScope
 
 log = logging.getLogger(__name__)
+
+# Every mutating DHCP endpoint calls push_full_config() inline per-request;
+# without this lock, two concurrent pushes can interleave subnet4-add/-del
+# and reservation-add/-del calls against Kea's REST API (each snapshotting
+# existing state independently), losing reservations or spuriously failing.
+_push_lock = asyncio.Lock()
 
 KEA_CTRL_URL = os.getenv("KEA_CTRL_URL", "http://kea:8004/")
 KEA4_CTRL_URL = os.getenv("KEA4_CTRL_URL", KEA_CTRL_URL)
@@ -203,6 +210,24 @@ async def kea_command(
         return cast(dict[str, Any], results[0] if isinstance(results, list) else results)
 
 
+async def list_kea_interfaces(service: list[str]) -> list[dict[str, Any]]:
+    """Interfaces Kea's dhcp4/dhcp6 daemon can see (via `interface-list`),
+    for the scope "Interface" field's dropdown — so operators pick a real,
+    currently-detected interface name instead of guessing/typing one."""
+    result = await kea_command("interface-list", service=service)
+    if result.get("result") != 0:
+        raise RuntimeError(f"Kea interface-list failed: {result.get('text', result)}")
+    interfaces = (result.get("arguments") or {}).get("interfaces", [])
+    return [
+        {
+            "name": i["name"],
+            "addresses": i.get("addresses", []),
+            "up": bool(i.get("flag-up")),
+        }
+        for i in interfaces
+    ]
+
+
 async def _synced_kea_subnet_ids(service: list[str]) -> set[int]:
     """Kea's live subnet4/subnet6 ids, per subnet-list — the source of truth
     for diffing, since deleted DhcpScope rows leave no local trace of the
@@ -252,8 +277,19 @@ async def push_full_config(db: Session) -> None:
     (subnet4-add/-update/-del), diffed against subnet4-list, then reconcile
     each surviving subnet's reservations via host_cmds. See module docstring
     for why this replaced a config-set-based full push."""
+    async with _push_lock:
+        await _push_full_config_locked(db)
+
+
+async def _push_full_config_locked(db: Session) -> None:
     filter_ip = os.getenv("MANTIS_FILTER_NODE_IP", "")
     scopes = db.query(DhcpScope).filter(DhcpScope.enabled.is_(True)).all()
+    # Sorted (not relying on DB row order, which Postgres doesn't guarantee
+    # without ORDER BY) so _assign_unique_kea_ids's collision-probing is
+    # deterministic across pushes — otherwise a hash collision could resolve
+    # differently between calls and cause a needless subnet4-del + -add for
+    # a scope that didn't actually change.
+    scopes = sorted(scopes, key=lambda s: s.id)
     kea_ids = _assign_unique_kea_ids(scopes)
 
     desired: dict[int, dict[str, Any]] = {}

@@ -17,6 +17,7 @@ import httpx
 import pytest
 from unittest.mock import patch
 
+import mantis_control.feeds.ingest as ingest_module
 from mantis_control.db.models import Feed
 from mantis_control.feeds.ingest import fetch_and_ingest, load_domains, _sanity_check
 from mantis_control.feeds.parsers import parse_domain_list, parse_hostfile
@@ -108,6 +109,31 @@ async def test_fetch_and_ingest_rejects_poisoned_feed(tmp_path):
 
     assert result.status == "rejected"
     assert load_domains(tmp_path, "test-feed") == set()  # nothing written on rejection
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_ingest_rejects_oversized_body(tmp_path, monkeypatch):
+    """A feed source returning an unbounded body must be aborted mid-stream,
+    not fully buffered into memory before any sanity check runs."""
+    monkeypatch.setattr(ingest_module, "MAX_FEED_BYTES", 100)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        oversized = "0.0.0.0 domain.example\n" * 20  # well over the 100-byte cap
+        return httpx.Response(200, text=oversized)
+
+    transport = httpx.MockTransport(handler)
+    feed = Feed(id="test-feed", category_id="malware", url="https://example.test/feed", format="hostfile")
+
+    with patch(
+        "mantis_control.feeds.ingest.resolve_pinned_url",
+        return_value=(feed.url, "example.test"),
+    ):
+        async with httpx.AsyncClient(transport=transport) as client:
+            result = await fetch_and_ingest(feed, tmp_path, client)
+
+    assert result.status == "error"
+    assert "byte cap" in result.reason
+    assert load_domains(tmp_path, "test-feed") == set()  # nothing written
 
 
 @pytest.mark.asyncio
