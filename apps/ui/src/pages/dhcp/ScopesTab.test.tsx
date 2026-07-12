@@ -101,7 +101,11 @@ beforeEach(() => {
   mockUseCreateDhcpScope.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
   mockUseUpdateDhcpScope.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
   mockUseDeleteDhcpScope.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
-  mockUseKeaInterfaces.mockReturnValue({ data: { ok: false, interfaces: [] } } as never);
+  mockUseKeaInterfaces.mockReturnValue({
+    data: { ok: false, interfaces: [] },
+    isFetching: false,
+    refetch: vi.fn(),
+  } as never);
   mockUseDhcpPush.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
 });
 
@@ -134,7 +138,11 @@ describe("ScopesTab", () => {
   it("shows the interface field as free text when Kea's interface list is unavailable", async () => {
     const user = userEvent.setup();
     mockUseDhcpScopes.mockReturnValue({ data: [], isLoading: false } as never);
-    mockUseKeaInterfaces.mockReturnValue({ data: { ok: false, interfaces: [] } } as never);
+    mockUseKeaInterfaces.mockReturnValue({
+      data: { ok: false, interfaces: [] },
+      isFetching: false,
+      refetch: vi.fn(),
+    } as never);
     renderWithProviders(<ScopesTab tenantOptions={tenantOptions} zoneOptions={zoneOptions} />);
     await user.click(screen.getByRole("button", { name: /add scope/i }));
     expect(await screen.findByRole("textbox", { name: /interface/i })).toBeInTheDocument();
@@ -145,12 +153,29 @@ describe("ScopesTab", () => {
     mockUseDhcpScopes.mockReturnValue({ data: [], isLoading: false } as never);
     mockUseKeaInterfaces.mockReturnValue({
       data: { ok: true, interfaces: [{ name: "eth1", addresses: ["10.50.0.1"], up: true }] },
+      isFetching: false,
+      refetch: vi.fn(),
     } as never);
     renderWithProviders(<ScopesTab tenantOptions={tenantOptions} zoneOptions={zoneOptions} />);
     await user.click(screen.getByRole("button", { name: /add scope/i }));
     const field = await screen.findByPlaceholderText("Select interface");
     await user.click(field);
-    expect(await screen.findByText("eth1 — 10.50.0.1")).toBeInTheDocument();
+    expect(await screen.findByText("eth1 - 10.50.0.1 - up")).toBeInTheDocument();
+  });
+
+  it("refreshes Kea's detected interfaces from the scope form", async () => {
+    const user = userEvent.setup();
+    const refetch = vi.fn();
+    mockUseDhcpScopes.mockReturnValue({ data: [], isLoading: false } as never);
+    mockUseKeaInterfaces.mockReturnValue({
+      data: { ok: true, interfaces: [{ name: "eth1", addresses: ["10.50.0.1"], up: true }] },
+      isFetching: false,
+      refetch,
+    } as never);
+    renderWithProviders(<ScopesTab tenantOptions={tenantOptions} zoneOptions={zoneOptions} />);
+    await user.click(screen.getByRole("button", { name: /add scope/i }));
+    await user.click(await screen.findByRole("button", { name: /refresh kea interfaces/i }));
+    expect(refetch).toHaveBeenCalled();
   });
 
   it("opens the edit modal prefilled with the scope's values", async () => {

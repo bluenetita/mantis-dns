@@ -15,12 +15,12 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { Badge, Button, Group, NumberInput, Select, Stack, Switch, Text, TextInput, Title, Tooltip } from "@mantine/core";
+import { ActionIcon, Badge, Button, Group, NumberInput, Select, Stack, Switch, Text, TextInput, Title, Tooltip } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { modals } from "@mantine/modals";
 import { notifications } from "@mantine/notifications";
-import { IconBolt, IconPlus } from "@tabler/icons-react";
+import { IconBolt, IconPlus, IconRefresh } from "@tabler/icons-react";
 import { useMemo, useState } from "react";
 import {
   useCreateDhcpScope,
@@ -96,17 +96,21 @@ function ScopeForm({
     onSave(payload);
   });
 
-  const { data: ifaceData } = useKeaInterfaces();
+  const { data: ifaceData, isFetching: interfacesFetching, refetch: refetchInterfaces } = useKeaInterfaces();
   const interfaceOptions = useMemo(() => {
     const opts = (ifaceData?.interfaces ?? []).map((i) => ({
       value: i.name,
-      label: i.addresses.length ? `${i.name} — ${i.addresses.join(", ")}` : i.name,
+      label: `${i.name}${i.addresses.length ? ` - ${i.addresses.join(", ")}` : ""} - ${i.up ? "up" : "down"}`,
+      disabled: !i.up && i.name !== initial?.interface,
     }));
     if (initial?.interface && !opts.some((o) => o.value === initial.interface)) {
-      opts.push({ value: initial.interface, label: `${initial.interface} (not currently detected)` });
+      opts.push({ value: initial.interface, label: `${initial.interface} (not currently detected)`, disabled: false });
     }
     return opts;
   }, [ifaceData, initial?.interface]);
+  const refreshInterfaces = () => {
+    void refetchInterfaces();
+  };
 
   return (
     <form onSubmit={submit}>
@@ -158,23 +162,39 @@ function ScopeForm({
           <TextInput label="PXE next-server (siaddr)" placeholder="192.168.1.10" {...form.getInputProps("pxe_next_server")} />
           <TextInput label="PXE boot filename" placeholder="pxelinux.0" {...form.getInputProps("pxe_boot_filename")} />
         </Group>
-        {ifaceData?.ok && interfaceOptions.length > 0 ? (
-          <Select
-            label="Interface (optional)"
-            placeholder="Select interface"
-            data={interfaceOptions}
-            searchable
-            clearable
-            {...form.getInputProps("interface")}
-          />
-        ) : (
-          <TextInput
-            label="Interface (optional)"
-            placeholder="eth0"
-            description={ifaceData && !ifaceData.ok ? "Couldn't reach Kea to list interfaces — enter manually." : undefined}
-            {...form.getInputProps("interface")}
-          />
-        )}
+        <Group align="flex-end" gap="xs" wrap="nowrap">
+          {ifaceData?.ok && interfaceOptions.length > 0 ? (
+            <Select
+              label="Interface (optional)"
+              placeholder="Select interface"
+              description="Interfaces visible to Kea"
+              data={interfaceOptions}
+              searchable
+              clearable
+              style={{ flex: 1 }}
+              {...form.getInputProps("interface")}
+            />
+          ) : (
+            <TextInput
+              label="Interface (optional)"
+              placeholder="eth0"
+              description={ifaceData && !ifaceData.ok ? "Couldn't reach Kea to list interfaces — enter manually." : undefined}
+              style={{ flex: 1 }}
+              {...form.getInputProps("interface")}
+            />
+          )}
+          <Tooltip label="Refresh Kea interfaces">
+            <ActionIcon
+              aria-label="Refresh Kea interfaces"
+              variant="default"
+              size="lg"
+              loading={interfacesFetching}
+              onClick={refreshInterfaces}
+            >
+              <IconRefresh size={16} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
         <Switch label="Enabled" {...form.getInputProps("enabled", { type: "checkbox" })} />
         <Group justify="flex-end" mt="sm">
           <Button variant="default" onClick={onCancel}>Cancel</Button>

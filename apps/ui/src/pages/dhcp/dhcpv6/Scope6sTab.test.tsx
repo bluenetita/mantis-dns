@@ -98,7 +98,11 @@ beforeEach(() => {
   mockUseUpdateDhcpScope6.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
   mockUseDeleteDhcpScope6.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
   mockUseDhcpPush6.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
-  mockUseKeaInterfaces6.mockReturnValue({ data: { ok: false, interfaces: [] } } as never);
+  mockUseKeaInterfaces6.mockReturnValue({
+    data: { ok: false, interfaces: [] },
+    isFetching: false,
+    refetch: vi.fn(),
+  } as never);
 });
 
 describe("Scope6sTab", () => {
@@ -125,6 +129,36 @@ describe("Scope6sTab", () => {
     await user.click(screen.getByRole("button", { name: /add scope/i }));
     expect(await screen.findByRole("heading", { name: "Add IPv6 scope" })).toBeInTheDocument();
     expect(screen.getByLabelText(/^Name/)).toHaveValue("");
+  });
+
+  it("shows the interface field as a dropdown of Kea's detected IPv6 interfaces", async () => {
+    const user = userEvent.setup();
+    mockUseDhcpScopes6.mockReturnValue({ data: [], isLoading: false } as never);
+    mockUseKeaInterfaces6.mockReturnValue({
+      data: { ok: true, interfaces: [{ name: "eth2", addresses: ["2001:db8::1"], up: true }] },
+      isFetching: false,
+      refetch: vi.fn(),
+    } as never);
+    renderWithProviders(<Scope6sTab tenantOptions={tenantOptions} />);
+    await user.click(screen.getByRole("button", { name: /add scope/i }));
+    const field = await screen.findByPlaceholderText("Select interface");
+    await user.click(field);
+    expect(await screen.findByText("eth2 - 2001:db8::1 - up")).toBeInTheDocument();
+  });
+
+  it("refreshes Kea's detected IPv6 interfaces from the scope form", async () => {
+    const user = userEvent.setup();
+    const refetch = vi.fn();
+    mockUseDhcpScopes6.mockReturnValue({ data: [], isLoading: false } as never);
+    mockUseKeaInterfaces6.mockReturnValue({
+      data: { ok: true, interfaces: [{ name: "eth2", addresses: ["2001:db8::1"], up: true }] },
+      isFetching: false,
+      refetch,
+    } as never);
+    renderWithProviders(<Scope6sTab tenantOptions={tenantOptions} />);
+    await user.click(screen.getByRole("button", { name: /add scope/i }));
+    await user.click(await screen.findByRole("button", { name: /refresh kea interfaces/i }));
+    expect(refetch).toHaveBeenCalled();
   });
 
   it("deletes a scope after confirming, via modals.openConfirmModal", async () => {
