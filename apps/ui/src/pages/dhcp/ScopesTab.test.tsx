@@ -163,6 +163,19 @@ describe("ScopesTab", () => {
     expect(await screen.findByText("eth1 - 10.50.0.1 - up")).toBeInTheDocument();
   });
 
+  it("keeps the interface field as a dropdown when Kea returns an empty interface list", async () => {
+    const user = userEvent.setup();
+    mockUseDhcpScopes.mockReturnValue({ data: [], isLoading: false } as never);
+    mockUseKeaInterfaces.mockReturnValue({
+      data: { ok: true, interfaces: [] },
+      isFetching: false,
+      refetch: vi.fn(),
+    } as never);
+    renderWithProviders(<ScopesTab tenantOptions={tenantOptions} zoneOptions={zoneOptions} />);
+    await user.click(screen.getByRole("button", { name: /add scope/i }));
+    expect(await screen.findByPlaceholderText("No interfaces detected")).toBeInTheDocument();
+  });
+
   it("refreshes Kea's detected interfaces from the scope form", async () => {
     const user = userEvent.setup();
     const refetch = vi.fn();

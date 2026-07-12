@@ -120,14 +120,16 @@ function Scope6Form({
         <TextInput label="DNS servers" placeholder="2001:4860:4860::8888" {...form.getInputProps("dns_servers")} />
         <TextInput label="Domain name" {...form.getInputProps("domain_name")} />
         <Group align="flex-end" gap="xs" wrap="nowrap">
-          {ifaceData?.ok && interfaceOptions.length > 0 ? (
+          {ifaceData?.ok ? (
             <Select
               label="Interface (optional)"
-              placeholder="Select interface"
-              description="Interfaces visible to Kea"
+              placeholder={interfaceOptions.length > 0 ? "Select interface" : "No interfaces detected"}
+              description={interfaceOptions.length > 0 ? "Interfaces visible to Kea" : "Kea is reachable but returned no interfaces"}
               data={interfaceOptions}
               searchable
               clearable
+              nothingFoundMessage="No interfaces detected"
+              inputWrapperOrder={["label", "input", "description", "error"]}
               style={{ flex: 1 }}
               {...form.getInputProps("interface")}
             />
@@ -136,6 +138,7 @@ function Scope6Form({
               label="Interface (optional)"
               placeholder="eth0"
               description={ifaceData && !ifaceData.ok ? "Couldn't reach Kea to list interfaces — enter manually." : undefined}
+              inputWrapperOrder={["label", "input", "description", "error"]}
               style={{ flex: 1 }}
               {...form.getInputProps("interface")}
             />

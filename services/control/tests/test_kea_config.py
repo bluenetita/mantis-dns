@@ -117,6 +117,48 @@ async def test_blank_kea_url_is_reported_before_http_call(monkeypatch):
     assert _FakeAsyncClient.calls == []
 
 
+async def test_list_kea_interfaces_parses_list_shape(monkeypatch):
+    async def fake_kea_command(command, service=None, arguments=None):
+        assert command == "interface-list"
+        return {
+            "result": 0,
+            "arguments": {
+                "interfaces": [
+                    {"name": "eth0", "addresses": [{"address": "10.0.0.2"}], "flags": ["BROADCAST", "UP"]},
+                    {"name": "eth1", "addresses": ["192.0.2.10"], "flags": []},
+                ]
+            },
+        }
+
+    monkeypatch.setattr(kea_config, "kea_command", fake_kea_command)
+
+    assert await kea_config.list_kea_interfaces(["dhcp4"]) == [
+        {"name": "eth0", "addresses": ["10.0.0.2"], "up": True},
+        {"name": "eth1", "addresses": ["192.0.2.10"], "up": False},
+    ]
+
+
+async def test_list_kea_interfaces_parses_mapping_shape(monkeypatch):
+    async def fake_kea_command(command, service=None, arguments=None):
+        assert command == "interface-list"
+        return {
+            "result": 0,
+            "arguments": {
+                "interfaces": {
+                    "ens18": {"addrs": {"primary": {"ip": "172.16.0.2"}}, "up": True},
+                    "vlan20": {"addresses": [], "flag-up": False},
+                }
+            },
+        }
+
+    monkeypatch.setattr(kea_config, "kea_command", fake_kea_command)
+
+    assert await kea_config.list_kea_interfaces(["dhcp4"]) == [
+        {"name": "ens18", "addresses": ["172.16.0.2"], "up": True},
+        {"name": "vlan20", "addresses": [], "up": False},
+    ]
+
+
 def _scope(scope_id: str, subnet: str) -> SimpleNamespace:
     return SimpleNamespace(
         id=scope_id,

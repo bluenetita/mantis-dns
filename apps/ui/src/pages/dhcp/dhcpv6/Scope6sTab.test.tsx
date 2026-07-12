@@ -146,6 +146,19 @@ describe("Scope6sTab", () => {
     expect(await screen.findByText("eth2 - 2001:db8::1 - up")).toBeInTheDocument();
   });
 
+  it("keeps the interface field as a dropdown when Kea returns an empty IPv6 interface list", async () => {
+    const user = userEvent.setup();
+    mockUseDhcpScopes6.mockReturnValue({ data: [], isLoading: false } as never);
+    mockUseKeaInterfaces6.mockReturnValue({
+      data: { ok: true, interfaces: [] },
+      isFetching: false,
+      refetch: vi.fn(),
+    } as never);
+    renderWithProviders(<Scope6sTab tenantOptions={tenantOptions} />);
+    await user.click(screen.getByRole("button", { name: /add scope/i }));
+    expect(await screen.findByPlaceholderText("No interfaces detected")).toBeInTheDocument();
+  });
+
   it("refreshes Kea's detected IPv6 interfaces from the scope form", async () => {
     const user = userEvent.setup();
     const refetch = vi.fn();

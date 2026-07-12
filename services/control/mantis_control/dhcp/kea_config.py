@@ -217,15 +217,46 @@ async def list_kea_interfaces(service: list[str]) -> list[dict[str, Any]]:
     result = await kea_command("interface-list", service=service)
     if result.get("result") != 0:
         raise RuntimeError(f"Kea interface-list failed: {result.get('text', result)}")
-    interfaces = (result.get("arguments") or {}).get("interfaces", [])
-    return [
-        {
-            "name": i["name"],
-            "addresses": i.get("addresses", []),
-            "up": bool(i.get("flag-up")),
-        }
-        for i in interfaces
-    ]
+    raw_interfaces = (result.get("arguments") or {}).get("interfaces", [])
+    if isinstance(raw_interfaces, dict):
+        raw_interfaces = [
+            {**details, "name": name} if isinstance(details, dict) else {"name": name}
+            for name, details in raw_interfaces.items()
+        ]
+
+    interfaces: list[dict[str, Any]] = []
+    for raw in raw_interfaces:
+        if isinstance(raw, str):
+            interfaces.append({"name": raw, "addresses": [], "up": True})
+            continue
+        if not isinstance(raw, dict):
+            continue
+
+        name = raw.get("name") or raw.get("ifname") or raw.get("interface")
+        if not name:
+            continue
+
+        raw_addresses = raw.get("addresses") or raw.get("addrs") or []
+        addresses: list[str] = []
+        if isinstance(raw_addresses, dict):
+            raw_addresses = raw_addresses.values()
+        for addr in raw_addresses:
+            if isinstance(addr, str):
+                addresses.append(addr)
+            elif isinstance(addr, dict):
+                value = addr.get("address") or addr.get("addr") or addr.get("ip")
+                if value:
+                    addresses.append(str(value))
+
+        flags = raw.get("flags") or []
+        if isinstance(flags, str):
+            flags = [flags]
+        up = raw.get("flag-up", raw.get("up"))
+        if up is None:
+            up = any(str(flag).upper() == "UP" for flag in flags)
+        interfaces.append({"name": str(name), "addresses": addresses, "up": bool(up)})
+
+    return interfaces
 
 
 async def _synced_kea_subnet_ids(service: list[str]) -> set[int]:
