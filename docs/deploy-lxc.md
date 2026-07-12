@@ -121,8 +121,16 @@ For a separate Kea host, set these before the first run or edit
 KEA_CTRL_URL=http://<kea-host>:8004/
 KEA4_CTRL_URL=http://<kea-host>:8004/
 KEA6_CTRL_URL=http://<kea-host>:8006/
-KEA_HOOKS_DIR=/usr/lib/kea/hooks
+KEA_HOOKS_DIR=<kea-host's real hooks directory, e.g. /usr/lib64/kea/hooks or /usr/lib/x86_64-linux-gnu/kea/hooks>
 ```
+
+Kea's hook loader validates `hooks-libraries` paths against its own
+compiled-in directory and rejects anything else, including a symlink to that
+directory — so `KEA_HOOKS_DIR` must be the real path as Kea itself resolves
+it on that host, not a convenience symlink. Find it with `rpm -ql
+isc-kea-hooks | grep libdhcp_lease_cmds` (RPM-based) or `dpkg -L
+isc-kea-hooks | grep libdhcp_lease_cmds` (Debian-based) and use that file's
+directory.
 
 If that Kea host is Docker Compose based, expose the management sockets to the
 control-plane LXC before starting it:

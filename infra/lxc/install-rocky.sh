@@ -332,7 +332,11 @@ EOF
   set_env_var KEA_CTRL_URL "http://127.0.0.1:${KEA4_CTRL_PORT:-8004}/"
   set_env_var KEA4_CTRL_URL "http://127.0.0.1:${KEA4_CTRL_PORT:-8004}/"
   set_env_var KEA6_CTRL_URL "http://127.0.0.1:${KEA6_CTRL_PORT:-8006}/"
-  set_env_var KEA_HOOKS_DIR "/usr/lib/kea/hooks"
+  # Kea's hooks-libraries path check rejects the /usr/lib/kea/hooks symlink
+  # (it validates against the real compiled-in directory, not a symlink
+  # target), so the control plane must be given the real path, not the
+  # convenience symlink used by the static kea-dhcp{4,6}.conf files.
+  set_env_var KEA_HOOKS_DIR "$hooks_dir"
 
   systemctl daemon-reload
   systemctl enable mantis-kea-dhcp4 mantis-kea-dhcp6
