@@ -20,7 +20,14 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from mantis_control import auth
-from mantis_control.api.auth_routers import UserCreate, UserUpdate, create_user, update_user
+from mantis_control.api.auth_routers import (
+    ChangePasswordRequest,
+    UserCreate,
+    UserUpdate,
+    change_password,
+    create_user,
+    update_user,
+)
 from mantis_control.db import models
 
 
@@ -162,3 +169,52 @@ def test_update_user_allows_admin_without_tenant():
     db.get.return_value = models.User(email="x@y.com", password_hash="x", role="viewer", tenant_id="tenant-a")
     updated = update_user("user-1", payload, db, _fake_admin())
     assert updated.role == "admin"
+
+
+def test_change_password_rejects_too_short():
+    with pytest.raises(ValidationError):
+        ChangePasswordRequest(current_password="old-password-1", new_password="short")
+
+
+def test_change_password_rejects_over_72_bytes():
+    with pytest.raises(ValidationError):
+        ChangePasswordRequest(current_password="old-password-1", new_password="x" * 100)
+
+
+def test_change_password_accepts_at_72_bytes():
+    ChangePasswordRequest(current_password="old-password-1", new_password="x" * 72)  # must not raise
+
+
+def _fake_user_with_password(password: str) -> models.User:
+    u = models.User(email="user@x.com", password_hash=auth.hash_password(password), role="viewer", tenant_id="tenant-a")
+    u.id = "user-1"
+    return u
+
+
+def test_change_password_success_updates_hash():
+    user = _fake_user_with_password("old-password-123")
+    payload = ChangePasswordRequest(current_password="old-password-123", new_password="new-password-456")
+    db = MagicMock()
+    response = MagicMock()
+
+    change_password(payload, response, db, user)
+
+    assert auth.verify_password("new-password-456", user.password_hash) is True
+    assert auth.verify_password("old-password-123", user.password_hash) is False
+    db.commit.assert_called_once()
+
+
+def test_change_password_rejects_wrong_current_password():
+    user = _fake_user_with_password("old-password-123")
+    payload = ChangePasswordRequest(current_password="totally-wrong-pw", new_password="new-password-456")
+    with pytest.raises(HTTPException) as exc:
+        change_password(payload, MagicMock(), MagicMock(), user)
+    assert exc.value.status_code == 401
+
+
+def test_change_password_rejects_same_as_current():
+    user = _fake_user_with_password("old-password-123")
+    payload = ChangePasswordRequest(current_password="old-password-123", new_password="old-password-123")
+    with pytest.raises(HTTPException) as exc:
+        change_password(payload, MagicMock(), MagicMock(), user)
+    assert exc.value.status_code == 400

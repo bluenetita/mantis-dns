@@ -38,7 +38,7 @@ from mantis_control.auth import (
 )
 from mantis_control.db import models
 from mantis_control.db.session import get_db
-from mantis_control.rate_limit import login_rate_limit
+from mantis_control.rate_limit import change_password_rate_limit, login_rate_limit
 
 # Fixed dummy hash checked when the email doesn't exist, so login() does the
 # same bcrypt work either way — otherwise the fast-path/slow-path timing gap
@@ -86,6 +86,16 @@ class LoginResponse(BaseModel):
     csrf_token: str
 
 
+def _validate_strong_password(v: str) -> str:
+    if len(v) < 12:
+        raise ValueError("password must be at least 12 characters")
+    if len(v.encode()) > 72:
+        # bcrypt's hard limit — raises rather than truncating (see
+        # auth.hash_password); reject at input instead of a 500 later.
+        raise ValueError("password must be at most 72 bytes")
+    return v
+
+
 class UserCreate(BaseModel):
     email: EmailAddress
     password: str
@@ -95,13 +105,17 @@ class UserCreate(BaseModel):
     @field_validator("password")
     @classmethod
     def _strong_password(cls, v: str) -> str:
-        if len(v) < 12:
-            raise ValueError("password must be at least 12 characters")
-        if len(v.encode()) > 72:
-            # bcrypt's hard limit — raises rather than truncating (see
-            # auth.hash_password); reject at input instead of a 500 later.
-            raise ValueError("password must be at most 72 bytes")
-        return v
+        return _validate_strong_password(v)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def _strong_password(cls, v: str) -> str:
+        return _validate_strong_password(v)
 
 
 @router.post("/auth/login", response_model=LoginResponse)
@@ -133,6 +147,33 @@ def logout(response: Response) -> None:
 @router.get("/auth/me", response_model=UserOut)
 def me(user: models.User = Depends(get_current_user)) -> models.User:
     return user
+
+
+@router.post("/auth/change-password", response_model=LoginResponse)
+def change_password(
+    payload: ChangePasswordRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+    _: None = Depends(change_password_rate_limit),
+) -> LoginResponse:
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(401, "current password is incorrect")
+    if payload.new_password == payload.current_password:
+        raise HTTPException(400, "new password must be different from the current password")
+
+    user.password_hash = hash_password(payload.new_password)
+    write_audit_log(db, "user.change_password", "user", user.id, actor=user.email, tenant_id=user.tenant_id)
+    db.commit()
+
+    # Reissue the session so this tab keeps working without a re-login.
+    # Other active sessions/tokens for this user (other tabs/devices) stay
+    # valid until their own TTL expires — JWTs are stateless here, same
+    # limitation every other route relying on create_access_token has.
+    token = create_access_token(user)
+    csrf_token = generate_csrf_token()
+    set_auth_cookies(response, token, csrf_token)
+    return LoginResponse(user=user, csrf_token=csrf_token)  # type: ignore[arg-type]
 
 
 @router.get("/users", response_model=list[UserOut])

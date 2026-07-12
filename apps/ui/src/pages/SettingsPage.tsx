@@ -28,6 +28,7 @@ import {
   Loader,
   Modal,
   NumberInput,
+  PasswordInput,
   Select,
   SimpleGrid,
   Stack,
@@ -62,6 +63,7 @@ import {
 } from "@tabler/icons-react";
 import { useAuth } from "../auth/AuthContext";
 import {
+  useChangePassword,
   useCreateSiemWebhook,
   useDeleteSiemWebhook,
   useSiemWebhooks,
@@ -132,6 +134,46 @@ function AddWebhookForm({ onDone }: { onDone: () => void }) {
         <Group justify="flex-end">
           <Button variant="default" onClick={onDone}>Cancel</Button>
           <Button type="submit" loading={createWebhook.isPending}>Add webhook</Button>
+        </Group>
+      </Stack>
+    </form>
+  );
+}
+
+// ─── Change password ──────────────────────────────────────────────────────────
+
+function ChangePasswordForm() {
+  const changePassword = useChangePassword();
+  const form = useForm({
+    initialValues: { current_password: "", new_password: "", confirm_password: "" },
+    validate: {
+      current_password: (v) => (v.length === 0 ? "Required" : null),
+      new_password: (v) => (v.length < 12 ? "Minimum 12 characters" : null),
+      confirm_password: (v, values) => (v !== values.new_password ? "Passwords do not match" : null),
+    },
+  });
+
+  return (
+    <form
+      onSubmit={form.onSubmit((values) => {
+        changePassword.mutate(
+          { current_password: values.current_password, new_password: values.new_password },
+          {
+            onSuccess: () => {
+              notifications.show({ message: "Password changed", color: "green" });
+              form.reset();
+            },
+            onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          }
+        );
+      })}
+    >
+      <Stack gap="sm">
+        <PasswordInput label="Current password" required {...form.getInputProps("current_password")} />
+        <PasswordInput label="New password" required {...form.getInputProps("new_password")} />
+        <PasswordInput label="Confirm new password" required {...form.getInputProps("confirm_password")} />
+        <Group justify="flex-end">
+          <Button type="submit" loading={changePassword.isPending}>Change password</Button>
         </Group>
       </Stack>
     </form>
@@ -394,6 +436,15 @@ export function SettingsPage() {
         {/* ── Security tab ── */}
         <Tabs.Panel value="security">
           <Stack gap="md">
+            {/* Change password */}
+            <Card withBorder padding="md">
+              <Group gap={8} mb="md">
+                <ThemeIcon size="sm" variant="light" color="orange"><IconLock size={14} /></ThemeIcon>
+                <Text fw={600}>Change password</Text>
+              </Group>
+              <ChangePasswordForm />
+            </Card>
+
             {/* RBAC */}
             <Card withBorder padding="md">
               <Group justify="space-between" mb="md">
@@ -481,7 +532,7 @@ export function SettingsPage() {
                   "Minimum 12 characters",
                   "No maximum length limit",
                   "Passwords are bcrypt-hashed (cost 12)",
-                  "No password rotation enforcement (planned for Sprint 9)",
+                  "Self-service password change available above; no forced rotation/expiry policy yet",
                 ].map((rule) => (
                   <Group key={rule} gap={8} wrap="nowrap">
                     <IconChevronRight size={12} style={{ color: "var(--mantine-color-dimmed)", flexShrink: 0 }} />

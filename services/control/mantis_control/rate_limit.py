@@ -26,9 +26,11 @@ import time
 from collections import defaultdict
 from threading import Lock
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 
+from mantis_control.auth import get_current_user
 from mantis_control.config import settings
+from mantis_control.db import models
 
 # X-Forwarded-For is attacker-controlled unless it's overwritten by a proxy
 # we trust — set MANTIS_TRUSTED_PROXY_IPS to the reverse proxy's IP(s) so the
@@ -72,6 +74,15 @@ class _SlidingWindowLimiter:
 
 
 _login_limiter = _SlidingWindowLimiter(max_requests=10, window_secs=60)
+_change_password_limiter = _SlidingWindowLimiter(max_requests=5, window_secs=60)
+
+
+def change_password_rate_limit(user: models.User = Depends(get_current_user)) -> None:
+    """Limits /auth/change-password to 5 attempts/minute per user, keyed on
+    the authenticated user's id rather than source IP — this endpoint checks
+    a password the caller already claims to know, so it's a brute-force
+    target regardless of which IP the attacker calls from."""
+    _change_password_limiter.check(user.id)
 
 
 def login_rate_limit(request: Request) -> None:

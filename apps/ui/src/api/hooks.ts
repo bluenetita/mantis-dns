@@ -31,6 +31,7 @@ type SiemWebhookUpdate = components["schemas"]["SiemWebhookUpdate"];
 type ClientUpsert = components["schemas"]["ClientUpsert"];
 type UserCreate = components["schemas"]["UserCreate"];
 type UserUpdate = components["schemas"]["UserUpdate"];
+type ChangePasswordRequest = components["schemas"]["ChangePasswordRequest"];
 type ZoneCreate = components["schemas"]["ZoneCreate"];
 type ZoneUpdate = components["schemas"]["ZoneUpdate"];
 type RecordIn = components["schemas"]["RecordIn"];
@@ -68,6 +69,15 @@ export function useDeleteUser() {
     mutationFn: async (userId: string) =>
       unwrap(await apiClient.DELETE("/api/v1/users/{user_id}", { params: { path: { user_id: userId } } })),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
+  });
+}
+
+// --- Auth ---
+
+export function useChangePassword() {
+  return useMutation({
+    mutationFn: async (body: ChangePasswordRequest) =>
+      unwrap(await apiClient.POST("/api/v1/auth/change-password", { body })),
   });
 }
 
