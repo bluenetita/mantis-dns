@@ -43,6 +43,13 @@ services:
       - KEA_CTRL_URL=http://kea:8004/
       - KEA4_CTRL_URL=http://kea:8004/
       - KEA6_CTRL_URL=http://kea:8006/
+      # Must be the real (non-symlink) hooks dir Debian's isc-kea-hooks
+      # package installs to inside the kea image — Kea 3.x rejects
+      # hooks-libraries paths that resolve through a symlink. The kea
+      # image's /usr/lib/kea/hooks is a convenience symlink to this real
+      # path; only override if the kea image is built for a different arch
+      # (the triplet varies, e.g. aarch64-linux-gnu on arm64 hosts).
+      - KEA_HOOKS_DIR=${KEA_HOOKS_DIR:-/usr/lib/x86_64-linux-gnu/kea/hooks}
       - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:?required}
       - MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN:?required}
       - MANTIS_JWT_SECRET=${MANTIS_JWT_SECRET:?required}
