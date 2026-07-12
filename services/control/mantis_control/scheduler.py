@@ -22,6 +22,9 @@ immediately on create/update/delete — without this, toggling a feed's
 
 from __future__ import annotations
 
+import asyncio
+import logging
+
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -31,6 +34,27 @@ from mantis_control.db.session import SessionLocal
 from mantis_control.feeds.ingest import fetch_and_ingest
 
 scheduler = AsyncIOScheduler()
+
+
+class _DropCancelledJobErrors(logging.Filter):
+    """AsyncIOExecutor.shutdown() (scheduler.shutdown()) cancels every
+    pending job future outright — including ones submitted moments
+    earlier by kick_feed_now() that haven't had a chance to start
+    running yet. That cancellation happens *before* our job coroutine
+    ever executes, so there's no `await` inside our own code where a
+    try/except could intercept it. APScheduler's executor then logs
+    the resulting CancelledError as `ERROR ... Error running job ...`
+    unconditionally (see BaseExecutor._run_job_error), even though it's
+    an expected side effect of shutdown (e.g. the install/update
+    startup check, which enters and immediately exits the app's
+    lifespan) rather than a real failure. Drop just those records."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        exc = record.exc_info[1] if record.exc_info else None
+        return not isinstance(exc, asyncio.CancelledError)
+
+
+logging.getLogger("apscheduler.executors.default").addFilter(_DropCancelledJobErrors())
 
 
 def _job_id(feed_id: str) -> str:
