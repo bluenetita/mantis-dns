@@ -17,15 +17,12 @@
 
 import { Badge, Card, Group, Loader, Progress, Stack, Table, Text, Title } from "@mantine/core";
 import { useDhcpStats } from "../../api/hooks";
-import { KeaStatusCard } from "./KeaStatusCard";
 
 export function StatusTab() {
   const { data: stats = [], isLoading: statsLoading } = useDhcpStats();
 
   return (
     <Stack gap="lg">
-      <KeaStatusCard />
-
       <Card withBorder p="md">
         <Title order={5} mb="sm">Subnet utilisation</Title>
         {statsLoading ? (
