@@ -15,9 +15,11 @@
 
 """ISC Kea DHCPv6 configuration generator (Sprint 22).
 
-Mirrors kea_config.py for DHCPv4 but targets kea-dhcp6. `build_dhcp6_config()`
-translates `DhcpScope6` rows to a full Kea Dhcp6 JSON and
-`push_full_config6()` ships it atomically.
+Mirrors kea_config.py for DHCPv4 but targets kea-dhcp6: `push_full_config6()`
+syncs kea-dhcp6's live subnet6 list to `DhcpScope6` rows via the
+`subnet_cmds` hook's incremental commands (subnet6-add/-update/-del) rather
+than a config-set full replace — see kea_config.py's module docstring for
+why config-set can't be used here.
 """
 from __future__ import annotations
 
@@ -28,25 +30,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from mantis_control.dhcp.kea_config import KEA_HOOKS_DIR, _control_sockets, kea_command
+from mantis_control.dhcp.kea_config import _synced_kea_subnet_ids, kea_command
 from mantis_control.db.models import DhcpScope6
 
 log = logging.getLogger(__name__)
-
-_PG_CFG = {
-    "name": os.getenv("POSTGRES_DB", "mantis"),
-    "host": os.getenv("POSTGRES_HOST", "postgres"),
-    "port": int(os.getenv("POSTGRES_PORT", "5432")),
-    "user": os.getenv("POSTGRES_USER", "mantis"),
-    "password": os.getenv("POSTGRES_PASSWORD", "mantis"),
-}
-
-
-def _mandatory_hooks6() -> list[dict[str, Any]]:
-    """kea-dhcp6 needs the PostgreSQL lease-backend hook for the same reason
-    as v4 (see kea_config.py's `_mandatory_hooks4`) — Kea 3.x ships it as a
-    hook library, and config-set replaces hooks-libraries wholesale."""
-    return [{"library": f"{KEA_HOOKS_DIR}/libdhcp_pgsql.so"}]
 
 
 def _scope_kea_id6(scope_uuid: str) -> int:
@@ -95,90 +82,70 @@ def _build_reservations6(scope: DhcpScope6) -> list[dict[str, Any]]:
     return result
 
 
-def build_dhcp6_config(db: Session, filter_node_ip: str = "") -> dict[str, Any]:
-    """Build the full Kea Dhcp6 config dict from Mantis DB state."""
-    scopes = db.query(DhcpScope6).filter(DhcpScope6.enabled.is_(True)).all()
+def _build_subnet6(scope: DhcpScope6, kea_id: int, filter_node_ip: str) -> dict[str, Any]:
+    """Build a single subnet6 entry, the unit subnet6-add/-update operate on."""
+    pd_pools = []
+    if scope.pd_prefix and scope.pd_prefix_len is not None:
+        pd_pools.append({
+            "prefix": scope.pd_prefix,
+            "prefix-len": scope.pd_prefix_len,
+            "delegated-len": scope.pd_prefix_len,
+        })
 
-    kea_ids = _assign_unique_kea_ids6(scopes)
-    subnet6 = []
-    for scope in scopes:
-        kea_id = kea_ids[scope.id]
-        pools = [{"pool": f"{scope.pool_start} - {scope.pool_end}"}]
-
-        pd_pools = []
-        if scope.pd_prefix and scope.pd_prefix_len is not None:
-            pd_pools.append({
-                "prefix": scope.pd_prefix,
-                "prefix-len": scope.pd_prefix_len,
-                "delegated-len": scope.pd_prefix_len,
-            })
-
-        sn: dict[str, Any] = {
-            "id": kea_id,
-            "subnet": scope.subnet,
-            "pools": pools,
-            "preferred-lifetime": scope.preferred_lifetime_s,
-            "valid-lifetime": scope.valid_lifetime_s,
-            "option-data": _build_option_data6(scope, filter_node_ip),
-            "reservations": _build_reservations6(scope),
-        }
-        if pd_pools:
-            sn["pd-pools"] = pd_pools
-        if scope.renew_time_s is not None:
-            sn["renew-timer"] = scope.renew_time_s
-        if scope.rebind_time_s is not None:
-            sn["rebind-timer"] = scope.rebind_time_s
-        if scope.interface:
-            sn["interface"] = scope.interface
-
-        subnet6.append(sn)
-        scope.kea_subnet_id = kea_id
-
-    db.commit()
-
-    return {
-        "Dhcp6": {
-            "interfaces-config": {"interfaces": ["*"]},
-            "multi-threading": {"enable-multi-threading": True},
-            "hooks-libraries": _mandatory_hooks6(),
-            "lease-database": {"type": "postgresql", **_PG_CFG},
-            "control-sockets": _control_sockets("dhcp6"),
-            "expired-leases-processing": {
-                "reclaim-timer-wait-time": 10,
-                "flush-reclaimed-timer-wait-time": 25,
-                "hold-reclaimed-time": 3600,
-                "max-reclaim-leases": 100,
-                "max-reclaim-time": 250,
-            },
-            "preferred-lifetime": 3000,
-            "valid-lifetime": 4000,
-            "renew-timer": 1000,
-            "rebind-timer": 2000,
-            "subnet6": subnet6,
-            "loggers": [{
-                "name": "kea-dhcp6",
-                "output_options": [{"output": "stdout", "pattern": "%-5p %m\n"}],
-                "severity": "INFO",
-            }],
-        }
+    sn: dict[str, Any] = {
+        "id": kea_id,
+        "subnet": scope.subnet,
+        "pools": [{"pool": f"{scope.pool_start} - {scope.pool_end}"}],
+        "preferred-lifetime": scope.preferred_lifetime_s,
+        "valid-lifetime": scope.valid_lifetime_s,
+        "option-data": _build_option_data6(scope, filter_node_ip),
+        "reservations": _build_reservations6(scope),
     }
+    if pd_pools:
+        sn["pd-pools"] = pd_pools
+    if scope.renew_time_s is not None:
+        sn["renew-timer"] = scope.renew_time_s
+    if scope.rebind_time_s is not None:
+        sn["rebind-timer"] = scope.rebind_time_s
+    if scope.interface:
+        sn["interface"] = scope.interface
+
+    return sn
 
 
 async def push_full_config6(db: Session) -> None:
-    """Push the complete Kea DHCPv6 config atomically via config-set."""
+    """Sync kea-dhcp6's live subnet6 list to Mantis DB state via subnet_cmds
+    (subnet6-add/-update/-del), diffed against subnet6-list."""
     filter_ip = os.getenv("MANTIS_FILTER_NODE_IP", "")
-    config = build_dhcp6_config(db, filter_ip)
+    scopes = db.query(DhcpScope6).filter(DhcpScope6.enabled.is_(True)).all()
+    kea_ids = _assign_unique_kea_ids6(scopes)
 
-    result = await kea_command("config-set", service=["dhcp6"], arguments=config)
-    if result.get("result") != 0:
-        raise RuntimeError(f"Kea DHCPv6 config-set rejected: {result.get('text', result)}")
+    desired: dict[int, dict[str, Any]] = {}
+    for scope in scopes:
+        kea_id = kea_ids[scope.id]
+        desired[kea_id] = _build_subnet6(scope, kea_id, filter_ip)
+        scope.kea_subnet_id = kea_id
+    db.commit()
+
+    existing_ids = await _synced_kea_subnet_ids(["dhcp6"])
+
+    for kea_id in existing_ids - desired.keys():
+        result = await kea_command("subnet6-del", service=["dhcp6"], arguments={"id": kea_id})
+        if result.get("result") != 0:
+            raise RuntimeError(f"Kea subnet6-del rejected (id={kea_id}): {result.get('text', result)}")
+
+    for kea_id, subnet in desired.items():
+        command = "subnet6-update" if kea_id in existing_ids else "subnet6-add"
+        result = await kea_command(command, service=["dhcp6"], arguments={"subnet6": [subnet]})
+        if result.get("result") != 0:
+            raise RuntimeError(f"Kea {command} rejected (id={kea_id}): {result.get('text', result)}")
 
     now = datetime.now(timezone.utc)
     db.query(DhcpScope6).filter(DhcpScope6.enabled.is_(True)).update(
         {"last_pushed_at": now}, synchronize_session=False
     )
     db.commit()
-    log.info("Kea DHCPv6 config pushed (%d subnets)", len(config["Dhcp6"]["subnet6"]))
+    log.info("Kea DHCPv6 subnets synced (%d subnets)", len(desired))
 
 
 async def try_push6(db: Session) -> str | None:

@@ -59,14 +59,28 @@ fi
 # that every daemon using lease-database type "postgresql" must load.
 PGSQL_LIB=$(find /usr/lib -name 'libdhcp_pgsql.so' 2>/dev/null | head -1)
 RUN_SCRIPT_LIB=$(find /usr/lib -name 'libdhcp_run_script.so' 2>/dev/null | head -1)
+LEASE_CMDS_LIB=$(find /usr/lib -name 'libdhcp_lease_cmds.so' 2>/dev/null | head -1)
+SUBNET_CMDS_LIB=$(find /usr/lib -name 'libdhcp_subnet_cmds.so' 2>/dev/null | head -1)
 
 if [ -z "$PGSQL_LIB" ]; then
     echo "libdhcp_pgsql.so not found — install isc-kea-pgsql." >&2
     exit 1
 fi
+# lease_sync.py's lease4-get-all/lease4-get-page calls need this on kea-dhcp4.
+if [ -z "$LEASE_CMDS_LIB" ]; then
+    echo "libdhcp_lease_cmds.so not found — install isc-kea-hooks." >&2
+    exit 1
+fi
+# The control plane pushes scope changes with subnet4-add/-update/-del and
+# subnet6-add/-update/-del (see kea_config.py/kea_config6.py) rather than
+# config-set, so this hook is mandatory on both daemons.
+if [ -z "$SUBNET_CMDS_LIB" ]; then
+    echo "libdhcp_subnet_cmds.so not found — install isc-kea-hooks." >&2
+    exit 1
+fi
 
-HOOKS4_JSON="[{\"library\":\"${PGSQL_LIB}\"}"
-HOOKS6_JSON="[{\"library\":\"${PGSQL_LIB}\"}]"
+HOOKS4_JSON="[{\"library\":\"${PGSQL_LIB}\"}, {\"library\":\"${LEASE_CMDS_LIB}\"}, {\"library\":\"${SUBNET_CMDS_LIB}\"}"
+HOOKS6_JSON="[{\"library\":\"${PGSQL_LIB}\"}, {\"library\":\"${SUBNET_CMDS_LIB}\"}]"
 
 if [ -n "$RUN_SCRIPT_LIB" ] && [ -f /usr/share/kea/scripts/mantis-ddns-bridge.sh ]; then
     echo "run_script hook found at ${RUN_SCRIPT_LIB} — DDNS bridge active."

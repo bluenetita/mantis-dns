@@ -469,7 +469,7 @@ class Feed(Base):
 # ── DHCP (Epic M — ISC Kea integration, Sprint 19) ───────────────────────────
 
 class DhcpScope(Base):
-    """DHCP subnet/scope pushed to Kea via config-set (design.md §22)."""
+    """DHCP subnet/scope pushed to Kea via subnet_cmds (design.md §22)."""
 
     __tablename__ = "dhcp_scopes"
     __table_args__ = (UniqueConstraint("tenant_id", "subnet", name="uq_dhcp_scope_subnet"),)
@@ -626,7 +626,7 @@ class DhcpHaConfig(Base):
 
 
 class DhcpScope6(Base):
-    """IPv6 DHCP subnet/scope pushed to kea-dhcp6 via config-set (Sprint 22)."""
+    """IPv6 DHCP subnet/scope pushed to kea-dhcp6 via subnet_cmds (Sprint 22)."""
 
     __tablename__ = "dhcp_scopes6"
     __table_args__ = (UniqueConstraint("tenant_id", "subnet", name="uq_dhcp_scope6_subnet"),)

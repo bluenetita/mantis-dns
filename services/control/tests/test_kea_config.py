@@ -14,6 +14,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from mantis_control.dhcp import kea_config, kea_config6
 
@@ -114,3 +115,169 @@ async def test_blank_kea_url_is_reported_before_http_call(monkeypatch):
         raise AssertionError("expected RuntimeError")
 
     assert _FakeAsyncClient.calls == []
+
+
+def _scope(scope_id: str, subnet: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=scope_id,
+        tenant_id="tenant-1",
+        subnet=subnet,
+        range_start="10.0.0.10",
+        range_end="10.0.0.200",
+        lease_time_s=86400,
+        max_lease_time_s=604800,
+        renew_time_s=None,
+        rebind_time_s=None,
+        interface=None,
+        pxe_next_server=None,
+        pxe_boot_filename=None,
+        router_ip=None,
+        dns_servers=[],
+        ntp_server=None,
+        domain_name=None,
+        options=[],
+        static_leases=[],
+        relay_configs=[],
+        kea_subnet_id=None,
+    )
+
+
+def _fake_db(scopes):
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = scopes
+    return db
+
+
+async def test_push_full_config_adds_updates_and_deletes_subnets(monkeypatch):
+    """push_full_config must diff against Kea's live subnet4-list (not just
+    push everything as subnet4-add) so an already-known subnet is updated in
+    place and a subnet no longer in the DB (deleted/disabled scope) is
+    actually removed from Kea, rather than lingering forever."""
+    kept = _scope("11111111-2222-3333-4444-555555555555", "10.0.0.0/24")
+    added = _scope("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "10.0.1.0/24")
+    kept_id = kea_config._scope_kea_id(kept.id)
+    added_id = kea_config._scope_kea_id(added.id)
+    stale_id = 999999
+
+    db = _fake_db([kept, added])
+    calls = []
+
+    async def fake_kea_command(command, service=None, arguments=None):
+        calls.append((command, service, arguments))
+        if command == "subnet4-list":
+            return {"result": 0, "arguments": {"subnets": [
+                {"id": kept_id, "subnet": kept.subnet},
+                {"id": stale_id, "subnet": "192.0.2.0/24"},
+            ]}}
+        return {"result": 0}
+
+    monkeypatch.setattr(kea_config, "kea_command", fake_kea_command)
+
+    await kea_config.push_full_config(db)
+
+    commands = {c[0] for c in calls}
+    assert commands == {"subnet4-list", "subnet4-del", "subnet4-update", "subnet4-add"}
+
+    del_call = next(c for c in calls if c[0] == "subnet4-del")
+    assert del_call[2] == {"id": stale_id}
+
+    update_call = next(c for c in calls if c[0] == "subnet4-update")
+    assert update_call[2]["subnet4"][0]["id"] == kept_id
+    assert update_call[2]["subnet4"][0]["subnet"] == kept.subnet
+
+    add_call = next(c for c in calls if c[0] == "subnet4-add")
+    assert add_call[2]["subnet4"][0]["id"] == added_id
+    assert add_call[2]["subnet4"][0]["subnet"] == added.subnet
+
+    assert kept.kea_subnet_id == kept_id
+    assert added.kea_subnet_id == added_id
+
+
+async def test_push_full_config_raises_on_rejected_command(monkeypatch):
+    scope = _scope("11111111-2222-3333-4444-555555555555", "10.0.0.0/24")
+    db = _fake_db([scope])
+
+    async def fake_kea_command(command, service=None, arguments=None):
+        if command == "subnet4-list":
+            return {"result": 0, "arguments": {"subnets": []}}
+        return {"result": 1, "text": "boom"}
+
+    monkeypatch.setattr(kea_config, "kea_command", fake_kea_command)
+
+    try:
+        await kea_config.push_full_config(db)
+    except RuntimeError as exc:
+        assert "boom" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+async def test_synced_kea_subnet_ids_treats_empty_result_as_no_subnets(monkeypatch):
+    async def fake_kea_command(command, service=None, arguments=None):
+        assert command == "subnet4-list"
+        return {"result": 3, "text": "0 IPv4 subnets found"}
+
+    monkeypatch.setattr(kea_config, "kea_command", fake_kea_command)
+
+    assert await kea_config._synced_kea_subnet_ids(["dhcp4"]) == set()
+
+
+def _scope6(scope_id: str, subnet: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=scope_id,
+        tenant_id="tenant-1",
+        subnet=subnet,
+        pool_start="2001:db8::10",
+        pool_end="2001:db8::ff",
+        preferred_lifetime_s=3000,
+        valid_lifetime_s=4000,
+        renew_time_s=None,
+        rebind_time_s=None,
+        interface=None,
+        pd_prefix=None,
+        pd_prefix_len=None,
+        dns_servers=[],
+        domain_name=None,
+        reservations6=[],
+        kea_subnet_id=None,
+    )
+
+
+async def test_push_full_config6_adds_updates_and_deletes_subnets(monkeypatch):
+    kept = _scope6("11111111-2222-3333-4444-555555555555", "2001:db8:1::/64")
+    added = _scope6("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "2001:db8:2::/64")
+    kept_id = kea_config6._scope_kea_id6(kept.id)
+    added_id = kea_config6._scope_kea_id6(added.id)
+    stale_id = 999999
+
+    db = _fake_db([kept, added])
+    calls = []
+
+    async def fake_kea_command(command, service=None, arguments=None):
+        calls.append((command, service, arguments))
+        if command == "subnet6-list":
+            return {"result": 0, "arguments": {"subnets": [
+                {"id": kept_id, "subnet": kept.subnet},
+                {"id": stale_id, "subnet": "2001:db8:ff::/64"},
+            ]}}
+        return {"result": 0}
+
+    monkeypatch.setattr(kea_config, "kea_command", fake_kea_command)
+    monkeypatch.setattr(kea_config6, "kea_command", fake_kea_command)
+
+    await kea_config6.push_full_config6(db)
+
+    commands = {c[0] for c in calls}
+    assert commands == {"subnet6-list", "subnet6-del", "subnet6-update", "subnet6-add"}
+
+    del_call = next(c for c in calls if c[0] == "subnet6-del")
+    assert del_call[2] == {"id": stale_id}
+
+    update_call = next(c for c in calls if c[0] == "subnet6-update")
+    assert update_call[2]["subnet6"][0]["id"] == kept_id
+
+    add_call = next(c for c in calls if c[0] == "subnet6-add")
+    assert add_call[2]["subnet6"][0]["id"] == added_id
+
+    assert kept.kea_subnet_id == kept_id
+    assert added.kea_subnet_id == added_id
