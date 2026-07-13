@@ -71,9 +71,15 @@ const python = process.platform === "win32" ? "python" : "python3";
 const dump = spawnSync(python, ["scripts/dump_openapi.py"], {
   cwd: controlDir,
   encoding: "utf-8",
+  maxBuffer: 16 * 1024 * 1024,
 });
 if (dump.status !== 0) {
-  process.stderr.write(dump.stderr);
+  if (dump.stderr) {
+    process.stderr.write(dump.stderr);
+  }
+  if (dump.error) {
+    console.error(dump.error.message);
+  }
   console.error(
     "\nFailed to dump the OpenAPI schema from the control plane. Is " +
       "mantis_control installed in an active venv (`pip install -e '.[dev]'` " +

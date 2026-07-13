@@ -1281,6 +1281,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dhcp/kea/interfaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Kea Interfaces
+         * @description List network interfaces kea-dhcp4 can see, for the scope Interface
+         *     field's dropdown. Degrades gracefully (ok: False) if Kea is unreachable —
+         *     scopes should stay editable during a Kea outage.
+         */
+        get: operations["kea_interfaces_api_v1_dhcp_kea_interfaces_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dhcp/ha/{tenant_id}": {
         parameters: {
             query?: never;
@@ -1314,11 +1336,13 @@ export interface paths {
         put?: never;
         /**
          * Dhcp Event
-         * @description Receives lease add/expire events from the Kea run_script hook.
+         * @description Receives lease add/expire events from the Kea run_script hook, for
+         *     both kea-dhcp4 (family="4") and kea-dhcp6 (family="6").
          *
          *     For each event:
          *     - Always upserts ClientEntry (client registry)
-         *     - If the scope has ddns_enabled + ddns_zone_id, creates/removes A record
+         *     - If the scope has ddns_enabled + ddns_zone_id, creates/removes the
+         *       matching A (v4) or AAAA (v6) record
          */
         post: operations["dhcp_event_api_v1_internal_dhcp_event_post"];
         delete?: never;
@@ -1434,6 +1458,28 @@ export interface paths {
          * @description Re-push the full Kea DHCPv6 config from DB.
          */
         post: operations["manual_push6_api_v1_dhcp6_push_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/dhcp6/kea/interfaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Kea Interfaces6
+         * @description List network interfaces kea-dhcp6 can see, for the scope Interface
+         *     field's dropdown. Degrades gracefully (ok: False) if Kea is unreachable —
+         *     scopes should stay editable during a Kea outage.
+         */
+        get: operations["kea_interfaces6_api_v1_dhcp6_kea_interfaces_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1690,10 +1736,20 @@ export interface components {
             /** Hostname */
             hostname: string;
             /**
+             * Family
+             * @default 4
+             */
+            family: string;
+            /**
              * Mac
              * @default
              */
             mac: string;
+            /**
+             * Duid
+             * @default
+             */
+            duid: string;
             /**
              * Subnet Id
              * @default 0
@@ -6579,6 +6635,28 @@ export interface operations {
             };
         };
     };
+    kea_interfaces_api_v1_dhcp_kea_interfaces_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     get_ha_config_api_v1_dhcp_ha__tenant_id__get: {
         parameters: {
             query?: never;
@@ -7032,6 +7110,28 @@ export interface operations {
         };
     };
     manual_push6_api_v1_dhcp6_push_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    kea_interfaces6_api_v1_dhcp6_kea_interfaces_get: {
         parameters: {
             query?: never;
             header?: never;
