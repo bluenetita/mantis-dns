@@ -141,7 +141,7 @@ describe("Scope6sTab", () => {
     } as never);
     renderWithProviders(<Scope6sTab tenantOptions={tenantOptions} />);
     await user.click(screen.getByRole("button", { name: /add scope/i }));
-    const field = await screen.findByPlaceholderText("Select interface");
+    const field = await screen.findByPlaceholderText("Select or type interface");
     await user.click(field);
     expect(await screen.findByText("eth2 - 2001:db8::1 - up")).toBeInTheDocument();
   });
@@ -156,7 +156,9 @@ describe("Scope6sTab", () => {
     } as never);
     renderWithProviders(<Scope6sTab tenantOptions={tenantOptions} />);
     await user.click(screen.getByRole("button", { name: /add scope/i }));
-    expect(await screen.findByPlaceholderText("No interfaces detected")).toBeInTheDocument();
+    const field = await screen.findByPlaceholderText("Type interface or refresh");
+    await user.click(field);
+    expect(await screen.findByText("No interfaces detected")).toBeInTheDocument();
   });
 
   it("refreshes Kea's detected IPv6 interfaces from the scope form", async () => {

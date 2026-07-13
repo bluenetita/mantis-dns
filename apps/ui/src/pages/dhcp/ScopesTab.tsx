@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { ActionIcon, Badge, Button, Group, NumberInput, Select, Stack, Switch, Text, TextInput, Title, Tooltip } from "@mantine/core";
+import { ActionIcon, Autocomplete, Badge, Button, Group, NumberInput, Select, Stack, Switch, Text, TextInput, Title, Tooltip } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { modals } from "@mantine/modals";
@@ -108,6 +108,13 @@ function ScopeForm({
     }
     return opts;
   }, [ifaceData, initial?.interface]);
+  const interfaceDropdownData = interfaceOptions.length > 0
+    ? interfaceOptions
+    : [{
+        value: "__no_kea_interfaces__",
+        label: ifaceData?.ok ? "No interfaces detected" : "No Kea interfaces loaded",
+        disabled: true,
+      }];
   const refreshInterfaces = () => {
     void refetchInterfaces();
   };
@@ -163,29 +170,15 @@ function ScopeForm({
           <TextInput label="PXE boot filename" placeholder="pxelinux.0" {...form.getInputProps("pxe_boot_filename")} />
         </Group>
         <Group align="flex-end" gap="xs" wrap="nowrap">
-          {ifaceData?.ok ? (
-            <Select
-              label="Interface (optional)"
-              placeholder={interfaceOptions.length > 0 ? "Select interface" : "No interfaces detected"}
-              description={interfaceOptions.length > 0 ? "Interfaces visible to Kea" : "Kea is reachable but returned no interfaces"}
-              data={interfaceOptions}
-              searchable
-              clearable
-              nothingFoundMessage="No interfaces detected"
-              inputWrapperOrder={["label", "input", "description", "error"]}
-              style={{ flex: 1 }}
-              {...form.getInputProps("interface")}
-            />
-          ) : (
-            <TextInput
-              label="Interface (optional)"
-              placeholder="eth0"
-              description={ifaceData && !ifaceData.ok ? "Couldn't reach Kea to list interfaces — enter manually." : undefined}
-              inputWrapperOrder={["label", "input", "description", "error"]}
-              style={{ flex: 1 }}
-              {...form.getInputProps("interface")}
-            />
-          )}
+          <Autocomplete
+            label="Interface (optional)"
+            placeholder={interfaceOptions.length > 0 ? "Select or type interface" : "Type interface or refresh"}
+            data={interfaceDropdownData}
+            clearable
+            inputWrapperOrder={["label", "input", "description", "error"]}
+            style={{ flex: 1 }}
+            {...form.getInputProps("interface")}
+          />
           <Tooltip label="Refresh Kea interfaces">
             <ActionIcon
               aria-label="Refresh Kea interfaces"

@@ -135,7 +135,7 @@ describe("ScopesTab", () => {
     expect(screen.getByLabelText(/^Name/)).toHaveValue("");
   });
 
-  it("shows the interface field as free text when Kea's interface list is unavailable", async () => {
+  it("keeps the interface field editable when Kea's interface list is unavailable", async () => {
     const user = userEvent.setup();
     mockUseDhcpScopes.mockReturnValue({ data: [], isLoading: false } as never);
     mockUseKeaInterfaces.mockReturnValue({
@@ -145,7 +145,7 @@ describe("ScopesTab", () => {
     } as never);
     renderWithProviders(<ScopesTab tenantOptions={tenantOptions} zoneOptions={zoneOptions} />);
     await user.click(screen.getByRole("button", { name: /add scope/i }));
-    expect(await screen.findByRole("textbox", { name: /interface/i })).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText("Type interface or refresh")).toBeInTheDocument();
   });
 
   it("shows the interface field as a dropdown of Kea's detected interfaces", async () => {
@@ -158,7 +158,7 @@ describe("ScopesTab", () => {
     } as never);
     renderWithProviders(<ScopesTab tenantOptions={tenantOptions} zoneOptions={zoneOptions} />);
     await user.click(screen.getByRole("button", { name: /add scope/i }));
-    const field = await screen.findByPlaceholderText("Select interface");
+    const field = await screen.findByPlaceholderText("Select or type interface");
     await user.click(field);
     expect(await screen.findByText("eth1 - 10.50.0.1 - up")).toBeInTheDocument();
   });
@@ -173,7 +173,9 @@ describe("ScopesTab", () => {
     } as never);
     renderWithProviders(<ScopesTab tenantOptions={tenantOptions} zoneOptions={zoneOptions} />);
     await user.click(screen.getByRole("button", { name: /add scope/i }));
-    expect(await screen.findByPlaceholderText("No interfaces detected")).toBeInTheDocument();
+    const field = await screen.findByPlaceholderText("Type interface or refresh");
+    await user.click(field);
+    expect(await screen.findByText("No interfaces detected")).toBeInTheDocument();
   });
 
   it("refreshes Kea's detected interfaces from the scope form", async () => {
