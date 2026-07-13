@@ -100,7 +100,9 @@ function ScopeForm({
   const interfaceOptions = useMemo(() => {
     const opts = (ifaceData?.interfaces ?? []).map((i) => ({
       value: i.name,
-      label: `${i.name}${i.addresses.length ? ` - ${i.addresses.join(", ")}` : ""} - ${i.up ? "up" : "down"}`,
+      label: i.name === "*"
+        ? "All interfaces (*)"
+        : `${i.name}${i.addresses.length ? ` - ${i.addresses.join(", ")}` : ""} - ${i.up ? "up" : "down"}`,
       disabled: !i.up && i.name !== initial?.interface,
     }));
     if (initial?.interface && !opts.some((o) => o.value === initial.interface)) {

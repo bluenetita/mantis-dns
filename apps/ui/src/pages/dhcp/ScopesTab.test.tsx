@@ -178,6 +178,21 @@ describe("ScopesTab", () => {
     expect(await screen.findByText("No interfaces detected")).toBeInTheDocument();
   });
 
+  it("labels Kea's wildcard interface clearly", async () => {
+    const user = userEvent.setup();
+    mockUseDhcpScopes.mockReturnValue({ data: [], isLoading: false } as never);
+    mockUseKeaInterfaces.mockReturnValue({
+      data: { ok: true, interfaces: [{ name: "*", addresses: [], up: true }] },
+      isFetching: false,
+      refetch: vi.fn(),
+    } as never);
+    renderWithProviders(<ScopesTab tenantOptions={tenantOptions} zoneOptions={zoneOptions} />);
+    await user.click(screen.getByRole("button", { name: /add scope/i }));
+    const field = await screen.findByPlaceholderText("Select or type interface");
+    await user.click(field);
+    expect(await screen.findByText("All interfaces (*)")).toBeInTheDocument();
+  });
+
   it("refreshes Kea's detected interfaces from the scope form", async () => {
     const user = userEvent.setup();
     const refetch = vi.fn();

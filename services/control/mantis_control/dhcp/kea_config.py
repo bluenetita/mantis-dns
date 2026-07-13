@@ -216,6 +216,19 @@ async def list_kea_interfaces(service: list[str]) -> list[dict[str, Any]]:
     currently-detected interface name instead of guessing/typing one."""
     result = await kea_command("interface-list", service=service)
     if result.get("result") != 0:
+        if "not supported" in str(result.get("text", "")).lower():
+            config = await kea_command("config-get", service=service)
+            family = "Dhcp6" if service and service[0] == "dhcp6" else "Dhcp4"
+            configured = (
+                (config.get("arguments") or {})
+                .get(family, {})
+                .get("interfaces-config", {})
+                .get("interfaces", [])
+            )
+            return [
+                {"name": str(interface), "addresses": [], "up": True}
+                for interface in configured
+            ]
         raise RuntimeError(f"Kea interface-list failed: {result.get('text', result)}")
     raw_interfaces = (result.get("arguments") or {}).get("interfaces", [])
     if isinstance(raw_interfaces, dict):

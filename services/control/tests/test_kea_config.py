@@ -159,6 +159,33 @@ async def test_list_kea_interfaces_parses_mapping_shape(monkeypatch):
     ]
 
 
+async def test_list_kea_interfaces_falls_back_to_configured_interfaces(monkeypatch):
+    calls = []
+
+    async def fake_kea_command(command, service=None, arguments=None):
+        calls.append(command)
+        if command == "interface-list":
+            return {"result": 2, "text": "'interface-list' command not supported."}
+        assert command == "config-get"
+        return {
+            "result": 0,
+            "arguments": {
+                "Dhcp4": {
+                    "interfaces-config": {
+                        "interfaces": ["*"],
+                    },
+                },
+            },
+        }
+
+    monkeypatch.setattr(kea_config, "kea_command", fake_kea_command)
+
+    assert await kea_config.list_kea_interfaces(["dhcp4"]) == [
+        {"name": "*", "addresses": [], "up": True},
+    ]
+    assert calls == ["interface-list", "config-get"]
+
+
 def _scope(scope_id: str, subnet: str) -> SimpleNamespace:
     return SimpleNamespace(
         id=scope_id,
