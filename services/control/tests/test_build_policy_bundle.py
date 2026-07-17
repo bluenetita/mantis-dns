@@ -70,7 +70,14 @@ def test_category_bloom_unions_all_enabled_feeds(db, tmp_path):
     _write_feed(db, tmp_path, "feed-a", ["only-in-a.example"])
     _write_feed(db, tmp_path, "feed-b", ["only-in-b.example"])
 
-    with patch.object(build_policy_bundle, "FEED_STORAGE_DIR", tmp_path):
+    # Bloom seed is normally randomized per compile (see bloom.py); with only
+    # two domains in a 67-bit filter, an unlucky seed has a small but real
+    # chance of making "neither.example" a false positive, which flaked this
+    # test in CI. Pin the seed so the negative-containment assertion below is
+    # deterministic instead of probabilistic.
+    with patch.object(build_policy_bundle, "_random_seed", return_value=0), patch.object(
+        build_policy_bundle, "FEED_STORAGE_DIR", tmp_path
+    ):
         bloom_bytes, params, feeds = build_policy_bundle._category_bloom(db, "malware")
 
     assert [f.id for f in feeds] == ["feed-a", "feed-b"]
