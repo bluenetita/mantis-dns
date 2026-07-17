@@ -51,7 +51,7 @@ CATEGORY_REGISTRY: list[Category] = [
     Category("ransomware", "Ransomware", "Domains linked to ransomware payload delivery and payment portals.", "security", "pink", "Lock", "ACTION_BLOCK", True),
     Category("scam", "Scam & Fraud", "Fraudulent schemes, fake giveaways, and tech-support scams.", "security", "grape", "AlertTriangle", "ACTION_BLOCK", True),
     Category("cryptojacking", "Cryptojacking", "Browser-based cryptocurrency mining scripts.", "security", "yellow", "CoinBitcoin", "ACTION_BLOCK", True),
-    Category("newly-registered", "Newly-Registered Domains", "Domains registered in the last 30 days — a common signal in fast-flux attacks.", "security", "indigo", "CalendarPlus", "ACTION_LOG_ONLY", False),
+    Category("newly-registered", "Newly-Registered Domains", "Domains registered in the last 10 days — a common signal in fast-flux attacks.", "security", "indigo", "CalendarPlus", "ACTION_LOG_ONLY", True),
     # ── content ──────────────────────────────────────────────────────────
     Category("adult", "Adult / Porn", "Pornography and explicit adult content.", "content", "violet", "EyeOff", "ACTION_BLOCK", True),
     Category("gambling", "Gambling", "Online casinos, betting, and gambling platforms.", "content", "cyan", "Dice", "ACTION_BLOCK", True),

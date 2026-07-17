@@ -223,5 +223,14 @@
     "interval_seconds": 86400,
     "license": "Unlicense",
     "provider": "ShadowWhisperer"
+  },
+  {
+    "id": "cenk-nrd",
+    "category_id": "newly-registered",
+    "url": "https://raw.githubusercontent.com/cenk/nrd/refs/heads/main/nrd-last-10-days.txt",
+    "format": "domain-list",
+    "interval_seconds": 86400,
+    "license": "Public domain (WhoisDS.com, no license required)",
+    "provider": "cenk/nrd"
   }
 ]
