@@ -17,6 +17,8 @@
 compiler wiring of the signed bundle's `block_response`, and the upsert/resolve
 endpoints. In-memory sqlite with just the tables under test, mirroring
 test_local_zones_endpoint.py."""
+from unittest.mock import patch
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -28,17 +30,21 @@ from mantis_control.api.routers import (
     upsert_group_block_template,
 )
 from mantis_control.block_page import resolve_block_template
+from mantis_control.compiler import build_policy_bundle
+from mantis_control.compiler.bloom import BloomFilterBuilder
 from mantis_control.compiler.build_policy_bundle import build_bundle
 from mantis_control.db.models import (
     AuditLog,
     Base,
     BlockPageTemplate,
+    Feed,
     Group,
     Policy,
     PolicyCategoryToggle,
     PolicyOverride,
     Tenant,
 )
+from mantis_control.feeds.ingest import _feed_path
 from mantis_control.gen import bundle_pb2
 
 _TABLES = [
@@ -49,6 +55,7 @@ _TABLES = [
     PolicyOverride.__table__,
     BlockPageTemplate.__table__,
     AuditLog.__table__,
+    Feed.__table__,
 ]
 
 
@@ -147,6 +154,45 @@ def test_compiler_omits_block_response_when_no_template(db, group):
 
     bundle = build_bundle(policy, 1, db)
     assert not bundle.HasField("block_response")
+
+
+# ── parallel category compile ───────────────────────────────────────────────
+
+def test_compiler_parallelizes_bloom_build_across_categories(db, group, tmp_path):
+    """>=2 categories with ingested feeds routes through the process-pool
+    branch in build_bundle (services/control/mantis_control/compiler/
+    build_policy_bundle.py) instead of the sequential fallback. Each
+    category's bloom must still come out correct once recombined."""
+    policy = Policy(group_id=group.id)
+    db.add(policy)
+    db.add(PolicyCategoryToggle(policy=policy, category_id="malware", action="ACTION_BLOCK"))
+    db.add(PolicyCategoryToggle(policy=policy, category_id="ads", action="ACTION_BLOCK"))
+    db.add(Feed(id="feed-malware", category_id="malware", url="https://example.test/malware",
+                format="domain-list", enabled=True, last_domain_count=1))
+    db.add(Feed(id="feed-ads", category_id="ads", url="https://example.test/ads",
+                format="domain-list", enabled=True, last_domain_count=1))
+    db.commit()
+
+    _feed_path(tmp_path, "feed-malware").write_text("evil.example")
+    _feed_path(tmp_path, "feed-ads").write_text("tracker.example")
+
+    with patch.object(build_policy_bundle, "FEED_STORAGE_DIR", tmp_path):
+        bundle = build_bundle(policy, 1, db)
+
+    by_category = {c.category_id: c for c in bundle.categories}
+    assert set(by_category) == {"malware", "ads"}
+
+    for category_id, domain, other_domain in (
+        ("malware", "evil.example", "tracker.example"),
+        ("ads", "tracker.example", "evil.example"),
+    ):
+        c = by_category[category_id]
+        bf = BloomFilterBuilder(
+            build_policy_bundle.BloomParams(c.bloom.num_hashes, c.bloom.num_bits, c.bloom.seed)
+        )
+        bf._bits = bytearray(c.bloom_bits)
+        assert bf.might_contain(domain)
+        assert not bf.might_contain(other_domain)
 
 
 # ── endpoints ──────────────────────────────────────────────────────────────

@@ -23,8 +23,10 @@ overrides are wired end to end since they come straight from the DB.
 from __future__ import annotations
 
 import hashlib
+import os
 import random
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -87,32 +89,68 @@ _BLOCK_MODE_MAP = {
 }
 
 
+def _fetch_ingested_feeds(db: Session, category_id: str) -> list[Feed]:
+    """Enabled feeds for a category that have actually been ingested at least
+    once. Ordered by feed id so compiles are deterministic. DB-bound — must
+    run in the calling process, never inside a worker (Session isn't
+    fork/spawn-safe)."""
+    feeds = db.execute(
+        select(Feed)
+        .where(Feed.category_id == category_id, Feed.enabled.is_(True))
+        .order_by(Feed.id)
+    ).scalars().all()
+    return [f for f in feeds if f.last_domain_count is not None]
+
+
+def _compile_bloom(feed_storage_dir: Path, feed_ids: list[str]) -> tuple[bytes, int, int, int]:
+    """Pure CPU/IO work for one category: union the given feeds' domains and
+    build the bloom filter. No DB access, no closures over module-level
+    mutable state — this is the piece dispatched to worker processes, so it
+    must be importable and picklable as a plain top-level function. Returns
+    a plain tuple (not BloomParams) to keep the pickled result minimal."""
+    domains: set[str] = set()
+    for feed_id in feed_ids:
+        domains |= load_domains(feed_storage_dir, feed_id)
+    params = recommended_params(expected_items=max(len(domains), 1), false_positive_rate=_TARGET_FPR, seed=_random_seed())
+    bf = BloomFilterBuilder(params)
+    for domain in domains:
+        bf.add(domain)
+    return bf.to_bytes(), params.num_hashes, params.num_bits, params.seed
+
+
 def _category_bloom(db: Session, category_id: str) -> tuple[bytes, BloomParams, list[Feed]]:
     """Builds a category's bloom filter as the UNION of every enabled,
     ingested feed for that category — a category may have several feeds
     (e.g. two ads lists), and consulting only one silently drops the rest
     from the wire. Falls back to an empty filter when no feed has been
     ingested yet. Returns the feeds that contributed domains (empty list
-    if none). Ordered by feed id so compiles are deterministic."""
-    feeds = db.execute(
-        select(Feed)
-        .where(Feed.category_id == category_id, Feed.enabled.is_(True))
-        .order_by(Feed.id)
-    ).scalars().all()
-    ingested = [f for f in feeds if f.last_domain_count is not None]
-
+    if none). Sequential fetch + compute — used directly by callers that
+    only need one category (tests, the diagnose script); build_bundle below
+    fans the compute step for *all* of a policy's categories out to a
+    process pool instead of calling this per category."""
+    ingested = _fetch_ingested_feeds(db, category_id)
     if not ingested:
         bf = BloomFilterBuilder(_EMPTY_CATEGORY_PARAMS)
         return bf.to_bytes(), _EMPTY_CATEGORY_PARAMS, []
 
-    domains: set[str] = set()
-    for feed in ingested:
-        domains |= load_domains(FEED_STORAGE_DIR, feed.id)
-    params = recommended_params(expected_items=max(len(domains), 1), false_positive_rate=_TARGET_FPR, seed=_random_seed())
-    bf = BloomFilterBuilder(params)
-    for domain in domains:
-        bf.add(domain)
-    return bf.to_bytes(), params, ingested
+    bloom_bytes, num_hashes, num_bits, seed = _compile_bloom(FEED_STORAGE_DIR, [f.id for f in ingested])
+    return bloom_bytes, BloomParams(num_hashes, num_bits, seed), ingested
+
+
+_pool: ProcessPoolExecutor | None = None
+
+
+def _get_pool() -> ProcessPoolExecutor:
+    """Lazily-created, process-lifetime-reused pool. Bloom insertion is a
+    pure-Python hash loop (bloom.py) — threads buy nothing there, the GIL
+    serializes it regardless of thread count. A fresh ProcessPoolExecutor
+    per compile would burn most of the win on interpreter startup (costly
+    on Windows' spawn), so one pool is created on first use and kept
+    around for the life of the server process."""
+    global _pool
+    if _pool is None:
+        _pool = ProcessPoolExecutor(max_workers=os.cpu_count() or 1)
+    return _pool
 
 
 def build_bundle(policy: Policy, version: int, db: Session) -> bundle_pb2.Bundle:
@@ -124,8 +162,37 @@ def build_bundle(policy: Policy, version: int, db: Session) -> bundle_pb2.Bundle
         on_load_failure=_FAILURE_POLICY_MAP.get(policy.on_load_failure, bundle_pb2.FAIL_OPEN),
     )
 
-    for toggle in policy.category_toggles:
-        bloom_bytes, params, feeds = _category_bloom(db, toggle.category_id)
+    # Phase 1: DB reads, sequential — the Session isn't fork/spawn-safe so
+    # this can't be handed to worker processes.
+    toggle_feeds = [(toggle, _fetch_ingested_feeds(db, toggle.category_id)) for toggle in policy.category_toggles]
+
+    # Phase 2: the CPU-bound bloom build, fanned out across categories.
+    # Categories are independent (no shared state), so this is where the
+    # actual wall-clock win is — skip the pool for 0-1 categories needing
+    # real work, since process spawn/pickling overhead would eat the gain.
+    results: dict[int, tuple[bytes, BloomParams]] = {}
+    needs_compute = [(i, feeds) for i, (_, feeds) in enumerate(toggle_feeds) if feeds]
+    for i, (_, feeds) in enumerate(toggle_feeds):
+        if not feeds:
+            results[i] = (BloomFilterBuilder(_EMPTY_CATEGORY_PARAMS).to_bytes(), _EMPTY_CATEGORY_PARAMS)
+
+    if len(needs_compute) > 1:
+        pool = _get_pool()
+        futures = {
+            pool.submit(_compile_bloom, FEED_STORAGE_DIR, [f.id for f in feeds]): i
+            for i, feeds in needs_compute
+        }
+        for future in as_completed(futures):
+            i = futures[future]
+            bloom_bytes, num_hashes, num_bits, seed = future.result()
+            results[i] = (bloom_bytes, BloomParams(num_hashes, num_bits, seed))
+    else:
+        for i, feeds in needs_compute:
+            bloom_bytes, num_hashes, num_bits, seed = _compile_bloom(FEED_STORAGE_DIR, [f.id for f in feeds])
+            results[i] = (bloom_bytes, BloomParams(num_hashes, num_bits, seed))
+
+    for i, (toggle, feeds) in enumerate(toggle_feeds):
+        bloom_bytes, params = results[i]
         bundle.categories.append(
             bundle_pb2.CategorySet(
                 category_id=toggle.category_id,
