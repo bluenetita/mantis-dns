@@ -147,6 +147,35 @@ def set_group_subnet(
     return group
 
 
+@router.put("/groups/{group_id}", response_model=schemas.GroupOut)
+def rename_group(
+    group_id: str,
+    payload: schemas.GroupUpdate,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_role("admin", "operator")),
+) -> models.Group:
+    group = get_group_or_403(db, group_id, user)
+    old_name = group.name
+    group.name = payload.name
+    write_audit_log(db, "group.rename", "group", group.id, detail=f"name={old_name}->{group.name}", actor=user.email, tenant_id=group.tenant_id)
+    db.commit()
+    db.refresh(group)
+    return group
+
+
+@router.delete("/groups/{group_id}", status_code=204)
+def delete_group(
+    group_id: str,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_role("admin")),
+) -> None:
+    group = get_group_or_403(db, group_id, user)
+    db.query(models.BlockPageTemplate).filter(models.BlockPageTemplate.group_id == group_id).delete()
+    write_audit_log(db, "group.delete", "group", group.id, detail=f"name={group.name} tenant_id={group.tenant_id}", actor=user.email, tenant_id=group.tenant_id)
+    db.delete(group)
+    db.commit()
+
+
 @router.get("/routing-table", response_model=list[schemas.RoutingTableEntry])
 def get_routing_table(
     db: Session = Depends(get_db), _: None = Depends(require_service_token)

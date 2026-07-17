@@ -48,6 +48,10 @@ class GroupOut(BaseModel):
     created_at: datetime
 
 
+class GroupUpdate(BaseModel):
+    name: str
+
+
 class GroupSubnetUpdate(BaseModel):
     vpn_subnet: str
 

@@ -16,12 +16,14 @@
  */
 
 import { Button, Group, Stack, Table, Title, Card, Text, Loader, Center, TextInput, Badge, Breadcrumbs, Anchor, Modal } from "@mantine/core";
+import { useState } from "react";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
+import { modals } from "@mantine/modals";
 import { notifications } from "@mantine/notifications";
-import { IconPlus, IconUsers } from "@tabler/icons-react";
+import { IconPencil, IconPlus, IconTrash, IconUsers } from "@tabler/icons-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useCreateGroup, useGroups, useTenants } from "../api/hooks";
+import { useCreateGroup, useDeleteGroup, useGroups, useRenameGroup, useTenants } from "../api/hooks";
 import { useAuth } from "../auth/AuthContext";
 
 const CIDR_RE = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
@@ -67,15 +69,76 @@ function CreateGroupForm({ tenantId, onDone }: { tenantId: string; onDone: () =>
   );
 }
 
+function RenameGroupForm({
+  tenantId,
+  groupId,
+  initialName,
+  onDone,
+}: {
+  tenantId: string;
+  groupId: string;
+  initialName: string;
+  onDone: () => void;
+}) {
+  const renameGroup = useRenameGroup(tenantId);
+  const form = useForm({
+    initialValues: { name: initialName },
+    validate: {
+      name: (v) => (v.trim().length < 2 ? "Name must be at least 2 characters" : null),
+    },
+  });
+
+  return (
+    <form
+      onSubmit={form.onSubmit((values) => {
+        renameGroup.mutate(
+          { groupId, body: { name: values.name } },
+          {
+            onSuccess: () => {
+              notifications.show({ message: `Group renamed to "${values.name}"`, color: "green" });
+              onDone();
+            },
+            onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          }
+        );
+      })}
+    >
+      <Stack>
+        <TextInput label="Group name" required {...form.getInputProps("name")} />
+        <Button type="submit" loading={renameGroup.isPending}>
+          Save
+        </Button>
+      </Stack>
+    </form>
+  );
+}
+
 export function GroupsPage() {
   const { tenantId } = useParams<{ tenantId: string }>();
   const { data: tenants } = useTenants();
   const { data: groups, isLoading, error } = useGroups(tenantId);
+  const deleteGroup = useDeleteGroup(tenantId);
   const navigate = useNavigate();
 
   const tenant = tenants?.find((t) => t.id === tenantId);
   const [createOpened, { open: openCreateModal, close: closeCreateModal }] = useDisclosure(false);
+  const [editingGroup, setEditingGroup] = useState<{ id: string; name: string } | null>(null);
   const canWrite = useAuth().hasRole("operator");
+  const canDelete = useAuth().hasRole("admin");
+
+  function confirmDelete(groupId: string, name: string) {
+    modals.openConfirmModal({
+      title: "Delete group",
+      children: <Text size="sm">Delete "{name}"? This removes its policy and block-page override.</Text>,
+      labels: { confirm: "Delete", cancel: "Cancel" },
+      confirmProps: { color: "red" },
+      onConfirm: () =>
+        deleteGroup.mutate(groupId, {
+          onSuccess: () => notifications.show({ message: `Group "${name}" deleted`, color: "green" }),
+          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+        }),
+    });
+  }
 
   if (isLoading)
     return (
@@ -123,6 +186,7 @@ export function GroupsPage() {
               <Table.Th>Name</Table.Th>
               <Table.Th>VPN subnet</Table.Th>
               <Table.Th>Created</Table.Th>
+              <Table.Th />
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -137,10 +201,46 @@ export function GroupsPage() {
                   {g.vpn_subnet ? <Badge variant="light">{g.vpn_subnet}</Badge> : <Text c="dimmed">not set</Text>}
                 </Table.Td>
                 <Table.Td>{new Date(g.created_at).toLocaleString()}</Table.Td>
+                <Table.Td onClick={(e) => e.stopPropagation()}>
+                  <Group gap="xs" justify="flex-end">
+                    {canWrite && (
+                      <Button
+                        variant="subtle"
+                        size="xs"
+                        leftSection={<IconPencil size={14} />}
+                        onClick={() => setEditingGroup({ id: g.id, name: g.name })}
+                      >
+                        Rename
+                      </Button>
+                    )}
+                    {canDelete && (
+                      <Button
+                        variant="subtle"
+                        color="red"
+                        size="xs"
+                        leftSection={<IconTrash size={14} />}
+                        onClick={() => confirmDelete(g.id, g.name)}
+                      >
+                        Delete
+                      </Button>
+                    )}
+                  </Group>
+                </Table.Td>
               </Table.Tr>
             ))}
           </Table.Tbody>
         </Table>
+      )}
+
+      {tenantId && editingGroup && (
+        <Modal opened onClose={() => setEditingGroup(null)} title="Rename group">
+          <RenameGroupForm
+            tenantId={tenantId}
+            groupId={editingGroup.id}
+            initialName={editingGroup.name}
+            onDone={() => setEditingGroup(null)}
+          />
+        </Modal>
       )}
 
       {tenantId && (

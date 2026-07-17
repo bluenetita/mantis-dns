@@ -21,6 +21,7 @@ import type { components } from "./schema";
 
 type TenantCreate = components["schemas"]["TenantCreate"];
 type GroupCreate = components["schemas"]["GroupCreate"];
+type GroupUpdate = components["schemas"]["GroupUpdate"];
 type GroupSubnetUpdate = components["schemas"]["GroupSubnetUpdate"];
 type PolicyUpsert = components["schemas"]["PolicyUpsert"];
 type BlockPageTemplateUpsert = components["schemas"]["BlockPageTemplateUpsert"];
@@ -147,6 +148,29 @@ export function useSetGroupSubnet(tenantId: string | undefined) {
           body,
         })
       ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["groups", tenantId] }),
+  });
+}
+
+export function useRenameGroup(tenantId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ groupId, body }: { groupId: string; body: GroupUpdate }) =>
+      unwrap(
+        await apiClient.PUT("/api/v1/groups/{group_id}", {
+          params: { path: { group_id: groupId } },
+          body,
+        })
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["groups", tenantId] }),
+  });
+}
+
+export function useDeleteGroup(tenantId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (groupId: string) =>
+      unwrap(await apiClient.DELETE("/api/v1/groups/{group_id}", { params: { path: { group_id: groupId } } })),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["groups", tenantId] }),
   });
 }
