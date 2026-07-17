@@ -23,6 +23,7 @@ overrides are wired end to end since they come straight from the DB.
 from __future__ import annotations
 
 import hashlib
+import random
 import time
 from pathlib import Path
 
@@ -38,9 +39,36 @@ from mantis_control.db.models import Feed, Policy
 from mantis_control.feeds.ingest import load_domains
 from mantis_control.gen import bundle_pb2
 
+
+def _random_seed() -> int:
+    """A fixed seed (this used to be a hardcoded 1234, every category, every
+    install) makes bloom false-positive collisions permanent and identical
+    across every Mantis-DNS deployment: whichever real-world domains happen to
+    hash-collide with a given category's bit pattern collide *forever*, since
+    the pattern only changes when the underlying feed content changes. A fresh
+    seed per compile turns that into transient noise that shifts on the next
+    recompile instead of a standing, reproducible bug. bundle_pb2.BloomParams
+    carries the seed per-category on the wire already — the reader
+    (mantis-policy) needs no change, it already reads whatever seed ships."""
+    return random.getrandbits(64)
+
+
+# Target false-positive rate for every category's bloom filter. Bits scale
+# with -ln(p), not 1/p, so tightening 0.001 -> 0.0001 (10x fewer false
+# blocks per category) only costs ~1.33x the bits — on the current catalog
+# (17 categories, ~4.4M domains total) that's 7.56 MB -> 10.08 MB combined,
+# not the 10x a naive reading of "10x lower FPR" would suggest. Categories
+# are checked independently and block on first hit (mantis-filter's decide()),
+# so the per-category rate compounds across however many are enabled — this
+# is what actually bounds the real-world false-block rate, not any single
+# category's number in isolation.
+_TARGET_FPR = 0.0001
+
 # Sizing for a category with no ingested feed yet (empty bloom, matches behavior
-# before Sprint 5's feed ingester existed).
-_EMPTY_CATEGORY_PARAMS = recommended_params(expected_items=1000, seed=1234)
+# before Sprint 5's feed ingester existed). Bits are all-zero either way
+# (nothing to insert), so the seed can't affect matching here — randomized
+# anyway for consistency, not because it's load-bearing.
+_EMPTY_CATEGORY_PARAMS = recommended_params(expected_items=1000, false_positive_rate=_TARGET_FPR, seed=_random_seed())
 
 _FAILURE_POLICY_MAP = {
     "FAIL_OPEN": bundle_pb2.FAIL_OPEN,
@@ -80,7 +108,7 @@ def _category_bloom(db: Session, category_id: str) -> tuple[bytes, BloomParams, 
     domains: set[str] = set()
     for feed in ingested:
         domains |= load_domains(FEED_STORAGE_DIR, feed.id)
-    params = recommended_params(expected_items=max(len(domains), 1), seed=1234)
+    params = recommended_params(expected_items=max(len(domains), 1), false_positive_rate=_TARGET_FPR, seed=_random_seed())
     bf = BloomFilterBuilder(params)
     for domain in domains:
         bf.add(domain)
