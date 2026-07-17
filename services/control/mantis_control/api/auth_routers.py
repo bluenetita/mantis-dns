@@ -163,13 +163,21 @@ def change_password(
         raise HTTPException(400, "new password must be different from the current password")
 
     user.password_hash = hash_password(payload.new_password)
+    # Invalidates every other already-issued JWT for this user (see
+    # get_current_user's "tv" claim check) — otherwise a stolen session
+    # cookie/bearer token would keep working for its full 12h TTL even after
+    # the legitimate user rotates their password specifically because they
+    # suspect it's compromised.
+    # `or 0` guards a freshly-constructed (not yet flushed) User instance,
+    # where the column's default=0 hasn't been applied by SQLAlchemy yet and
+    # the attribute reads as None.
+    user.token_version = (user.token_version or 0) + 1
     write_audit_log(db, "user.change_password", "user", user.id, actor=user.email, tenant_id=user.tenant_id)
     db.commit()
 
-    # Reissue the session so this tab keeps working without a re-login.
-    # Other active sessions/tokens for this user (other tabs/devices) stay
-    # valid until their own TTL expires — JWTs are stateless here, same
-    # limitation every other route relying on create_access_token has.
+    # Reissue *this* session (with the bumped "tv") so this tab keeps
+    # working without a re-login. Other active sessions/tokens for this user
+    # (other tabs/devices) are now invalid and must log in again.
     token = create_access_token(user)
     csrf_token = generate_csrf_token()
     set_auth_cookies(response, token, csrf_token)
@@ -234,6 +242,15 @@ def update_user(
     user = db.get(models.User, user_id)
     if user is None:
         raise HTTPException(404, "user not found")
+    if (
+        user.role == "admin"
+        and payload.role != "admin"
+        and db.query(models.User).filter(models.User.role == "admin").count() <= 1
+    ):
+        # Without this, demoting the sole remaining admin (self or another
+        # account) leaves the deployment with zero admin users and no path
+        # back in short of a direct DB edit.
+        raise HTTPException(400, "cannot demote the only remaining admin user")
     old_role = user.role
     user.role = payload.role
     user.tenant_id = payload.tenant_id

@@ -99,3 +99,18 @@ def test_bearer_auth_bypasses_csrf_check_even_with_session_cookie():
         headers={"Authorization": "Bearer sometoken"},
     )
     assert resp.status_code == 200
+
+
+def test_non_bearer_authorization_header_does_not_bypass_csrf_check():
+    """get_current_user only prefers the Authorization header over the
+    session cookie when HTTPBearer accepts it as a Bearer token — for any
+    other scheme it falls back to the cookie exactly as if no header were
+    sent. A stray non-Bearer Authorization header (e.g. Basic) must not skip
+    the CSRF check while the request still authenticates via the cookie."""
+    client = _client()
+    resp = client.post(
+        "/mutate",
+        cookies={SESSION_COOKIE_NAME: "tok", CSRF_COOKIE_NAME: "csrf-value"},
+        headers={"Authorization": "Basic dXNlcjpwYXNz"},
+    )
+    assert resp.status_code == 403

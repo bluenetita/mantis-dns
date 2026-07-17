@@ -123,6 +123,7 @@ def create_access_token(user: models.User) -> str:
         "email": user.email,
         "role": user.role,
         "tenant_id": user.tenant_id,
+        "tv": user.token_version,
         "iat": now,
         "exp": now + _ACCESS_TOKEN_TTL,
     }
@@ -151,6 +152,13 @@ def get_current_user(
     user = db.get(models.User, sub)
     if user is None:
         raise HTTPException(401, "user no longer exists")
+    # Missing "tv" claim (a token issued before this field existed) is
+    # treated as version 0 — the column's own default — so a deploy of this
+    # change doesn't retroactively invalidate every already-issued session.
+    # Only a password change (which bumps token_version) invalidates tokens
+    # from this point forward.
+    if payload.get("tv", 0) != user.token_version:
+        raise HTTPException(401, "session invalidated by a password change — please log in again")
     return user
 
 
@@ -199,9 +207,19 @@ _CSRF_EXEMPT_PATHS = {"/api/v1/auth/login"}
 
 class CsrfMiddleware:
     """Double-submit-cookie CSRF check, enforced only when a request is
-    actually authenticated via the httpOnly session cookie (no Authorization
-    header). Bearer-token callers aren't exposed to browser-driven CSRF in
-    the first place, so they're left alone."""
+    actually authenticated via the httpOnly session cookie (no Bearer
+    Authorization header). Bearer-token callers aren't exposed to
+    browser-driven CSRF in the first place, so they're left alone.
+
+    Checks the header value actually is the `Bearer ` scheme, not just that
+    an Authorization header is present: get_current_user only prefers the
+    header over the cookie when HTTPBearer accepts it (i.e. it's a Bearer
+    token) — for any other scheme HTTPBearer yields no credentials and
+    get_current_user falls back to the session cookie same as if no header
+    were sent at all. Skipping the check for "any Authorization header
+    present" would let a request carrying e.g. a stray `Authorization: Basic
+    ...` header dodge CSRF while still authenticating via the cookie.
+    """
 
     def __init__(self, app: Any) -> None:
         self.app = app
@@ -212,10 +230,11 @@ class CsrfMiddleware:
             return
 
         request = Request(scope, receive=receive)
+        auth_header = request.headers.get("authorization", "")
         needs_check = (
             request.method not in _SAFE_METHODS
             and request.url.path not in _CSRF_EXEMPT_PATHS
-            and "authorization" not in request.headers
+            and not auth_header.lower().startswith("bearer ")
             and SESSION_COOKIE_NAME in request.cookies
         )
         if needs_check:

@@ -16,6 +16,7 @@
  */
 
 use std::env;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,6 +29,76 @@ use mantis_filter::{
 };
 use tokio::net::{TcpListener, UdpSocket};
 use tracing::{error, info, warn};
+
+/// True if `host` never leaves the local machine (loopback IP or the
+/// `localhost` name) — the only case where a plain-HTTP control-plane
+/// connection isn't exposed to an on-path attacker.
+fn is_loopback_host(host: &str) -> bool {
+    // url::Url::host_str() returns bracketed IPv6 literals (e.g. "[::1]"),
+    // which IpAddr::parse rejects — strip the brackets before parsing.
+    let bare = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+    host.eq_ignore_ascii_case("localhost") || bare.parse::<IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false)
+}
+
+/// Assessment of `control_url`'s exposure to an on-path attacker. `None`
+/// means the channel is either not plain HTTP or never leaves the local
+/// machine, so there's nothing to warn about.
+#[derive(Debug, PartialEq, Eq)]
+enum ControlChannelRisk {
+    /// Plain HTTP to a remote host, but the trust anchor is pinned — bundle
+    /// confidentiality is exposed, integrity is not.
+    ConfidentialityOnly,
+    /// Plain HTTP to a remote host with no pin — trust-on-first-use over a
+    /// channel an attacker can rewrite, so the trust anchor itself can be
+    /// substituted.
+    Unpinned,
+}
+
+/// Pure classification, split out from `warn_if_insecure_control_channel` so
+/// the logic is unit-testable without capturing log output.
+fn assess_control_channel(control_url: &str, pin_configured: bool) -> Option<ControlChannelRisk> {
+    let parsed = reqwest::Url::parse(control_url).ok()?;
+    if parsed.scheme() != "http" {
+        return None;
+    }
+    if parsed.host_str().map(is_loopback_host).unwrap_or(false) {
+        return None;
+    }
+    Some(if pin_configured {
+        ControlChannelRisk::ConfidentialityOnly
+    } else {
+        ControlChannelRisk::Unpinned
+    })
+}
+
+/// Warns loudly when `control_url` is plain HTTP to a non-loopback host: the
+/// Ed25519 signature check on fetched bundles only proves integrity against
+/// *whatever key this filter node currently trusts* — if
+/// MANTIS_CONTROL_PUBLIC_KEY_SHA256 isn't pinned, the very first
+/// `/public-key` fetch (and every unpinned re-fetch after a rotation, see
+/// `refresh_public_key`) is trust-on-first-use over a channel an on-path
+/// attacker can read and rewrite, letting them substitute their own key and
+/// sign arbitrary policy bundles the filter will accept. Log-only (not a
+/// hard failure) since compose/LXC same-host deployments legitimately use
+/// unpinned plain HTTP to a loopback-reachable control plane.
+fn warn_if_insecure_control_channel(control_url: &str, pin_configured: bool) {
+    match assess_control_channel(control_url, pin_configured) {
+        None => {}
+        Some(ControlChannelRisk::ConfidentialityOnly) => warn!(
+            "CONTROL_URL ({control_url}) is plain HTTP to a remote host — an on-path attacker \
+             can read every fetched policy bundle. MANTIS_CONTROL_PUBLIC_KEY_SHA256 is set, so \
+             the trust anchor itself is protected, but consider HTTPS for confidentiality."
+        ),
+        Some(ControlChannelRisk::Unpinned) => error!(
+            "CONTROL_URL ({control_url}) is plain HTTP to a remote host and \
+             MANTIS_CONTROL_PUBLIC_KEY_SHA256 is NOT set — the initial /public-key fetch (and \
+             every re-fetch after a key rotation) is trust-on-first-use over a channel an \
+             on-path attacker can rewrite, letting them substitute their own signing key and \
+             forge policy bundles this node will accept. Set MANTIS_CONTROL_PUBLIC_KEY_SHA256 \
+             or use HTTPS before running this in production."
+        ),
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -47,6 +118,11 @@ async fn main() -> anyhow::Result<()> {
     let block_page_addr = env::var("BLOCKPAGE_BIND_ADDR").ok();
 
     info!("mantis-filter starting: control_url={control_url} group_id={group_id} bind={bind_addr}");
+
+    let pin_configured = env::var("MANTIS_CONTROL_PUBLIC_KEY_SHA256")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    warn_if_insecure_control_channel(&control_url, pin_configured);
 
     let public_key = match fetch_public_key(&control_url).await {
         Ok(k) => k,
@@ -191,5 +267,59 @@ async fn spawn_block_page(addr: &str, bundles: BlockPageBundles, control_url: St
             });
         }
         Err(e) => error!("failed to bind block-page listener on {addr}: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod control_channel_risk_tests {
+    use super::*;
+
+    #[test]
+    fn loopback_ip_is_never_flagged() {
+        assert_eq!(assess_control_channel("http://127.0.0.1:8000", false), None);
+        assert_eq!(assess_control_channel("http://[::1]:8000", false), None);
+    }
+
+    #[test]
+    fn localhost_name_is_never_flagged() {
+        assert_eq!(assess_control_channel("http://localhost:8000", false), None);
+        assert_eq!(assess_control_channel("http://LOCALHOST:8000", false), None);
+    }
+
+    #[test]
+    fn https_is_never_flagged_regardless_of_pin() {
+        assert_eq!(
+            assess_control_channel("https://control.example.internal", false),
+            None
+        );
+    }
+
+    #[test]
+    fn plain_http_to_remote_host_without_pin_is_unpinned_risk() {
+        assert_eq!(
+            assess_control_channel("http://control.example.internal", false),
+            Some(ControlChannelRisk::Unpinned)
+        );
+    }
+
+    #[test]
+    fn plain_http_to_remote_host_with_pin_is_confidentiality_only() {
+        assert_eq!(
+            assess_control_channel("http://control.example.internal", true),
+            Some(ControlChannelRisk::ConfidentialityOnly)
+        );
+    }
+
+    #[test]
+    fn plain_http_to_remote_ip_without_pin_is_unpinned_risk() {
+        assert_eq!(
+            assess_control_channel("http://203.0.113.5:8000", false),
+            Some(ControlChannelRisk::Unpinned)
+        );
+    }
+
+    #[test]
+    fn unparseable_url_is_not_flagged() {
+        assert_eq!(assess_control_channel("not a url", false), None);
     }
 }

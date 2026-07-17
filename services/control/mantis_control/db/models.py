@@ -281,6 +281,11 @@ class User(Base):
     # admin users only. Non-admin users are scoped to exactly one tenant.
     tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
+    # Bumped on password change; embedded in every issued JWT as "tv" and
+    # checked in get_current_user (auth.py) — JWTs are otherwise stateless
+    # for their full 12h TTL, so without this a stolen session cookie/token
+    # keeps working after the legitimate user rotates their password.
+    token_version: Mapped[int] = mapped_column(default=0)
 
 
 class DnsZone(Base):

@@ -35,13 +35,16 @@ from mantis_control.config import WEBHOOK_DEV_KEY_MATERIAL, settings
 
 @lru_cache(maxsize=1)
 def _fernet() -> Fernet:
-    raw = settings.MANTIS_WEBHOOK_SECRET_KEY
-    if raw:
-        key = raw.encode()
-    else:
-        # Deterministic (not random) so restarts can still decrypt existing
-        # secrets without MANTIS_WEBHOOK_SECRET_KEY set — dev convenience only.
-        key = base64.urlsafe_b64encode(hashlib.sha256(WEBHOOK_DEV_KEY_MATERIAL.encode()).digest())
+    # Fernet requires exactly 32 url-safe-base64 bytes — every generator of
+    # MANTIS_WEBHOOK_SECRET_KEY (bootstrap.sh/.ps1, lxc installers,
+    # cloud-init) emits `openssl rand -hex 32`, i.e. 64 hex chars / 32 raw
+    # bytes that aren't base64 at all. Passing that straight to Fernet() used
+    # to raise ValueError on first use in every real deployment. Hash
+    # whatever string is configured down to a valid key instead, exactly
+    # like the dev-default derivation below — accepts any input material of
+    # any length/encoding.
+    raw = settings.MANTIS_WEBHOOK_SECRET_KEY or WEBHOOK_DEV_KEY_MATERIAL
+    key = base64.urlsafe_b64encode(hashlib.sha256(raw.encode()).digest())
     return Fernet(key)
 
 

@@ -69,6 +69,22 @@ to the control plane). Set `CORS_ALLOW_ORIGINS` in `.env` to your public UI
 origin(s) before starting; override `IMAGE_PREFIX`/`MANTIS_VERSION` if you
 publish to your own registry/fork.
 
+**TLS is not set up for you.** `MANTIS_ENV=production` (which `--prod` sets)
+makes the control plane mark its session/CSRF cookies `Secure`, so browsers
+refuse to send them over plain HTTP — login will silently fail until there's
+real TLS in front of the UI. The published `-ui` image only bakes in
+[`nginx.conf.template`](apps/ui/nginx.conf.template) (plain `:80`, no cert
+handling). Either:
+- put a TLS-terminating reverse proxy/load balancer in front that forwards
+  to the UI container's `:80`, or
+- rebuild the UI image with [`nginx.https.conf.template`](apps/ui/nginx.https.conf.template)
+  instead (redirects `:80`→`:443`, needs `TLS_CERT_FILE`/`TLS_KEY_FILE`/
+  `MANTIS_SERVER_NAME` set) and mount your certificate.
+
+If you hit this before TLS is ready, the workaround is `MANTIS_ENV=`
+(unset/development) — but that also disables every other production secret
+check in `config.py`, so treat it as a temporary step, not a fix.
+
 ### Standalone filter node (no Docker)
 
 Each `v*` release attaches `mantis-filter_<version>_<amd64|arm64>.deb` (systemd
