@@ -37,14 +37,16 @@ import {
   Tooltip,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
+import { useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
-import { IconPlus, IconX } from "@tabler/icons-react";
+import { IconCopy, IconPlus, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useCategories, useCompileBundle, useTopDomains, usePolicy, useUpsertPolicy, useTestPolicy } from "../api/hooks";
 import type { Category } from "../api/hooks";
 import { categoryIcon, CATEGORY_GROUP_LABEL } from "../categoryIcons";
 import { BlockPageCard } from "./BlockPageCard";
+import { DuplicatePolicyModal } from "./DuplicatePolicyModal";
 import type { components } from "../api/schema";
 import { useAuth } from "../auth/AuthContext";
 
@@ -145,6 +147,7 @@ export function PolicyPage() {
   const { hasRole } = useAuth();
 
   const [testDomain, setTestDomain] = useState("");
+  const [duplicateOpened, { open: openDuplicate, close: closeDuplicate }] = useDisclosure(false);
 
   const [categoryToggles, setCategoryToggles] = useState<CategoryToggle[]>([]);
   const [overrides, setOverrides] = useState<Override[]>([]);
@@ -192,6 +195,13 @@ export function PolicyPage() {
       onSuccess: () => notifications.show({ message: "Bundle compiled and published", color: "green" }),
       onError: (e) => notifications.show({ message: String(e), color: "red" }),
     });
+  }
+
+  function applyDuplicatedPolicy(source: components["schemas"]["PolicyOut"]) {
+    setCategoryToggles(source.category_toggles as CategoryToggle[]);
+    setOverrides(source.overrides as Override[]);
+    setOnLoadFailure(source.on_load_failure as "FAIL_OPEN" | "FAIL_CLOSED");
+    notifications.show({ message: "Policy loaded — review and click Save policy", color: "blue" });
   }
 
   if (isLoading)
@@ -351,7 +361,19 @@ export function PolicyPage() {
           <Button variant="default" onClick={compile} loading={compileBundle.isPending}>
             Compile & publish bundle
           </Button>
+          <Button variant="default" leftSection={<IconCopy size={14} />} onClick={openDuplicate}>
+            Duplicate from group...
+          </Button>
         </Group>
+      )}
+
+      {groupId && (
+        <DuplicatePolicyModal
+          opened={duplicateOpened}
+          onClose={closeDuplicate}
+          excludeGroupId={groupId}
+          onSelect={applyDuplicatedPolicy}
+        />
       )}
 
       <Card withBorder>
