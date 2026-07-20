@@ -53,6 +53,25 @@ def test_record_update_allows_unset_fields():
     assert u.data is None
 
 
+def test_record_update_rejects_unsupported_record_type():
+    """RecordUpdate previously had no record_type validator at all (unlike
+    RecordIn's _rtype), so PATCH could set an arbitrary string bypassing the
+    _RECORD_TYPES allow-list — a record neither mantis-filter's zone store
+    nor export_zone's BIND-format output can make sense of."""
+    with pytest.raises(ValidationError):
+        RecordUpdate(record_type="BOGUS")
+
+
+def test_record_update_normalizes_record_type_case():
+    u = RecordUpdate(record_type="a")
+    assert u.record_type == "A"
+
+
+def test_record_update_allows_unset_record_type():
+    u = RecordUpdate()
+    assert u.record_type is None
+
+
 def test_zone_create_accepts_normal_fqdn():
     z = ZoneCreate(tenant_id="t1", name="Corp.Example.COM", zone_type="local")
     assert z.name == "corp.example.com"

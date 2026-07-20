@@ -207,6 +207,19 @@ pub async fn run_block_page_server(
     Ok(())
 }
 
+/// Strips a trailing `:port` from a Host header value. A bracketed IPv6
+/// literal (`[::1]` / `[::1]:8080`, RFC 3986 §3.2.2) is handled separately:
+/// splitting on the first `:` unconditionally (as this used to do) chops it
+/// down to just `"["`, since the address itself is full of colons — the
+/// closing `]` unambiguously marks where the address ends regardless of a
+/// trailing port, so it's used instead whenever the value starts with `[`.
+fn host_without_port(host: &str) -> &str {
+    if let Some(rest) = host.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or(rest);
+    }
+    host.split(':').next().unwrap_or(host)
+}
+
 async fn handle(
     State(state): State<BlockPageAppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -216,7 +229,7 @@ async fn handle(
     let host = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
-        .map(|h| h.split(':').next().unwrap_or(h).to_string())
+        .map(|h| host_without_port(h).to_string())
         .unwrap_or_default();
 
     let bundle = state.bundles.resolve(peer.ip());
@@ -402,5 +415,30 @@ mod tests {
         assert!(!html.contains("javascript:"));
         assert!(!html.contains("class=\"logo\""));
         assert!(!html.contains("class=\"contact\""));
+    }
+
+    #[test]
+    fn host_without_port_strips_plain_domain_port() {
+        assert_eq!(host_without_port("blocked.example:8080"), "blocked.example");
+        assert_eq!(host_without_port("blocked.example"), "blocked.example");
+    }
+
+    #[test]
+    fn host_without_port_strips_ipv4_port() {
+        assert_eq!(host_without_port("203.0.113.5:80"), "203.0.113.5");
+    }
+
+    #[test]
+    fn host_without_port_handles_bracketed_ipv6_literal() {
+        // Splitting on the first ':' unconditionally (the previous
+        // behavior) chopped this down to just "[", since an IPv6 address
+        // is full of colons.
+        assert_eq!(host_without_port("[::1]:8080"), "::1");
+        assert_eq!(host_without_port("[2001:db8::1]:443"), "2001:db8::1");
+    }
+
+    #[test]
+    fn host_without_port_handles_bracketed_ipv6_literal_without_port() {
+        assert_eq!(host_without_port("[::1]"), "::1");
     }
 }

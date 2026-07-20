@@ -73,6 +73,13 @@ class Settings(BaseSettings):
 
     DHCP_LEASE_SYNC_INTERVAL_S: int = 60
 
+    # query_events has no other bound on growth — every DNS query on every
+    # filter node becomes one row forever without this (see retention.py).
+    # 90 days is a reasonable default log-retention window; a consuming SIEM
+    # (webhook push or the /siem/events pull API) is expected to keep up
+    # within it.
+    QUERY_EVENT_RETENTION_DAYS: int = 90
+
     @property
     def is_production(self) -> bool:
         """True for anything other than a recognized dev/test label — see

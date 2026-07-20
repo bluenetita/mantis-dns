@@ -382,6 +382,37 @@ async def _probe_doh(
                            dnssec_ad=False, tls_subject=None, error=str(e))
 
 
+def _as_aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _bundle_version(
+    routes: list[models.UpstreamRoute],
+    pools: list[models.UpstreamPool],
+    resolvers: list[models.UpstreamResolver],
+    policy: models.UpstreamTenantPolicy | None,
+) -> int:
+    """Monotonic version derived from the latest `updated_at` among every row
+    that feeds the bundle, in milliseconds since epoch. Deliberately NOT
+    wall-clock-at-fetch-time: the Rust filter node polls this endpoint every
+    ~10s and treats any version increase as a real change — UpstreamBundleForwarder
+    rebuilds its whole resolver set (including live DoT/DoH connections) and
+    run_health_monitor aborts and respawns every probe loop whenever
+    bundle.version changes (both re-key on it). A wall-clock version bumped
+    that cache/probe churn on every single poll even when nothing was ever
+    edited. Deriving from content instead means the version — and therefore
+    the published bundle — only changes when something in it actually did.
+    """
+    timestamps = [rt.updated_at for rt in routes]
+    timestamps += [p.updated_at for p in pools]
+    timestamps += [r.updated_at for r in resolvers]
+    if policy is not None:
+        timestamps.append(policy.updated_at)
+    if not timestamps:
+        return 0
+    return int(_as_aware(max(timestamps)).timestamp() * 1000)
+
+
 def _sign_bundle_body(payload: dict[str, Any]) -> tuple[bytes, str]:
     """Serialize payload as canonical JSON; sign with ed25519. Returns (body_bytes, hex_sig)."""
     body = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
@@ -744,7 +775,10 @@ def get_upstream_bundle(
 
     Response body: canonical JSON bundle payload (sort_keys, no whitespace).
     X-Mantis-Signature header: hex-encoded ed25519 signature over the body bytes.
-    X-Mantis-Bundle-Version: unix timestamp of compilation (for cache-busting).
+    X-Mantis-Bundle-Version: content-derived version (max `updated_at` across every
+    route/pool/resolver/tenant-policy row feeding this bundle, in ms since epoch) —
+    NOT a fetch-time timestamp, so it stays stable across repeated polls when
+    nothing changed (see `_bundle_version`).
     """
     # Collect routes: global (tenant_id=NULL) + tenant-specific, sorted by priority.
     routes = (
@@ -789,7 +823,7 @@ def get_upstream_bundle(
         else _DEFAULT_POLICY.model_copy(update={"tenant_id": tenant_id})
     )
 
-    now_ts = int(datetime.now(timezone.utc).timestamp())
+    bundle_version = _bundle_version(routes, list(pools.values()), list(resolvers.values()), policy)
 
     # Bundle fields are the *_Out schemas minus admin-only metadata (ids the
     # filter node has no use for, audit timestamps, tags/enabled — enabled is
@@ -800,7 +834,7 @@ def get_upstream_bundle(
     # exclude set below, instead of silently missing until someone remembers
     # to update this endpoint too.
     bundle: dict[str, Any] = {
-        "version": now_ts,
+        "version": bundle_version,
         "tenant_id": tenant_id,
         "issued_at": datetime.now(timezone.utc).isoformat(),
         "routes": [
@@ -841,6 +875,6 @@ def get_upstream_bundle(
         media_type="application/json",
         headers={
             "X-Mantis-Signature": sig_hex,
-            "X-Mantis-Bundle-Version": str(now_ts),
+            "X-Mantis-Bundle-Version": str(bundle_version),
         },
     )

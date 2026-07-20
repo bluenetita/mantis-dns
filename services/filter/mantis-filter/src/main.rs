@@ -24,8 +24,8 @@ use mantis_filter::{
     bundle_refresh_loop, fetch_and_publish_zone, fetch_public_key, fetch_upstream_bundle,
     refresh_bundle, run_block_page_server, run_health_monitor, run_router_tcp_server,
     run_router_udp_server, run_tcp_server, run_udp_server, upstream_bundle_refresh_loop,
-    zone_refresh_loop, AppState, BlockPageBundles, HealthStore, TelemetryEmitter, TenantRouter,
-    UpstreamBundleForwarder, UpstreamBundleStore,
+    zone_refresh_loop, AppState, BlockPageBundles, HealthStore, PublicKeyStore, TelemetryEmitter,
+    TenantRouter, UpstreamBundleForwarder, UpstreamBundleStore,
 };
 use tokio::net::{TcpListener, UdpSocket};
 use tracing::{error, info, warn};
@@ -152,11 +152,17 @@ async fn main() -> anyhow::Result<()> {
         Ok(bundle) => upstream_store.publish(bundle),
         Err(e) => warn!("initial upstream bundle fetch failed (will use fallback): {e}"),
     }
+    // Own PublicKeyStore for this loop (independent of AppState's/TenantRouter's,
+    // which don't exist yet at this point in startup) so a control-plane
+    // signing-key rotation doesn't permanently break upstream-bundle
+    // verification the way a `VerifyingKey` captured once at startup would —
+    // see upstream_bundle_refresh_loop's doc comment.
+    let upstream_public_key = Arc::new(PublicKeyStore::new(public_key));
     tokio::spawn(upstream_bundle_refresh_loop(
         upstream_store.clone(),
         control_url.clone(),
         upstream_tenant,
-        public_key,
+        upstream_public_key,
         Duration::from_secs(poll_secs),
     ));
 

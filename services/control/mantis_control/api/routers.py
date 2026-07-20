@@ -34,6 +34,7 @@ from mantis_control.config import BUNDLE_STORAGE_DIR, FEED_STORAGE_DIR
 from mantis_control.db import models
 from mantis_control.db.session import get_db
 from mantis_control.feeds.ingest import load_domains
+from mantis_control.feeds.parsers import _normalize_domain
 
 router = APIRouter()
 
@@ -89,6 +90,24 @@ def delete_tenant(
     tenant = db.get(models.Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(404, "tenant not found")
+
+    # Tenant.groups cascades (Group -> Policy -> category toggles/overrides)
+    # via the ORM relationship already. DnsZone/DhcpScope/DhcpScope6 are
+    # separate FK references to tenants.id with no DB-level ON DELETE CASCADE
+    # and no relationship declared on Tenant — deleting a tenant that owned
+    # any zone or DHCP scope used to raise an unhandled IntegrityError (500)
+    # instead of actually deleting anything. Load and `db.delete()` each one
+    # individually (not a bulk `.filter(...).delete()` query) so their own
+    # cascade="all, delete-orphan" relationships (DnsZone.records,
+    # DhcpScope.static_leases/options/relay_configs, DhcpScope6.reservations6)
+    # still run, same as delete_group's explicit BlockPageTemplate cleanup above.
+    for zone in db.query(models.DnsZone).filter(models.DnsZone.tenant_id == tenant_id).all():
+        db.delete(zone)
+    for scope in db.query(models.DhcpScope).filter(models.DhcpScope.tenant_id == tenant_id).all():
+        db.delete(scope)
+    for scope6 in db.query(models.DhcpScope6).filter(models.DhcpScope6.tenant_id == tenant_id).all():
+        db.delete(scope6)
+
     write_audit_log(db, "tenant.delete", "tenant", tenant.id, detail=f"name={tenant.name}", actor=user.email, tenant_id=tenant.id)
     db.delete(tenant)
     db.commit()
@@ -362,7 +381,13 @@ class PolicyTestRequest(BaseModel):
     @field_validator("domain")
     @classmethod
     def _valid_domain(cls, v: str) -> str:
-        v = v.strip().lower().rstrip(".")
+        # Must mirror _normalize_domain exactly (incl. stripping a leading
+        # "www.") — feeds are ingested www-stripped and mantis-filter's
+        # decide()/normalize() strips it from the query name too, so without
+        # the same strip here this tester reports "allow" for a
+        # "www.<blocked-domain>" query the filter actually blocks. See
+        # normalize()'s doc comment in mantis-filter/src/lib.rs.
+        v = _normalize_domain(v)
         if not _DOMAIN_RE.match(v):
             raise ValueError("not a valid domain name")
         return v
@@ -371,7 +396,7 @@ class PolicyTestRequest(BaseModel):
 class PolicyTestResult(BaseModel):
     domain: str
     decision: str  # "allow" | "block"
-    matched: str   # "override_allow" | "override_deny" | "category" | "default"
+    matched: str   # "override_allow" | "override_deny" | "category" | "category_log_only" | "default"
     matched_category: str | None = None
     matched_feed_id: str | None = None
 
@@ -385,28 +410,38 @@ def test_domain(
 ) -> PolicyTestResult:
     """Simulates the filter's decision for a given domain against this group's
     current saved policy (overrides + category toggles). Does NOT require a
-    compiled bundle — reads directly from DB + feed domain files."""
+    compiled bundle — reads directly from DB + feed domain files. Must mirror
+    mantis-filter's decide() precedence (allow-override > deny-override >
+    ACTION_BLOCK category > ACTION_LOG_ONLY category > default-allow), or
+    this "test a domain" diagnostic tool lies about what the filter will
+    actually do."""
     get_group_or_403(db, group_id, user)
     policy = db.query(models.Policy).filter(models.Policy.group_id == group_id).one_or_none()
     if policy is None:
         raise HTTPException(404, "no policy found for this group")
 
-    domain = payload.domain  # already normalised by the validator
+    domain = payload.domain  # already normalised (incl. www-stripped) by the validator
 
     # 1. Allow overrides take precedence over deny overrides (mirrors filter logic).
     for override in policy.overrides:
-        if override.kind == "allow" and override.domain.lower() == domain:
+        if override.kind == "allow" and _normalize_domain(override.domain) == domain:
             return PolicyTestResult(domain=domain, decision="allow", matched="override_allow")
 
     # 2. Deny overrides.
     for override in policy.overrides:
-        if override.kind == "deny" and override.domain.lower() == domain:
+        if override.kind == "deny" and _normalize_domain(override.domain) == domain:
             return PolicyTestResult(domain=domain, decision="block", matched="override_deny")
 
-    # 3. Category toggles — check every enabled feed of each blocked category
-    # (a category may have several feeds; the compiler unions them all).
+    # 3. Category toggles — check every enabled feed of each category (a
+    # category may have several feeds; the compiler unions them all).
+    # ACTION_BLOCK wins outright and returns immediately. ACTION_LOG_ONLY
+    # never blocks but must still be reported rather than silently treated
+    # as "default" (mirrors decide()'s precedence in mantis-filter/src/lib.rs)
+    # — the first log-only match found is remembered and only returned if no
+    # ACTION_BLOCK category also matches.
+    log_only_match: PolicyTestResult | None = None
     for toggle in policy.category_toggles:
-        if toggle.action != "ACTION_BLOCK":
+        if toggle.action not in ("ACTION_BLOCK", "ACTION_LOG_ONLY"):
             continue
         feeds = db.execute(
             select(models.Feed).where(
@@ -419,14 +454,26 @@ def test_domain(
         ).scalars().all()
         for feed in feeds:
             if domain in load_domains(FEED_STORAGE_DIR, feed.id):
-                return PolicyTestResult(
-                    domain=domain,
-                    decision="block",
-                    matched="category",
-                    matched_category=toggle.category_id,
-                    matched_feed_id=feed.id,
-                )
+                if toggle.action == "ACTION_BLOCK":
+                    return PolicyTestResult(
+                        domain=domain,
+                        decision="block",
+                        matched="category",
+                        matched_category=toggle.category_id,
+                        matched_feed_id=feed.id,
+                    )
+                if log_only_match is None:
+                    log_only_match = PolicyTestResult(
+                        domain=domain,
+                        decision="allow",
+                        matched="category_log_only",
+                        matched_category=toggle.category_id,
+                        matched_feed_id=feed.id,
+                    )
+                break  # this category already matched; no need to check its other feeds
 
+    if log_only_match is not None:
+        return log_only_match
     return PolicyTestResult(domain=domain, decision="allow", matched="default")
 
 

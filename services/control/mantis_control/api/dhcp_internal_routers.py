@@ -30,6 +30,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from fastapi import Depends
 
+from mantis_control.api.zone_routers import _validate_record_field
 from mantis_control.config import settings
 from mantis_control.db.models import ClientEntry, DhcpScope, DhcpScope6, DnsRecord, DnsZone
 from mantis_control.db.session import get_db
@@ -125,6 +126,19 @@ def _upsert_a_record(db: Session, scope: DhcpScope, hostname: str, ip: str, mac:
     name = _rel_hostname(hostname, zone.name)
     if not name:
         return
+    # Same field validation the normal zone API applies via RecordIn/
+    # RecordUpdate (see zone_routers._validate_record_field) — without it, a
+    # DHCP client's hostname option (name, here, straight from a
+    # client-supplied string) could smuggle a leading "$" BIND control
+    # directive into DnsRecord.name, which export_zone() writes verbatim as
+    # the first field of a zone-file line, unlike RecordIn's write-time
+    # rejection this endpoint bypassed entirely.
+    try:
+        name = _validate_record_field(name, "Record name")
+        ip = _validate_record_field(ip, "Record data")
+    except ValueError as e:
+        log.warning("DDNS update for %s/%s rejected: %s", zone.name, hostname, e)
+        return
 
     existing = (
         db.query(DnsRecord)
@@ -203,6 +217,14 @@ def _upsert_aaaa_record(db: Session, scope: DhcpScope6, hostname: str, ip: str, 
         return
     name = _rel_hostname(hostname, zone.name)
     if not name:
+        return
+    # See _upsert_a_record's matching check — same BIND-directive-smuggling
+    # protection RecordIn applies on the normal zone API path.
+    try:
+        name = _validate_record_field(name, "Record name")
+        ip = _validate_record_field(ip, "Record data")
+    except ValueError as e:
+        log.warning("DDNS update for %s/%s rejected: %s", zone.name, hostname, e)
         return
 
     existing = (

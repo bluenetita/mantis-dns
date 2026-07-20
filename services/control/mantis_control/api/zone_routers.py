@@ -170,6 +170,20 @@ class RecordUpdate(BaseModel):
     record_type: str | None = None
     data: str | None = None
 
+    # Mirrors RecordIn._rtype — without this, PATCH could set an arbitrary
+    # record_type bypassing the _RECORD_TYPES allow-list RecordIn enforces on
+    # create, leaving a record neither mantis-filter's zone store nor
+    # export_zone's BIND-format output can make sense of.
+    @field_validator("record_type")
+    @classmethod
+    def _rtype(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.upper()
+        if v not in _RECORD_TYPES:
+            raise ValueError(f"record_type must be one of {sorted(_RECORD_TYPES)}")
+        return v
+
     @field_validator("name")
     @classmethod
     def _rname(cls, v: str | None) -> str | None:

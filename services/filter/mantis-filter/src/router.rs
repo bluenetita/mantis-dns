@@ -256,11 +256,15 @@ pub async fn run_router_tcp_server(listener: TcpListener, router: Arc<TenantRout
         tokio::spawn(async move {
             let _permit = permit;
             loop {
-                let msg_len = match stream.read_u16().await {
-                    Ok(n) => n as usize,
-                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                    Err(e) => {
+                let msg_len = match tokio::time::timeout(crate::TCP_IDLE_TIMEOUT, stream.read_u16()).await {
+                    Ok(Ok(n)) => n as usize,
+                    Ok(Err(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                    Ok(Err(e)) => {
                         debug!("TCP read error from {peer}: {e}");
+                        break;
+                    }
+                    Err(_elapsed) => {
+                        debug!("TCP DNS connection from {peer} idle for {:?}, closing", crate::TCP_IDLE_TIMEOUT);
                         break;
                     }
                 };
@@ -269,9 +273,16 @@ pub async fn run_router_tcp_server(listener: TcpListener, router: Arc<TenantRout
                 }
 
                 let mut buf = vec![0u8; msg_len];
-                if let Err(e) = stream.read_exact(&mut buf).await {
-                    debug!("TCP read_exact from {peer}: {e}");
-                    break;
+                match tokio::time::timeout(crate::TCP_BODY_TIMEOUT, stream.read_exact(&mut buf)).await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => {
+                        debug!("TCP read_exact from {peer}: {e}");
+                        break;
+                    }
+                    Err(_elapsed) => {
+                        debug!("TCP DNS connection from {peer} timed out mid-message, closing");
+                        break;
+                    }
                 }
 
                 let query = match Message::from_bytes(&buf) {
@@ -283,7 +294,8 @@ pub async fn run_router_tcp_server(listener: TcpListener, router: Arc<TenantRout
                 };
 
                 let matched = router.match_route(peer.ip());
-                if matched.is_none() {
+                let unmatched_route = matched.is_none();
+                if unmatched_route {
                     debug!("no tenant route matched source IP {}", peer.ip());
                 }
                 let bundle = matched.as_ref().and_then(|(s, _)| s.current());
@@ -298,6 +310,7 @@ pub async fn run_router_tcp_server(listener: TcpListener, router: Arc<TenantRout
                     &router.cache,
                     router.forwarder.as_ref(),
                     &router.telemetry,
+                    unmatched_route,
                 )
                 .await;
 
@@ -355,7 +368,8 @@ pub async fn run_router_udp_server(socket: UdpSocket, router: Arc<TenantRouter>)
         };
 
         let matched = router.match_route(peer.ip());
-        if matched.is_none() {
+        let unmatched_route = matched.is_none();
+        if unmatched_route {
             debug!("no tenant route matched source IP {}", peer.ip());
         }
         let bundle = matched.as_ref().and_then(|(s, _)| s.current());
@@ -372,6 +386,7 @@ pub async fn run_router_udp_server(socket: UdpSocket, router: Arc<TenantRouter>)
                 &router.cache,
                 router.forwarder.as_ref(),
                 &router.telemetry,
+                unmatched_route,
             )
             .await;
             crate::enforce_udp_size_limit(&query, &mut response);

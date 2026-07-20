@@ -164,3 +164,15 @@ def test_delete_with_blank_mac_does_not_remove_any_record(db, zone):
     db.commit()
 
     assert _get_record(db, zone.id) is not None
+
+
+def test_upsert_rejects_hostname_that_would_smuggle_a_bind_directive(db, zone):
+    """DHCP hostname is entirely client-supplied. The normal zone API
+    (RecordIn) rejects a name starting with "$" so it can't smuggle a BIND
+    control directive (e.g. $INCLUDE) into an exported zone file — this
+    DDNS path used to build DnsRecord.name straight from the client's
+    hostname with no such check at all."""
+    _upsert_a_record(db, _scope(zone.id), "$INCLUDE /etc/passwd", "10.0.0.5", MAC_A)
+    db.commit()
+
+    assert db.query(DnsRecord).filter(DnsRecord.zone_id == zone.id).count() == 0

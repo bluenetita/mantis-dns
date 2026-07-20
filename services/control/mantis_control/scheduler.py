@@ -81,24 +81,28 @@ def _job_id(feed_id: str) -> str:
 
 
 async def run_ingest(feed_id: str) -> None:
-    # Look up the feed and release the connection *before* the (slow,
-    # possibly hanging) outbound fetch below — holding a pooled connection
-    # for the duration of an httpx call starves the pool (5+10 conns) when
-    # several feeds are in flight at once, which then starves API requests
-    # like bundle-compile that need a connection too.
-    db = SessionLocal()
-    try:
-        feed = db.get(Feed, feed_id)
-        if feed is None or not feed.enabled:
-            return
-        db.expunge(feed)
-    finally:
-        db.close()
-
     # See feed_lock's docstring — serializes this run against a concurrent
-    # manual "sync now" call for the same feed, held across the fetch and
-    # the commit below.
+    # manual "sync now" call for the same feed. Must be held across the DB
+    # read below too, not just the fetch+commit: reading the Feed row
+    # (last_etag/last_domain_count, both consulted inside fetch_and_ingest)
+    # before acquiring the lock let the losing racer fetch against a stale
+    # snapshot and then `db.merge()` that stale last_etag/last_domain_count
+    # straight over whatever the winner had just committed.
     async with feed_lock(feed_id):
+        # Look up the feed and release the connection *before* the (slow,
+        # possibly hanging) outbound fetch below — holding a pooled connection
+        # for the duration of an httpx call starves the pool (5+10 conns) when
+        # several feeds are in flight at once, which then starves API requests
+        # like bundle-compile that need a connection too.
+        db = SessionLocal()
+        try:
+            feed = db.get(Feed, feed_id)
+            if feed is None or not feed.enabled:
+                return
+            db.expunge(feed)
+        finally:
+            db.close()
+
         async with httpx.AsyncClient() as client:
             result = await fetch_and_ingest(feed, FEED_STORAGE_DIR, client)
 

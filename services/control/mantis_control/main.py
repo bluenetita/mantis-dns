@@ -45,6 +45,7 @@ from mantis_control.config import settings
 from mantis_control.db.models import Feed, User
 from mantis_control.db.session import SessionLocal
 from mantis_control.feeds.seed import seed_catalog
+from mantis_control.retention import prune_query_events
 from mantis_control.scheduler import kick_feed_now, mark_shutting_down, schedule_feed, scheduler
 from mantis_control.siem_delivery import run_webhook_delivery_cycle
 from mantis_control.dhcp.lease_sync import sync_dhcp_leases
@@ -125,6 +126,21 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         "interval",
         seconds=settings.DHCP_LEASE_SYNC_INTERVAL_S,
         id="dhcp-lease-sync",
+        replace_existing=True,
+    )
+
+    def _query_event_retention_job() -> None:
+        db = SessionLocal()
+        try:
+            prune_query_events(db, settings.QUERY_EVENT_RETENTION_DAYS)
+        finally:
+            db.close()
+
+    scheduler.add_job(
+        _query_event_retention_job,
+        "interval",
+        hours=24,
+        id="query-event-retention",
         replace_existing=True,
     )
 

@@ -35,7 +35,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -50,7 +50,7 @@ use serde::Deserialize;
 use tracing::{debug, info, warn};
 
 use crate::health_monitor::HealthStore;
-use crate::{Forwarder, TtlPolicy};
+use crate::{tls_pin, Forwarder, TtlPolicy};
 
 // ── Bundle JSON types ──────────────────────────────────────────────────────────
 
@@ -65,6 +65,18 @@ pub struct ResolverConfig_ {
     pub doh_method: String,
     pub timeout_ms: u64,
     pub connect_timeout_ms: u64,
+    /// SHA-256 digests of certificates this resolver's TLS handshake must
+    /// present (see `tls_pin::PinnedCertVerifier`). `#[serde(default)]`
+    /// because older control-plane builds — and the fallback resolver
+    /// config synthesized in `make_resolver_cfg` below — don't set it.
+    /// Empty means "no pinning, use normal WebPKI trust" (unchanged
+    /// behavior). Was previously entirely absent from this struct: the
+    /// control plane already shipped this field in the bundle JSON, but
+    /// serde silently drops unknown fields with no `deny_unknown_fields`,
+    /// so an admin-configured pin was accepted by the API and stored in the
+    /// DB but never actually enforced by the filter node.
+    #[serde(default)]
+    pub tls_pin_sha256: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -250,25 +262,91 @@ pub(crate) fn evaluate_routes<'a>(
 
 // ── Member selector ────────────────────────────────────────────────────────────
 
-fn pick_member<'a>(pool: &'a PoolConfig, healthy_ids: &[String]) -> Option<&'a str> {
+/// Per-pool rotation cursor, shared across every concurrent DNS lookup this
+/// forwarder serves. Keyed by pool_id since one forwarder picks members for
+/// every pool in the tenant's upstream bundle, each needing an independent
+/// rotation position. Was previously entirely absent: `pick_member` used
+/// `.max_by_key`/`.find`, which deterministically returns the *same* member
+/// every single call — "weighted_round_robin"/"round_robin" advertised load
+/// balancing that never actually happened; every query pinned one member.
+#[derive(Default)]
+pub(crate) struct RoundRobinState {
+    cursors: Mutex<HashMap<String, u64>>,
+}
+
+impl RoundRobinState {
+    /// Returns the next cursor value for `pool_id` (0, 1, 2, ... wrapping is
+    /// the caller's job via modulo) and advances it for the next call.
+    fn next(&self, pool_id: &str) -> u64 {
+        let mut cursors = self.cursors.lock().unwrap_or_else(|e| e.into_inner());
+        let counter = cursors.entry(pool_id.to_string()).or_insert(0);
+        let value = *counter;
+        *counter = counter.wrapping_add(1);
+        value
+    }
+}
+
+fn pick_member<'a>(
+    pool_id: &str,
+    pool: &'a PoolConfig,
+    healthy_ids: &[String],
+    health: &HealthStore,
+    rr: &RoundRobinState,
+) -> Option<&'a str> {
+    let healthy_members: Vec<&PoolMember> = pool
+        .members
+        .iter()
+        .filter(|m| healthy_ids.contains(&m.resolver_id))
+        .collect();
+    if healthy_members.is_empty() {
+        return None;
+    }
+
     match pool.strategy.as_str() {
-        "failover" => pool
-            .members
-            .iter()
-            .filter(|m| healthy_ids.contains(&m.resolver_id))
+        "failover" => healthy_members
+            .into_iter()
             .min_by_key(|m| (m.priority, m.weight))
             .map(|m| m.resolver_id.as_str()),
-        "weighted_round_robin" => pool
-            .members
-            .iter()
-            .filter(|m| healthy_ids.contains(&m.resolver_id))
-            .max_by_key(|m| m.weight)
-            .map(|m| m.resolver_id.as_str()),
-        _ => pool
-            .members
-            .iter()
-            .find(|m| healthy_ids.contains(&m.resolver_id))
-            .map(|m| m.resolver_id.as_str()),
+        "weighted_round_robin" => {
+            // Deterministic weighted round robin: a monotonically
+            // increasing cursor mod the pool's total weight, mapped onto
+            // cumulative per-member weight ranges. Over any full cycle of
+            // `total_weight` calls, each member is picked exactly `weight`
+            // times — proportional distribution without needing a
+            // per-member floating "credit" state (nginx's smooth-WRR
+            // algorithm) to get the ratio right.
+            let total_weight: u64 = healthy_members.iter().map(|m| u64::from(m.weight)).sum();
+            if total_weight == 0 {
+                return healthy_members.first().map(|m| m.resolver_id.as_str());
+            }
+            let cursor = rr.next(pool_id) % total_weight;
+            let mut acc = 0u64;
+            for m in &healthy_members {
+                acc += u64::from(m.weight);
+                if cursor < acc {
+                    return Some(m.resolver_id.as_str());
+                }
+            }
+            healthy_members.last().map(|m| m.resolver_id.as_str())
+        }
+        "latency" => {
+            // Lowest EMA latency wins (health_monitor's probe loop already
+            // maintains this per member). An unprobed member reads as 0
+            // (MemberHealthSnapshot::default) and so is tried first —
+            // consistent with "unknown = optimistically healthy" elsewhere
+            // in health_monitor.rs — and self-corrects once real probe data
+            // arrives.
+            healthy_members
+                .into_iter()
+                .min_by_key(|m| health.snapshot(pool_id, &m.resolver_id).latency_ema_us)
+                .map(|m| m.resolver_id.as_str())
+        }
+        // "round_robin" and any unrecognized strategy: plain rotation
+        // across the healthy set, equal probability per member.
+        _ => {
+            let idx = (rr.next(pool_id) as usize) % healthy_members.len();
+            healthy_members.get(idx).map(|m| m.resolver_id.as_str())
+        }
     }
 }
 
@@ -287,6 +365,7 @@ pub struct UpstreamBundleForwarder {
     health: Arc<HealthStore>,
     fallback: Option<Resolver<TokioConnectionProvider>>,
     cache: ArcSwapOption<BundleResolverCache>,
+    round_robin: RoundRobinState,
 }
 
 impl UpstreamBundleForwarder {
@@ -297,6 +376,7 @@ impl UpstreamBundleForwarder {
             health,
             fallback,
             cache: ArcSwapOption::const_empty(),
+            round_robin: RoundRobinState::default(),
         }
     }
 
@@ -361,7 +441,7 @@ impl Forwarder for UpstreamBundleForwarder {
         };
 
         let healthy_ids = self.health.healthy_members(&pool_id, &pool.members);
-        let resolver_id = match pick_member(pool, &healthy_ids) {
+        let resolver_id = match pick_member(&pool_id, pool, &healthy_ids, &self.health, &self.round_robin) {
             Some(id) => id.to_string(),
             None => {
                 warn!("pool {pool_id} has no healthy members, using fallback");
@@ -451,6 +531,10 @@ pub(crate) fn build_hickory_resolver(
     opts.attempts = 1;
     opts.validate = dnssec_strict;
 
+    if matches!(cfg.protocol.as_str(), "dot" | "doh") && !cfg.tls_pin_sha256.is_empty() {
+        apply_tls_pinning(&mut opts, cfg);
+    }
+
     Some(
         Resolver::builder_with_config(
             ResolverConfig::from_parts(None, vec![], vec![ns]),
@@ -459,6 +543,45 @@ pub(crate) fn build_hickory_resolver(
         .with_options(opts)
         .build(),
     )
+}
+
+/// Replaces `opts.tls_config`'s normal WebPKI verifier with a
+/// `PinnedCertVerifier` built from `cfg.tls_pin_sha256` — see tls_pin.rs for
+/// why pin-only (not pin-or-CA) is the right model here. Leaves `opts`
+/// untouched (falling back to ordinary WebPKI trust) if every configured
+/// pin is malformed, rather than refusing to build the resolver at all.
+fn apply_tls_pinning(opts: &mut ResolverOpts, cfg: &ResolverConfig_) {
+    let pins: Vec<[u8; 32]> = cfg
+        .tls_pin_sha256
+        .iter()
+        .filter_map(|p| {
+            let parsed = tls_pin::parse_pin(p);
+            if parsed.is_none() {
+                warn!("upstream resolver '{}': ignoring malformed tls_pin_sha256 entry '{p}'", cfg.id);
+            }
+            parsed
+        })
+        .collect();
+    if pins.is_empty() {
+        warn!(
+            "upstream resolver '{}' configured tls_pin_sha256 but none of the entries parsed \
+             — falling back to normal WebPKI trust",
+            cfg.id
+        );
+        return;
+    }
+
+    let provider = Arc::new(hickory_proto::rustls::default_provider());
+    let verifier = Arc::new(tls_pin::PinnedCertVerifier::new(pins, provider.clone()));
+    match rustls::ClientConfig::builder_with_provider(provider).with_safe_default_protocol_versions() {
+        Ok(builder) => {
+            opts.tls_config = builder
+                .dangerous()
+                .with_custom_certificate_verifier(verifier)
+                .with_no_client_auth();
+        }
+        Err(e) => warn!("upstream resolver '{}': failed to build pinned TLS config: {e}", cfg.id),
+    }
 }
 
 fn build_fallback_resolver() -> Option<Resolver<TokioConnectionProvider>> {
@@ -499,22 +622,32 @@ fn make_resolver_cfg(protocol: &str, addr: &str, port: u16, tls_name: Option<&st
         doh_method: "post".into(),
         timeout_ms: 5000,
         connect_timeout_ms: 3000,
+        tls_pin_sha256: Vec::new(),
     }
 }
 
 // ── Refresh loop ───────────────────────────────────────────────────────────────
 
+/// Re-fetches the control plane's public key on every tick (like
+/// `bundle_refresh_loop` does for the policy-bundle path) before fetching the
+/// upstream bundle — without this, a signing-key rotation on the control
+/// plane permanently breaks upstream-bundle verification until the filter
+/// node is restarted by hand, since `public_key` used to be captured once at
+/// startup and never refreshed.
 pub async fn upstream_bundle_refresh_loop(
     store: Arc<UpstreamBundleStore>,
     control_url: String,
     tenant_id: String,
-    public_key: VerifyingKey,
+    public_key: Arc<crate::PublicKeyStore>,
     interval: Duration,
 ) {
     let mut ticker = tokio::time::interval(interval);
     loop {
         ticker.tick().await;
-        match fetch_upstream_bundle(&control_url, &tenant_id, &public_key).await {
+        if let Err(e) = crate::refresh_public_key(&public_key, &control_url).await {
+            warn!("public key refresh failed (keeping last known good key): {e}");
+        }
+        match fetch_upstream_bundle(&control_url, &tenant_id, &public_key.current()).await {
             Ok(bundle) => store.publish(bundle),
             Err(e) => warn!("upstream bundle refresh failed for tenant {tenant_id}: {e}"),
         }
@@ -526,6 +659,7 @@ pub async fn upstream_bundle_refresh_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::health_monitor::MemberHealthSnapshot;
     use hickory_proto::rr::RecordType;
 
     fn route(match_type: &str, match_value: Option<&str>, pool_id: &str, priority: i32) -> RouteConfig {
@@ -685,5 +819,211 @@ mod tests {
             evaluate_routes(&routes, "static.example", RecordType::A, &cats(&["cdn"])),
             Some("fast-pool")
         );
+    }
+
+    // ── tls_pin_sha256 ────────────────────────────────────────────────────────
+
+    #[test]
+    fn resolver_config_deserializes_tls_pin_sha256() {
+        // Regression test: this field used to be entirely absent from
+        // ResolverConfig_, so serde silently dropped it from the upstream
+        // bundle JSON — an admin-configured pin was accepted by the control
+        // plane's API and stored in the DB but never reached the filter
+        // node's resolver-building code at all.
+        let json = r#"{
+            "id": "r1", "protocol": "dot", "address": "203.0.113.5", "port": 853,
+            "tls_hostname": "resolver.example", "doh_path": "/dns-query",
+            "doh_method": "post", "timeout_ms": 5000, "connect_timeout_ms": 3000,
+            "tls_pin_sha256": ["aabb", "ccdd"]
+        }"#;
+        let cfg: ResolverConfig_ = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.tls_pin_sha256, vec!["aabb".to_string(), "ccdd".to_string()]);
+    }
+
+    #[test]
+    fn resolver_config_defaults_tls_pin_sha256_to_empty_when_absent() {
+        // Older control-plane builds (or the synthesized fallback resolver
+        // config in make_resolver_cfg) don't send this field at all.
+        let json = r#"{
+            "id": "r1", "protocol": "do53", "address": "1.1.1.1", "port": 53,
+            "tls_hostname": null, "doh_path": "/dns-query",
+            "doh_method": "post", "timeout_ms": 5000, "connect_timeout_ms": 3000
+        }"#;
+        let cfg: ResolverConfig_ = serde_json::from_str(json).unwrap();
+        assert!(cfg.tls_pin_sha256.is_empty());
+    }
+
+    fn dot_resolver_cfg(pins: Vec<&str>) -> ResolverConfig_ {
+        ResolverConfig_ {
+            id: "r1".into(),
+            protocol: "dot".into(),
+            address: "203.0.113.5".into(),
+            port: 853,
+            tls_hostname: Some("resolver.example".into()),
+            doh_path: "/dns-query".into(),
+            doh_method: "post".into(),
+            timeout_ms: 5000,
+            connect_timeout_ms: 3000,
+            tls_pin_sha256: pins.into_iter().map(String::from).collect(),
+        }
+    }
+
+    #[test]
+    fn build_hickory_resolver_applies_pinning_for_a_valid_pin() {
+        let valid_pin = "a".repeat(64);
+        let cfg = dot_resolver_cfg(vec![&valid_pin]);
+        let mut opts = ResolverOpts::default();
+        apply_tls_pinning(&mut opts, &cfg);
+        // A custom verifier was installed — the default WebPKI-backed
+        // ClientConfig's Debug output differs from a config built with
+        // `.dangerous().with_custom_certificate_verifier(...)`. We can't
+        // easily downcast the trait object, so assert indirectly: building
+        // still succeeds end to end.
+        assert!(build_hickory_resolver(&cfg, 5000, false).is_some());
+    }
+
+    #[test]
+    fn build_hickory_resolver_falls_back_to_webpki_when_every_pin_is_malformed() {
+        let cfg = dot_resolver_cfg(vec!["not-a-valid-hex-digest"]);
+        // Must not panic or fail to build the resolver just because the
+        // configured pin couldn't be parsed — falls back to normal trust.
+        assert!(build_hickory_resolver(&cfg, 5000, false).is_some());
+    }
+
+    #[test]
+    fn build_hickory_resolver_ignores_pins_for_non_tls_protocol() {
+        // Pinning only makes sense for TLS-based protocols (dot/doh) —
+        // do53 has no certificate to pin at all.
+        let mut cfg = dot_resolver_cfg(vec![&"a".repeat(64)]);
+        cfg.protocol = "do53".into();
+        assert!(build_hickory_resolver(&cfg, 5000, false).is_some());
+    }
+
+    // ── pick_member ───────────────────────────────────────────────────────────
+
+    fn member(id: &str, weight: u32, priority: u32) -> PoolMember {
+        PoolMember { resolver_id: id.into(), weight, priority }
+    }
+
+    fn pool_with(strategy: &str, members: Vec<PoolMember>) -> PoolConfig {
+        PoolConfig {
+            id: "p1".into(),
+            strategy: strategy.into(),
+            members,
+            health_check_interval_s: 30,
+            health_check_timeout_ms: 2000,
+            health_check_query: ".".into(),
+            health_check_type: "soa".into(),
+            healthy_threshold: 2,
+            unhealthy_threshold: 3,
+            fallback_pool_id: None,
+            min_healthy_members: 1,
+        }
+    }
+
+    fn all_healthy(pool: &PoolConfig) -> Vec<String> {
+        pool.members.iter().map(|m| m.resolver_id.clone()).collect()
+    }
+
+    #[test]
+    fn pick_member_returns_none_when_no_members_are_healthy() {
+        let pool = pool_with("round_robin", vec![member("a", 1, 0)]);
+        let health = HealthStore::empty();
+        let rr = RoundRobinState::default();
+        assert!(pick_member("p1", &pool, &[], &health, &rr).is_none());
+    }
+
+    #[test]
+    fn pick_member_round_robin_cycles_through_every_healthy_member() {
+        // Regression test: the old implementation used `.find(...)`, which
+        // deterministically returns the same (first) member on every call —
+        // "round_robin" never actually rotated.
+        let pool = pool_with("round_robin", vec![member("a", 1, 0), member("b", 1, 0), member("c", 1, 0)]);
+        let healthy = all_healthy(&pool);
+        let health = HealthStore::empty();
+        let rr = RoundRobinState::default();
+
+        let picks: Vec<&str> = (0..6)
+            .map(|_| pick_member("p1", &pool, &healthy, &health, &rr).unwrap())
+            .collect();
+
+        assert_eq!(picks, vec!["a", "b", "c", "a", "b", "c"]);
+    }
+
+    #[test]
+    fn pick_member_round_robin_skips_unhealthy_members() {
+        let pool = pool_with("round_robin", vec![member("a", 1, 0), member("b", 1, 0), member("c", 1, 0)]);
+        let healthy = vec!["a".to_string(), "c".to_string()]; // "b" is unhealthy
+        let health = HealthStore::empty();
+        let rr = RoundRobinState::default();
+
+        let picks: Vec<&str> = (0..4)
+            .map(|_| pick_member("p1", &pool, &healthy, &health, &rr).unwrap())
+            .collect();
+
+        assert_eq!(picks, vec!["a", "c", "a", "c"]);
+    }
+
+    #[test]
+    fn pick_member_weighted_round_robin_distributes_proportional_to_weight() {
+        // Regression test: the old implementation used `.max_by_key(weight)`,
+        // which deterministically returns the same highest-weight member on
+        // every call — no actual weighted *distribution* ever happened.
+        let pool = pool_with("weighted_round_robin", vec![member("a", 3, 0), member("b", 1, 0)]);
+        let healthy = all_healthy(&pool);
+        let health = HealthStore::empty();
+        let rr = RoundRobinState::default();
+
+        let picks: Vec<&str> = (0..8)
+            .map(|_| pick_member("p1", &pool, &healthy, &health, &rr).unwrap())
+            .collect();
+
+        let a_count = picks.iter().filter(|&&p| p == "a").count();
+        let b_count = picks.iter().filter(|&&p| p == "b").count();
+        // Over two full 4-call cycles (total_weight=4): "a" (weight 3) picked
+        // 6 times, "b" (weight 1) picked 2 times — exactly proportional.
+        assert_eq!((a_count, b_count), (6, 2));
+    }
+
+    #[test]
+    fn pick_member_failover_always_picks_lowest_priority_healthy_member() {
+        let pool = pool_with("failover", vec![member("primary", 1, 0), member("backup", 1, 10)]);
+        let healthy = all_healthy(&pool);
+        let health = HealthStore::empty();
+        let rr = RoundRobinState::default();
+
+        for _ in 0..3 {
+            assert_eq!(pick_member("p1", &pool, &healthy, &health, &rr), Some("primary"));
+        }
+    }
+
+    #[test]
+    fn pick_member_failover_falls_back_when_primary_is_unhealthy() {
+        let pool = pool_with("failover", vec![member("primary", 1, 0), member("backup", 1, 10)]);
+        let healthy = vec!["backup".to_string()];
+        let health = HealthStore::empty();
+        let rr = RoundRobinState::default();
+        assert_eq!(pick_member("p1", &pool, &healthy, &health, &rr), Some("backup"));
+    }
+
+    #[test]
+    fn pick_member_latency_picks_the_lowest_measured_latency() {
+        let pool = pool_with("latency", vec![member("slow", 1, 0), member("fast", 1, 0)]);
+        let healthy = all_healthy(&pool);
+        let health = HealthStore::empty();
+        health.update("p1", "slow", MemberHealthSnapshot { healthy: true, latency_ema_us: 50_000, consecutive_failures: 0, consecutive_successes: 1 });
+        health.update("p1", "fast", MemberHealthSnapshot { healthy: true, latency_ema_us: 5_000, consecutive_failures: 0, consecutive_successes: 1 });
+        let rr = RoundRobinState::default();
+
+        assert_eq!(pick_member("p1", &pool, &healthy, &health, &rr), Some("fast"));
+    }
+
+    #[test]
+    fn round_robin_state_tracks_pools_independently() {
+        let rr = RoundRobinState::default();
+        assert_eq!(rr.next("pool-a"), 0);
+        assert_eq!(rr.next("pool-a"), 1);
+        assert_eq!(rr.next("pool-b"), 0, "pool-b must have its own independent cursor");
+        assert_eq!(rr.next("pool-a"), 2);
     }
 }

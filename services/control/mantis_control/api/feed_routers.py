@@ -162,16 +162,19 @@ async def ingest_feed(
     db: Session = Depends(get_db),
     _user: models.User = Depends(require_role("admin", "operator")),
 ) -> IngestOut:
-    feed = db.get(models.Feed, feed_id)
-    if feed is None:
-        raise HTTPException(404, "feed not found")
-
     # Serializes this "sync now" against the feed's own recurring scheduler
     # job (scheduler.run_ingest) — without it, both can fetch/write the same
     # feed concurrently and leave the file and DB row reflecting different
-    # fetches. Held across the fetch *and* the commit below, matching
-    # run_ingest's lock scope.
+    # fetches. Held across the DB read too (not just the fetch and commit):
+    # reading the Feed row (last_etag/last_domain_count, both consulted
+    # inside fetch_and_ingest) before acquiring the lock let this request
+    # fetch against a stale snapshot if the scheduler's run had already
+    # updated the row first, and then commit that stale data back over it.
     async with feed_lock(feed_id):
+        feed = db.get(models.Feed, feed_id)
+        if feed is None:
+            raise HTTPException(404, "feed not found")
+
         async with httpx.AsyncClient() as client:
             result = await fetch_and_ingest(feed, FEED_STORAGE_DIR, client)
 

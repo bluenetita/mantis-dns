@@ -939,6 +939,7 @@ dependencies = [
  "mantis-policy",
  "prost",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",

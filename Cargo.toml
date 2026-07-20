@@ -24,6 +24,11 @@ axum = { version = "0.8", default-features = false, features = ["tokio", "http1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 hickory-proto = "0.25"
 hickory-resolver = { version = "0.25", features = ["tls-ring", "webpki-roots", "https-ring", "dnssec-ring"] }
+# default-features off + explicit "ring": hickory-resolver's own tls-ring/
+# dnssec-ring/https-ring features already select the `ring` crypto backend;
+# rustls's default features pull in aws-lc-rs instead (a second backend
+# needing cmake + a C compiler at build time) if left on.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 ipnet = "2"
 serde = { version = "1", features = ["derive"] }
 base64 = "0.22"

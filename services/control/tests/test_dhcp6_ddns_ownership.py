@@ -144,3 +144,13 @@ def test_delete_with_blank_duid_does_not_remove_any_record(db, zone):
     db.commit()
 
     assert _get_record(db, zone.id) is not None
+
+
+def test_upsert_rejects_hostname_that_would_smuggle_a_bind_directive(db, zone):
+    """DHCPv6 counterpart of test_dhcp_ddns_ownership.py's matching test —
+    same client-supplied-hostname BIND-directive-smuggling gap, keyed on
+    DUID instead of MAC."""
+    _upsert_aaaa_record(db, _scope(zone.id), "$INCLUDE /etc/passwd", "2001:db8::5", DUID_A)
+    db.commit()
+
+    assert db.query(DnsRecord).filter(DnsRecord.zone_id == zone.id).count() == 0

@@ -22,6 +22,7 @@ mod cache;
 pub mod health_monitor;
 mod router;
 mod telemetry;
+mod tls_pin;
 pub mod upstream_bundle;
 pub mod zone_store;
 
@@ -224,6 +225,15 @@ pub struct DecisionOutcome {
 
 /// Lookup order per design.md §18.4: allow-override beats everything;
 /// deny-override beats categories; categories beat default-allow.
+///
+/// ACTION_LOG_ONLY categories never block (design.md §7: "log-only lets an
+/// org observe before enforcing"), but a match still needs to reach
+/// telemetry — otherwise toggling a category to log-only makes it silently
+/// invisible instead of observable, defeating the entire point of the mode.
+/// The first log-only match found is remembered and returned only if no
+/// ACTION_BLOCK category matches first; ACTION_BLOCK is still checked across
+/// every category before any log-only match is allowed to win, since a
+/// blocking category must always take precedence over merely observing.
 pub fn decide(bundle: &Bundle, qname: &str) -> DecisionOutcome {
     let qname = normalize(qname);
 
@@ -243,28 +253,42 @@ pub fn decide(bundle: &Bundle, qname: &str) -> DecisionOutcome {
             matched_feed_id: None,
         };
     }
+
+    let mut log_only_match: Option<DecisionOutcome> = None;
     for category in &bundle.categories {
-        if category.action != mantis_bundle::Action::Block as i32 {
-            continue;
-        }
-        if let Some(bf) = BloomFilter::from_category(category) {
-            if bf.might_contain(&qname) {
-                return DecisionOutcome {
-                    decision: Decision::Block,
-                    matched_rule: "category",
-                    matched_category: Some(category.category_id.clone()),
-                    matched_feed_id: (!category.source_feed_id.is_empty())
-                        .then(|| category.source_feed_id.clone()),
-                };
+        let action = category.action;
+        if action == mantis_bundle::Action::Block as i32 {
+            if let Some(bf) = BloomFilter::from_category(category) {
+                if bf.might_contain(&qname) {
+                    return DecisionOutcome {
+                        decision: Decision::Block,
+                        matched_rule: "category",
+                        matched_category: Some(category.category_id.clone()),
+                        matched_feed_id: (!category.source_feed_id.is_empty())
+                            .then(|| category.source_feed_id.clone()),
+                    };
+                }
+            }
+        } else if action == mantis_bundle::Action::LogOnly as i32 && log_only_match.is_none() {
+            if let Some(bf) = BloomFilter::from_category(category) {
+                if bf.might_contain(&qname) {
+                    log_only_match = Some(DecisionOutcome {
+                        decision: Decision::Allow,
+                        matched_rule: "category_log_only",
+                        matched_category: Some(category.category_id.clone()),
+                        matched_feed_id: (!category.source_feed_id.is_empty())
+                            .then(|| category.source_feed_id.clone()),
+                    });
+                }
             }
         }
     }
-    DecisionOutcome {
+    log_only_match.unwrap_or(DecisionOutcome {
         decision: Decision::Allow,
         matched_rule: "default",
         matched_category: None,
         matched_feed_id: None,
-    }
+    })
 }
 
 /// Returns IDs of every category whose bloom filter matches `qname`, regardless
@@ -501,6 +525,7 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
                 &state.cache,
                 state.forwarder.as_ref(),
                 &state.telemetry,
+                false, // single-tenant mode: bundle-is-None is bootstrap-only, never "unmatched route"
             )
             .await;
             enforce_udp_size_limit(&query, &mut response);
@@ -521,6 +546,22 @@ pub async fn run_udp_server(socket: UdpSocket, state: Arc<AppState>) -> Result<(
 /// Maximum concurrent TCP DNS connections. Excess connections are accepted
 /// then immediately closed so clients get a clean FIN rather than a timeout.
 pub(crate) const MAX_TCP_CONNECTIONS: usize = 500;
+
+/// How long to wait for the next query's 2-byte length prefix before closing
+/// an idle TCP DNS connection — RFC 7766 leaves the exact policy to the
+/// server; 30s matches common recursive-resolver defaults (e.g. Unbound's
+/// tcp-idle-timeout). Without this, a connection that sends nothing at all
+/// (a handful is enough to exhaust MAX_TCP_CONNECTIONS) holds its semaphore
+/// permit — and blocks every other client sharing this listener from getting
+/// a DNS answer over TCP — forever.
+pub(crate) const TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long to wait for the rest of a message once its length prefix has
+/// already been read — much shorter than TCP_IDLE_TIMEOUT, since a
+/// well-behaved client sends the body immediately after announcing its
+/// length; a slow/partial send past this point is indistinguishable from an
+/// attacker deliberately trickling bytes to hold the connection open.
+pub(crate) const TCP_BODY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// DNS-over-TCP server (RFC 1035 §4.2.2). Spawns one task per accepted
 /// connection; each connection may carry multiple pipelined queries.
@@ -554,18 +595,29 @@ async fn handle_tcp_connection(
     state: &AppState,
 ) -> Result<()> {
     loop {
-        let msg_len = match stream.read_u16().await {
-            Ok(n) => n as usize,
+        let msg_len = match tokio::time::timeout(TCP_IDLE_TIMEOUT, stream.read_u16()).await {
+            Ok(Ok(n)) => n as usize,
             // Clean close from the client.
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(e) => return Err(e.into()),
+            Ok(Err(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_elapsed) => {
+                debug!("TCP DNS connection from {peer_ip} idle for {TCP_IDLE_TIMEOUT:?}, closing");
+                break;
+            }
         };
         if msg_len == 0 {
             break;
         }
 
         let mut buf = vec![0u8; msg_len];
-        stream.read_exact(&mut buf).await?;
+        match tokio::time::timeout(TCP_BODY_TIMEOUT, stream.read_exact(&mut buf)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_elapsed) => {
+                debug!("TCP DNS connection from {peer_ip} timed out mid-message, closing");
+                break;
+            }
+        }
 
         let query = match Message::from_bytes(&buf) {
             Ok(m) => m,
@@ -584,6 +636,7 @@ async fn handle_tcp_connection(
             &state.cache,
             state.forwarder.as_ref(),
             &state.telemetry,
+            false, // single-tenant mode: bundle-is-None is bootstrap-only, never "unmatched route"
         )
         .await;
 
@@ -634,6 +687,19 @@ pub fn with_service_token(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilde
 
 // ── Core decision + response ───────────────────────────────────────────────────
 
+/// `unmatched_route` is true only when the caller is `run_router_udp_server`/
+/// `run_router_tcp_server` (multi-tenant source-IP routing mode) and the
+/// peer's source IP matched *no* configured tenant subnet at all — as
+/// opposed to matching a route whose `BundleStore` simply hasn't loaded a
+/// bundle yet (genuine bootstrap window). `MANTIS_BOOTSTRAP_FAIL_OPEN` must
+/// never apply to the former: an unmatched IP has no tenant identity or
+/// policy to "fail open into" — resolving it anyway turns any traffic that
+/// merely fails to match a routing entry (a stray client, a misconfigured
+/// subnet, or literally anyone who can reach the listener) into a permanent,
+/// silent open resolver, indistinguishable from the one-time startup window
+/// the flag exists for. Single-tenant callers (`run_udp_server`/
+/// `run_tcp_server`) always pass `false`: their `bundle is None` case really
+/// is bootstrap-only, per the comment below.
 pub(crate) async fn build_response(
     query: &Message,
     bundle: Option<&Bundle>,
@@ -642,6 +708,7 @@ pub(crate) async fn build_response(
     cache: &DnsCache,
     forwarder: &dyn Forwarder,
     telemetry: &TelemetryEmitter,
+    unmatched_route: bool,
 ) -> Message {
     let start = std::time::Instant::now();
     let mut response = Message::new();
@@ -689,18 +756,22 @@ pub(crate) async fn build_response(
     }
 
     let Some(bundle) = bundle else {
-        // No bundle has loaded yet — this only happens in the window before
-        // this process's very first successful fetch+verify: try_publish
-        // never clears the store back to None on a later failed refresh, so
-        // once any bundle has loaded, the last-known-good one stays active
-        // and this branch is never reached again for the life of the
-        // process. There's no Bundle to read on_load_failure from yet (the
-        // field lives on the bundle itself), so the bootstrap-window
-        // behavior is controlled by MANTIS_BOOTSTRAP_FAIL_OPEN instead —
-        // defaulting to closed (ServFail) since resolving with no policy
-        // applied at all is unsafe for a tenant that hasn't even completed
-        // provisioning yet.
-        if bootstrap_fail_open() {
+        // No bundle has loaded yet for the resolved tenant (single-tenant
+        // mode) — or, in single-tenant mode specifically, this only happens
+        // in the window before this process's very first successful
+        // fetch+verify: try_publish never clears the store back to None on a
+        // later failed refresh, so once any bundle has loaded, the
+        // last-known-good one stays active and this branch is never reached
+        // again for the life of the process. There's no Bundle to read
+        // on_load_failure from yet (the field lives on the bundle itself),
+        // so the bootstrap-window behavior is controlled by
+        // MANTIS_BOOTSTRAP_FAIL_OPEN instead — defaulting to closed
+        // (ServFail) since resolving with no policy applied at all is unsafe
+        // for a tenant that hasn't even completed provisioning yet.
+        //
+        // `unmatched_route` overrides this to always ServFail regardless of
+        // the env var — see its doc comment above.
+        if !unmatched_route && bootstrap_fail_open() {
             resolve_records(&qname, qtype, &[], cache, forwarder, &mut response).await;
         } else {
             response.set_response_code(ResponseCode::ServFail);
@@ -1100,13 +1171,28 @@ mod tests {
         assert!(response.truncated());
     }
 
+    #[test]
+    fn to_bytes_never_exceeds_the_tcp_length_prefix_range_even_for_a_huge_answer_set() {
+        // handle_tcp_connection/run_router_tcp_server cast `bytes.len() as
+        // u16` for the RFC 1035 §4.2.2 length prefix with no explicit bound
+        // check of their own — that's only sound because hickory's encoder
+        // (BinEncoder::with_offset) hard-caps every Message::to_bytes() call
+        // at u16::MAX bytes by construction, truncating the answer set and
+        // setting the TC bit rather than ever producing a longer buffer.
+        // This pins that guarantee down so a hickory upgrade that changed it
+        // would fail a test here instead of silently corrupting TCP framing.
+        let response = oversized_response(50_000);
+        let bytes = response.to_bytes().unwrap();
+        assert!(bytes.len() <= u16::MAX as usize, "got {} bytes", bytes.len());
+    }
+
     #[tokio::test]
     async fn no_bundle_loaded_yet_respects_bootstrap_fail_open_env_var() {
         // Single test (not two) because MANTIS_BOOTSTRAP_FAIL_OPEN is
         // process-global env state and cargo runs tests in the same binary
         // concurrently by default — two separate tests toggling it would
         // race each other's reads.
-        async fn query_with_no_bundle() -> Message {
+        async fn query_with_no_bundle(unmatched_route: bool) -> Message {
             build_response(
                 &a_query("bootstrap.example."),
                 None,
@@ -1115,6 +1201,7 @@ mod tests {
                 &DnsCache::new(10),
                 &EmptyOkForwarder,
                 &TelemetryEmitter::noop(),
+                unmatched_route,
             )
             .await
         }
@@ -1122,12 +1209,20 @@ mod tests {
         // No MANTIS_BOOTSTRAP_FAIL_OPEN set — must preserve today's safe
         // default (ServFail) for the pre-first-load bootstrap window.
         std::env::remove_var("MANTIS_BOOTSTRAP_FAIL_OPEN");
-        assert_eq!(query_with_no_bundle().await.response_code(), ResponseCode::ServFail);
+        assert_eq!(query_with_no_bundle(false).await.response_code(), ResponseCode::ServFail);
 
         std::env::set_var("MANTIS_BOOTSTRAP_FAIL_OPEN", "true");
         // EmptyOkForwarder returns Ok(vec![]) — NOERROR/NODATA, not ServFail,
         // proving the query was actually forwarded rather than blocked.
-        assert_eq!(query_with_no_bundle().await.response_code(), ResponseCode::NoError);
+        assert_eq!(query_with_no_bundle(false).await.response_code(), ResponseCode::NoError);
+
+        // Regression test: an unmatched source IP in multi-tenant router
+        // mode must ALWAYS ServFail, even with MANTIS_BOOTSTRAP_FAIL_OPEN
+        // set — that flag is for the one-time startup window before a
+        // resolved tenant's first bundle load, not for traffic with no
+        // resolvable tenant identity at all (still set from the assertion
+        // above, so this genuinely proves the override wins).
+        assert_eq!(query_with_no_bundle(true).await.response_code(), ResponseCode::ServFail);
         std::env::remove_var("MANTIS_BOOTSTRAP_FAIL_OPEN");
     }
 
@@ -1170,5 +1265,72 @@ mod tests {
         // Must not strip domains that merely start with "www" without the
         // dot (a real, if unusual, registrable domain).
         assert_eq!(normalize("wwwx.example.com"), "wwwx.example.com");
+    }
+
+    /// `num_hashes: 0` makes `might_contain` return true for any domain
+    /// unconditionally (the hash-check loop never runs) — a cheap way to
+    /// build a category that deterministically "matches" in a test without
+    /// needing a real FNV-hashed bitset.
+    fn category(
+        id: &str,
+        action: mantis_bundle::Action,
+        source_feed_id: &str,
+    ) -> mantis_bundle::CategorySet {
+        mantis_bundle::CategorySet {
+            category_id: id.into(),
+            source_feed_id: source_feed_id.into(),
+            feed_version: "".into(),
+            license: "".into(),
+            bloom: Some(mantis_bundle::gen::BloomParams { num_hashes: 0, num_bits: 8, seed: 0 }),
+            bloom_bits: vec![0xFFu8],
+            action: action as i32,
+        }
+    }
+
+    #[test]
+    fn decide_log_only_category_match_does_not_block_but_is_reported() {
+        // Regression test: a log-only category match used to be silently
+        // dropped (the loop `continue`d past any non-Block action), so
+        // toggling a category to log-only made it invisible instead of
+        // observable — defeating the point of the mode (design.md §7).
+        let bundle = Bundle {
+            categories: vec![category("social", mantis_bundle::Action::LogOnly, "feed-1")],
+            ..Default::default()
+        };
+        let outcome = decide(&bundle, "chat.example.com");
+        assert_eq!(outcome.decision, Decision::Allow, "log-only must never block");
+        assert_eq!(outcome.matched_rule, "category_log_only");
+        assert_eq!(outcome.matched_category.as_deref(), Some("social"));
+        assert_eq!(outcome.matched_feed_id.as_deref(), Some("feed-1"));
+    }
+
+    #[test]
+    fn decide_block_category_beats_log_only_match() {
+        let bundle = Bundle {
+            categories: vec![
+                category("social", mantis_bundle::Action::LogOnly, "feed-1"),
+                category("malware", mantis_bundle::Action::Block, "feed-2"),
+            ],
+            ..Default::default()
+        };
+        let outcome = decide(&bundle, "evil.example.com");
+        assert_eq!(outcome.decision, Decision::Block);
+        assert_eq!(outcome.matched_rule, "category");
+        assert_eq!(outcome.matched_category.as_deref(), Some("malware"));
+    }
+
+    #[test]
+    fn decide_no_category_match_stays_default_allow() {
+        let bundle = Bundle {
+            categories: vec![category("social", mantis_bundle::Action::Block, "feed-1")],
+            ..Default::default()
+        };
+        // num_bits=0 forces might_contain to return false regardless of
+        // num_hashes — an empty/unconfigured filter must not match anything.
+        let mut b = bundle;
+        b.categories[0].bloom = Some(mantis_bundle::gen::BloomParams { num_hashes: 0, num_bits: 0, seed: 0 });
+        let outcome = decide(&b, "anything.example.com");
+        assert_eq!(outcome.decision, Decision::Allow);
+        assert_eq!(outcome.matched_rule, "default");
     }
 }

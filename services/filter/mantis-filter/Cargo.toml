@@ -20,6 +20,7 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 hickory-proto = { workspace = true }
 hickory-resolver = { workspace = true }
+rustls = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 arc-swap = { workspace = true }
 axum = { workspace = true }
@@ -35,3 +36,8 @@ sha2 = { workspace = true }
 
 [dev-dependencies]
 async-trait = "0.1"
+# test-util (tokio::time::pause/advance, #[tokio::test(start_paused = true)])
+# isn't part of the "full" feature set the workspace's [dependencies] tokio
+# uses — only needed for tests, so it's added here rather than widening the
+# real binary's dependency footprint.
+tokio = { workspace = true, features = ["test-util"] }
