@@ -257,7 +257,11 @@ export interface paths {
          * Test Domain
          * @description Simulates the filter's decision for a given domain against this group's
          *     current saved policy (overrides + category toggles). Does NOT require a
-         *     compiled bundle — reads directly from DB + feed domain files.
+         *     compiled bundle — reads directly from DB + feed domain files. Must mirror
+         *     mantis-filter's decide() precedence (allow-override > deny-override >
+         *     ACTION_BLOCK category > ACTION_LOG_ONLY category > default-allow), or
+         *     this "test a domain" diagnostic tool lies about what the filter will
+         *     actually do.
          */
         post: operations["test_domain_api_v1_groups__group_id__policy_test_post"];
         delete?: never;
@@ -1062,7 +1066,10 @@ export interface paths {
          *
          *     Response body: canonical JSON bundle payload (sort_keys, no whitespace).
          *     X-Mantis-Signature header: hex-encoded ed25519 signature over the body bytes.
-         *     X-Mantis-Bundle-Version: unix timestamp of compilation (for cache-busting).
+         *     X-Mantis-Bundle-Version: content-derived version (max `updated_at` across every
+         *     route/pool/resolver/tenant-policy row feeding this bundle, in ms since epoch) —
+         *     NOT a fetch-time timestamp, so it stays stable across repeated polls when
+         *     nothing changed (see `_bundle_version`).
          */
         get: operations["get_upstream_bundle_api_v1_upstream_bundle__tenant_id__get"];
         put?: never;
