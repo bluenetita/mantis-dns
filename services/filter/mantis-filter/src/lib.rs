@@ -700,6 +700,13 @@ pub fn with_service_token(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilde
 /// the flag exists for. Single-tenant callers (`run_udp_server`/
 /// `run_tcp_server`) always pass `false`: their `bundle is None` case really
 /// is bootstrap-only, per the comment below.
+///
+/// 8 params, one over clippy's default threshold: `cache`/`forwarder`/
+/// `telemetry` are always passed together straight from the caller's
+/// `AppState`/`TenantRouter` (see call sites) rather than being independent
+/// knobs, so splitting them into a wrapper struct wouldn't reduce the real
+/// coupling — it'd just move it behind a constructor at every call site.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn build_response(
     query: &Message,
     bundle: Option<&Bundle>,

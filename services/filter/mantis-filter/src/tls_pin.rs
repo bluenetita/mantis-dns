@@ -74,7 +74,7 @@ impl ServerCertVerifier for PinnedCertVerifier {
         _now: UnixTime,
     ) -> Result<ServerCertVerified, TlsError> {
         let digest: [u8; 32] = Sha256::digest(end_entity.as_ref()).into();
-        if self.pins.iter().any(|pin| *pin == digest) {
+        if self.pins.contains(&digest) {
             Ok(ServerCertVerified::assertion())
         } else {
             Err(TlsError::General(format!(
