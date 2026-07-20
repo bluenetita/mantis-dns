@@ -22,6 +22,7 @@ import {
   Center,
   Group,
   Loader,
+  Select,
   SegmentedControl,
   Stack,
   Table,
@@ -34,7 +35,9 @@ import { useDebouncedValue } from "@mantine/hooks";
 import { IconSearch } from "@tabler/icons-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { QUERY_LOG_PAGE_SIZE, useQueryLog } from "../api/hooks";
+import { QUERY_LOG_PAGE_SIZE, useCategories, useQueryLog } from "../api/hooks";
+
+const QTYPE_OPTIONS = ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "PTR", "SOA", "ANY"];
 
 const DECISION_COLOR: Record<string, string> = {
   block: "red",
@@ -61,7 +64,13 @@ export function QueryLogPage() {
   const [hoursStr, setHoursStr] = useState("24");
   const [qnameInput, setQnameInput] = useState("");
   const [debouncedQname] = useDebouncedValue(qnameInput, 400);
+  const [clientIpInput, setClientIpInput] = useState("");
+  const [debouncedClientIp] = useDebouncedValue(clientIpInput, 400);
+  const [qtype, setQtype] = useState<string | null>(null);
+  const [category, setCategory] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
+
+  const { data: categories } = useCategories();
 
   const hours = hoursStr ? Number(hoursStr) : undefined;
 
@@ -69,6 +78,9 @@ export function QueryLogPage() {
     offset,
     decision: decision || undefined,
     qname: debouncedQname || undefined,
+    client_ip: debouncedClientIp || undefined,
+    qtype: qtype || undefined,
+    matched_category: category || undefined,
     hours,
   });
 
@@ -84,6 +96,21 @@ export function QueryLogPage() {
 
   function handleQnameChange(e: React.ChangeEvent<HTMLInputElement>) {
     setQnameInput(e.currentTarget.value);
+    setOffset(0);
+  }
+
+  function handleClientIpChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setClientIpInput(e.currentTarget.value);
+    setOffset(0);
+  }
+
+  function handleQtypeChange(v: string | null) {
+    setQtype(v);
+    setOffset(0);
+  }
+
+  function handleCategoryChange(v: string | null) {
+    setCategory(v);
     setOffset(0);
   }
 
@@ -120,6 +147,36 @@ export function QueryLogPage() {
           onChange={handleQnameChange}
           size="xs"
           w={220}
+        />
+        <TextInput
+          placeholder={t("queryLog.filters.clientIpPlaceholder")}
+          aria-label={t("queryLog.filters.clientIpLabel")}
+          leftSection={<IconSearch size={14} />}
+          value={clientIpInput}
+          onChange={handleClientIpChange}
+          size="xs"
+          w={180}
+        />
+        <Select
+          placeholder={t("queryLog.filters.qtypeAll")}
+          aria-label={t("queryLog.filters.qtypeLabel")}
+          data={QTYPE_OPTIONS}
+          value={qtype}
+          onChange={(v) => handleQtypeChange(v)}
+          clearable
+          size="xs"
+          w={140}
+        />
+        <Select
+          placeholder={t("queryLog.filters.categoryAll")}
+          aria-label={t("queryLog.filters.categoryLabel")}
+          data={(categories ?? []).map((c) => ({ value: c.id, label: c.label }))}
+          value={category}
+          onChange={(v) => handleCategoryChange(v)}
+          clearable
+          searchable
+          size="xs"
+          w={180}
         />
       </Group>
 

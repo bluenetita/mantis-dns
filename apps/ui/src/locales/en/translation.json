@@ -61,6 +61,14 @@
       "previous": "Previous",
       "next": "Next",
       "page": "Page {{page}}"
+    },
+    "filters": {
+      "clientIpPlaceholder": "Filter by client IP…",
+      "clientIpLabel": "Filter by client IP",
+      "qtypeLabel": "Query type",
+      "qtypeAll": "All types",
+      "categoryLabel": "Category",
+      "categoryAll": "All categories"
     }
   },
   "common": {

@@ -145,6 +145,9 @@ def query_log(
     decision: Optional[Literal["allow", "block"]] = None,
     group_id: Optional[str] = None,
     qname: Optional[str] = None,
+    client_ip: Optional[str] = None,
+    qtype: Optional[str] = None,
+    matched_category: Optional[str] = None,
     hours: Optional[int] = Query(None, ge=1, le=8760),
     db: Session = Depends(get_db),
     _user: models.User = Depends(get_current_user),
@@ -158,6 +161,12 @@ def query_log(
         filters.append(models.QueryEvent.group_id == group_id)
     if qname:
         filters.append(models.QueryEvent.qname.icontains(qname))
+    if client_ip:
+        filters.append(models.QueryEvent.client_ip.icontains(client_ip))
+    if qtype:
+        filters.append(models.QueryEvent.qtype == qtype)
+    if matched_category:
+        filters.append(models.QueryEvent.matched_category == matched_category)
     if hours:
         since = datetime.now(timezone.utc) - timedelta(hours=hours)
         filters.append(models.QueryEvent.occurred_at >= since)

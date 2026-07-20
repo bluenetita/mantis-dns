@@ -403,11 +403,14 @@ export function useQueryLog(params: {
   decision?: "allow" | "block" | "";
   group_id?: string;
   qname?: string;
+  client_ip?: string;
+  qtype?: string;
+  matched_category?: string;
   hours?: number;
 }) {
-  const { offset = 0, decision, group_id, qname, hours } = params;
+  const { offset = 0, decision, group_id, qname, client_ip, qtype, matched_category, hours } = params;
   return useQuery({
-    queryKey: ["query-log", offset, decision, group_id, qname, hours],
+    queryKey: ["query-log", offset, decision, group_id, qname, client_ip, qtype, matched_category, hours],
     queryFn: () =>
       rawGet<QueryLogEntry[]>("/api/v1/query-log", {
         limit: QUERY_LOG_PAGE_SIZE,
@@ -415,6 +418,9 @@ export function useQueryLog(params: {
         ...(decision ? { decision } : {}),
         ...(group_id ? { group_id } : {}),
         ...(qname ? { qname } : {}),
+        ...(client_ip ? { client_ip } : {}),
+        ...(qtype ? { qtype } : {}),
+        ...(matched_category ? { matched_category } : {}),
         ...(hours ? { hours } : {}),
       }),
     refetchInterval: 30_000,
