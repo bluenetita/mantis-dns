@@ -125,13 +125,31 @@ async fn flush(client: &reqwest::Client, control_url: &str, batch: Vec<QueryEven
         })
         .collect();
     let body = json!({ "events": events });
+    let batch_len = events.len();
 
-    if let Err(e) = crate::with_service_token(
+    // Both legs must be checked: `send()` only errors on transport failures
+    // (connection refused, DNS, timeout) — a non-2xx response (e.g. control
+    // rejecting the batch with 422 on a validation mismatch) comes back as
+    // `Ok(response)` and was previously falling through here silently,
+    // dropping the whole batch with no trace in either service's logs.
+    let result = crate::with_service_token(
         client.post(format!("{control_url}/api/v1/query-events")).json(&body),
     )
     .send()
-    .await
-    {
-        warn!("telemetry flush failed (events dropped): {e}");
+    .await;
+
+    match result {
+        Ok(response) if !response.status().is_success() => {
+            let status = response.status();
+            let body_text = response.text().await.unwrap_or_default();
+            warn!(
+                "telemetry flush rejected by control ({batch_len} events dropped): \
+                 HTTP {status}: {body_text}"
+            );
+        }
+        Err(e) => {
+            warn!("telemetry flush failed ({batch_len} events dropped): {e}");
+        }
+        Ok(_) => {}
     }
 }

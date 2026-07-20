@@ -43,7 +43,9 @@ class QueryEventIn(BaseModel):
     qtype: str | None = Field(None, max_length=16)
     matched_rule: str | None = Field(None, max_length=64)
     matched_category: str | None = Field(None, max_length=64)
-    matched_feed_id: str | None = Field(None, max_length=64)
+    # Comma-joined feed ids (a category can be backed by several feeds), not
+    # a single id — must match db.models.QueryEvent.matched_feed_id's width.
+    matched_feed_id: str | None = Field(None, max_length=512)
     response_code: str | None = Field(None, max_length=16)
     cache_hit: bool | None = None
     latency_us: int | None = None

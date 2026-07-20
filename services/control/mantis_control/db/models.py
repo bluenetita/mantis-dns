@@ -185,7 +185,11 @@ class QueryEvent(Base):
     decision: Mapped[str] = mapped_column(String(20))  # "allow" | "block"
     matched_rule: Mapped[str | None] = mapped_column(String(32), nullable=True)
     matched_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    matched_feed_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Comma-joined ids of every feed contributing to the matched category's
+    # bloom (see build_policy_bundle._category_bloom's source_feed_id) — not
+    # a single feed id, so this needs real headroom (e.g. "social" already
+    # joins 4 feed ids to ~100 chars). See migration a1b2c3d4e5f6.
+    matched_feed_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     response_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
     cache_hit: Mapped[bool | None] = mapped_column(nullable=True)
     latency_us: Mapped[int | None] = mapped_column(nullable=True)
