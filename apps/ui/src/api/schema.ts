@@ -4450,6 +4450,9 @@ export interface operations {
                 decision?: ("allow" | "block") | null;
                 group_id?: string | null;
                 qname?: string | null;
+                client_ip?: string | null;
+                qtype?: string | null;
+                matched_category?: string | null;
                 hours?: number | null;
             };
             header?: never;
