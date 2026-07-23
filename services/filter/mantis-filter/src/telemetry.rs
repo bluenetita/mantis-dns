@@ -79,7 +79,15 @@ const BATCH_SIZE: usize = 500;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(2);
 
 async fn flush_loop(mut rx: Receiver<QueryEventInput>, control_url: String) {
-    let client = reqwest::Client::new();
+    // No timeout here previously let a single stuck request (dead pooled
+    // socket, e.g. a silently-dropped NAT/conntrack mapping after a long
+    // idle period) block this task's only `.send().await` forever — the
+    // bounded channel then fills and every event is dropped until the
+    // process is restarted.
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("reqwest client build");
     let mut batch = Vec::with_capacity(BATCH_SIZE);
     let mut ticker = tokio::time::interval(FLUSH_INTERVAL);
 
