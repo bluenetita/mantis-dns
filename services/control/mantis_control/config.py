@@ -80,6 +80,11 @@ class Settings(BaseSettings):
     # within it.
     QUERY_EVENT_RETENTION_DAYS: int = 90
 
+    # Autovacuum reclaims table bloat but not index bloat — see reindex.py.
+    # Monthly is frequent enough to keep query_events' indexes from growing
+    # unbounded without adding meaningful REINDEX CONCURRENTLY overhead.
+    QUERY_EVENT_REINDEX_INTERVAL_DAYS: int = 30
+
     @property
     def is_production(self) -> bool:
         """True for anything other than a recognized dev/test label — see

@@ -43,8 +43,9 @@ from mantis_control.compiler.keys import load_or_create_signing_key
 from mantis_control.config import settings
 
 from mantis_control.db.models import Feed, User
-from mantis_control.db.session import SessionLocal
+from mantis_control.db.session import SessionLocal, engine
 from mantis_control.feeds.seed import seed_catalog
+from mantis_control.reindex import reindex_query_events
 from mantis_control.retention import prune_query_events
 from mantis_control.scheduler import kick_feed_now, mark_shutting_down, schedule_feed, scheduler
 from mantis_control.siem_delivery import run_webhook_delivery_cycle
@@ -141,6 +142,17 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         "interval",
         hours=24,
         id="query-event-retention",
+        replace_existing=True,
+    )
+
+    def _query_event_reindex_job() -> None:
+        reindex_query_events(engine)
+
+    scheduler.add_job(
+        _query_event_reindex_job,
+        "interval",
+        days=settings.QUERY_EVENT_REINDEX_INTERVAL_DAYS,
+        id="query-event-reindex",
         replace_existing=True,
     )
 
