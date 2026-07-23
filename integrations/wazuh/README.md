@@ -1,12 +1,23 @@
 # Mantis DNS → Wazuh integration
 
-Mantis's SIEM export (`docs/design.md` §20) offers two paths: a cursor-based
-pull API and an HMAC-signed webhook push. **Use pull for Wazuh.** Wazuh has
-no generic inbound HTTP receiver that understands Mantis's push contract
-(custom `X-Mantis-Signature` header, JSON/CEF body) — it ingests via agent
-traffic, a syslog listener, or local log tailing, not arbitrary webhooks.
-Pull requires nothing listening on the Wazuh side beyond what ships by
-default.
+Mantis's SIEM export (`docs/design.md` §20) offers three paths: a
+cursor-based pull API, an HMAC-signed webhook push, and RFC 5424 syslog
+(§20.8). Wazuh has no generic inbound HTTP receiver that understands
+Mantis's push contract (custom `X-Mantis-Signature` header, JSON/CEF body)
+— it ingests via agent traffic, a syslog listener, or local log tailing, not
+arbitrary webhooks.
+
+**Prefer the syslog sink for new setups**: Wazuh's built-in `<remote>`
+listener (UDP/TCP 514) consumes a Mantis `SiemSyslog` sink directly — add
+one from the control plane's Settings → Integrations page, pointed at the
+Wazuh manager, format `cef`. No script, no cron, no local polling account.
+See `docs/design.md` §20.8 for the message format and `<remote>` config on
+the Wazuh side.
+
+The pull-script bridge documented below predates syslog support and remains
+useful if you'd rather not open an inbound listener on the Wazuh manager, or
+are already running it. It requires nothing listening on the Wazuh side
+beyond what ships by default.
 
 ## How it works
 
@@ -96,9 +107,22 @@ layer if you build your own receiver (e.g. a small shim that verifies the
 HMAC and writes to a file Wazuh tails) or point it at a SIEM that *does*
 accept generic webhooks.
 
-## Future: syslog
+## Syslog (recommended for new setups)
 
-`docs/design.md` §20.8 notes CEF-over-syslog as a future export mode,
-which would let Wazuh's syslog listener (`<remote>`, UDP/TCP 514) receive
-events directly without a pull script. Not implemented yet — pull is the
-supported path until then.
+See the note at the top of this document — a Mantis `SiemSyslog` sink
+(`docs/design.md` §20.8) feeds Wazuh's `<remote>` syslog listener directly,
+no pull script required:
+
+```xml
+<!-- /var/ossec/etc/ossec.conf -->
+<remote>
+  <connection>syslog</connection>
+  <port>514</port>
+  <protocol>tcp</protocol>  <!-- or udp, matching the sink's transport -->
+</remote>
+```
+
+CEF lines land in Wazuh the same way any syslog-fed CEF source does —
+`local_rules.xml`'s rule bodies can be adapted from JSON-field matches to
+the CEF extension keys (`cs1`=matched_category, `act`=decision, etc., see
+`docs/design.md` §20.5) if you migrate an existing pull-based setup.

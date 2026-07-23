@@ -36,6 +36,7 @@ from mantis_control.api.dhcp6_routers import router as dhcp6_router
 from mantis_control.api.feed_routers import router as feed_router
 from mantis_control.api.routers import router as api_router
 from mantis_control.api.siem_routers import router as siem_router
+from mantis_control.api.siem_syslog_routers import router as siem_syslog_router
 from mantis_control.api.siem_webhook_routers import router as siem_webhook_router
 from mantis_control.api.telemetry_routers import router as telemetry_router
 from mantis_control.auth import CsrfMiddleware, hash_password
@@ -49,6 +50,7 @@ from mantis_control.reindex import reindex_query_events
 from mantis_control.retention import prune_query_events
 from mantis_control.scheduler import kick_feed_now, mark_shutting_down, schedule_feed, scheduler
 from mantis_control.siem_delivery import run_webhook_delivery_cycle
+from mantis_control.siem_syslog_delivery import run_syslog_delivery_cycle
 from mantis_control.dhcp.lease_sync import sync_dhcp_leases
 
 
@@ -110,6 +112,14 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         "interval",
         seconds=10,
         id="siem-webhook-delivery",
+        replace_existing=True,
+    )
+
+    scheduler.add_job(
+        run_syslog_delivery_cycle,
+        "interval",
+        seconds=10,
+        id="siem-syslog-delivery",
         replace_existing=True,
     )
 
@@ -208,6 +218,7 @@ app.include_router(audit_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(siem_router, prefix="/api/v1")
 app.include_router(siem_webhook_router, prefix="/api/v1")
+app.include_router(siem_syslog_router, prefix="/api/v1")
 app.include_router(client_router, prefix="/api/v1")
 app.include_router(zone_router, prefix="/api/v1")
 app.include_router(upstream_router, prefix="/api/v1")

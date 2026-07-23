@@ -252,6 +252,32 @@ def resolve_pinned_webhook_url(url: str) -> tuple[str, str]:
     return pinned_url, host
 
 
+def resolve_pinned_syslog_host(host: str) -> tuple[str, socket.AddressFamily, str]:
+    """Validates *host* like `check_probe_target_safe` (loopback/link-local/
+    metadata blocked, RFC-1918 allowed — self-hosted syslog collectors are
+    routinely on a private address, same reasoning as `check_webhook_url_safe`),
+    then resolves once to a single IP literal. Used for direct TCP/TLS/UDP
+    syslog sockets, which have no URL/Host-header layer to pin the way HTTP
+    webhook delivery does — resolving once here closes the same DNS-rebinding
+    TOCTOU gap `resolve_pinned_webhook_url` closes for HTTP. Returns
+    `(ip_str, address_family, original_host)`; callers should pass
+    `server_hostname=original_host` for TLS SNI/certificate verification.
+    """
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+
+    if literal is not None:
+        if _ip_is_loopback_or_metadata(str(literal)):
+            raise ValueError(f"host {host!r} is a loopback or link-local/metadata address")
+        family = socket.AF_INET6 if literal.version == 6 else socket.AF_INET
+        return str(literal), family, host
+
+    family, ip_str = _safe_resolved_ips(host, is_blocked=_ip_is_loopback_or_metadata)[0]
+    return ip_str, family, host
+
+
 def resolve_pinned_url(url: str) -> tuple[str, str]:
     """Validates *url* like `check_url_safe`, then returns
     `(pinned_url, original_host)`: *pinned_url* has its host replaced with one

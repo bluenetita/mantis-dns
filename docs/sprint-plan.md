@@ -31,6 +31,7 @@ Epic H: HA / multi-node / Proxmox profile      (Sprints 8-9)
 Epic I: Migration tooling + cutover            (Sprint 10)
 Epic J: Enterprise UI redesign (TS)            (Sprints 11-13) — see design.md §19
 Epic K: SIEM integration                       (Sprints 14-16) — see design.md §20
+Epic N: SIEM syslog export                     (Sprint 22) — see design.md §20.8
 ```
 
 > **UI status (logged gap):** Epic G delivered a *working prototype* (prompt/alert,
@@ -303,6 +304,26 @@ Mantis integrates **ISC Kea DHCP** as a co-located sidecar rather than building 
 - [ ] **Observability**: poll Kea `stat-lease4-get` / `stat-lease6-get` commands (30 s); expose `dhcp_leases_active{scope_id}`, `dhcp_pool_utilization_pct{scope_id}`, `dhcp_offers_total`, `dhcp_acks_total`, `dhcp_naks_total` as Prometheus metrics; `DhcpPoolExhaustedEvent` alert at ≥ 90% utilization; all config pushes and HA state changes written to Mantis audit log.
 
 **Exit criteria:** kill primary Kea node → standby takes over (Kea HA hot-standby) → new leases issued without client interruption; DHCPv6 client receives IA_NA + AAAA DNS record; all UI tabs functional; pool exhaustion alert fires in test; Prometheus metrics visible.
+
+---
+
+## Epic N — SIEM syslog export (Sprint 22)
+
+Full architecture and data model: **design.md §20.8**.
+
+A third export path alongside the pull API (Sprint 14) and webhook push (Sprint 15) — RFC 5424 syslog over TCP/TLS/UDP, for SIEMs and log collectors (Wazuh, rsyslog-fed ArcSight/QRadar, etc.) whose native ingestion path is a syslog listener rather than an HTTP endpoint. Same enriched event model and CEF/JSON serialization as the webhook path; only the transport and framing are new.
+
+### Sprint 22 — Syslog delivery engine + Settings UI
+
+- [x] **`SiemSyslog` model** (Postgres): host, port, transport (tcp/tls/udp), format, facility, app_name, filter_decision, batch_size, flush_interval_s, enabled, delivery state — same cursor/backoff/auto-disable shape as `SiemWebhook`, no secret column (syslog has no HMAC signing concept).
+- [x] **Delivery engine** (Python APScheduler job, own 10 s tick, independent of webhook delivery): RFC 5424 framing (RFC 6587 octet-counting for TCP/TLS, one message per datagram for UDP), CEF or JSON in the MSG field, retry with the same exponential backoff as webhook delivery, disable after 6 consecutive failures + audit log entry.
+- [x] **TOCTOU-safe connect**: host resolved once and connected to the resolved IP literal (TLS SNI/cert verification still targets the original hostname) — closes the same DNS-rebinding gap `resolve_pinned_webhook_url` closes for the webhook path.
+- [x] **Settings UI — SIEM syslog section**: add/edit/delete sink configs, enable/disable, "send test event" button, last-delivery timestamp + last-error display, alongside the existing webhook section.
+- [x] **Retention safety bound extended**: `prune_query_events` now takes the minimum enabled cursor across *both* `SiemWebhook` and `SiemSyslog`, not just webhooks — a backlogged syslog sink can no longer have its undelivered rows pruned out from under it.
+
+**Exit criteria:** configure a syslog sink in UI → test-event button sends one RFC 5424 line to the configured host → collector receives valid CEF/JSON; auto-disable after failure threshold verified by test; retention never deletes a row an enabled syslog sink hasn't delivered yet.
+
+**Deliberately out of scope:** application-layer delivery acknowledgment (syslog has none — "delivered" means "written to an open socket," same as any fire-and-forget syslog client); TLS certificate pinning (webhook-style HMAC secret doesn't apply here, and the trust tier matches `check_probe_target_safe`'s existing private-network allowance).
 
 ---
 

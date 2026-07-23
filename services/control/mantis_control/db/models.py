@@ -221,6 +221,35 @@ class SiemWebhook(Base):
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
+class SiemSyslog(Base):
+    """SIEM syslog push delivery config (design.md §20.8, Sprint 17). Same
+    cursor/backoff/auto-disable shape as SiemWebhook — `last_delivered_seq`
+    is this sink's own independent cursor into `QueryEvent.seq`. No secret
+    field: syslog has no HMAC signing concept, unlike the webhook path."""
+
+    __tablename__ = "siem_syslogs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    host: Mapped[str] = mapped_column(String(255))
+    port: Mapped[int] = mapped_column(default=514)
+    transport: Mapped[str] = mapped_column(String(10), default="tls")  # "tcp" | "tls" | "udp"
+    format: Mapped[str] = mapped_column(String(10), default="cef")  # "cef" | "json"
+    facility: Mapped[int] = mapped_column(default=16)  # local0
+    app_name: Mapped[str] = mapped_column(String(48), default="mantis-dns")
+    filter_decision: Mapped[str] = mapped_column(String(10), default="all")  # "all" | "block" | "allow"
+    batch_size: Mapped[int] = mapped_column(default=200)
+    flush_interval_s: Mapped[int] = mapped_column(default=30)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    last_delivered_seq: Mapped[int] = mapped_column(BigInteger, default=0)
+    last_delivered_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
 class ClientEntry(Base):
     """Client registry (design.md §20.6, Sprint 16) — the bridge between a
     raw client IP in a QueryEvent and a meaningful SIEM alert. Rows are

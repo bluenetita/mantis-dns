@@ -179,7 +179,7 @@ Scaling: add nodes behind anycast/LB. No coordination needed — pure function o
 | Shared cache | Redis Cluster | Cross-node DNS cache | Sharded + replicas | 🚧 not built |
 | Query logs | ClickHouse | Analytics, search, retention | Sharded + replicated | 🚧 Postgres instead |
 | Audit | Append-only (Postgres/ClickHouse + object archive) | Compliance | WORM archive | 🚧 not built |
-| SIEM config | PostgreSQL | Webhook endpoints, delivery state, cursor | Same as source of truth | ✅ built (§20) |
+| SIEM config | PostgreSQL | Webhook + syslog sink endpoints, delivery state, cursor | Same as source of truth | ✅ built (§20) |
 | Secrets | Vault / cloud KMS | Keys, upstream creds | HA Vault | 🚧 env vars instead |
 
 **Key principle:** the hot DNS path depends on *none* of these synchronously. It reads only the in-memory policy bundle and local cache. Control/management stores being down degrades management, not resolution.
@@ -835,18 +835,58 @@ ClientEntry {
 | Splunk | HTTP Event Collector (HEC) webhook | JSON | Set `url` to HEC endpoint, token in header via `secret` field; or use pull with Splunk's REST input |
 | Elastic (SIEM/Security) | Webhook → Logstash/Elastic Agent HTTP input | JSON | Or use pull with Filebeat HTTP poller |
 | Microsoft Sentinel | Webhook → Log Analytics Data Collector API | JSON (CEF optionally via AMA) | Azure Function as relay is optional |
-| IBM QRadar | Pull API → Universal DSM | CEF (`format=cef`) | Or syslog relay (future §20.8) |
+| IBM QRadar | Pull API → Universal DSM, or syslog | CEF (`format=cef`) | Syslog sink (§20.8) feeds QRadar's native syslog listener directly |
 | Palo Alto Cortex XSIAM | Webhook | JSON | Native HTTP event ingestion |
 | Chronicle (Google SecOps) | Webhook | JSON (UDM mapping via ingestion API) | |
 | Panther | Pull API | JSON | Native REST poller |
-| Wazuh | Pull API → `<localfile>` JSON log tailing | JSON | No generic inbound webhook receiver exists on stock Wazuh; a polling script + `<wodle name="command">` bridges pull → local log. See `integrations/wazuh/README.md`. |
+| Wazuh | Syslog sink (§20.8), or Pull API → `<localfile>` JSON log tailing | CEF via syslog, or JSON | Wazuh's built-in `<remote>` syslog listener consumes the syslog sink directly — no polling script needed. The pull-script bridge (`integrations/wazuh/README.md`) predates syslog support and remains for stock configs that don't want an inbound listener open. |
 | Any MSSP | Pull API | CEF | MSSP controls polling cadence |
 
 ---
 
-### 20.8 Future: syslog export
+### 20.8 Syslog export
 
-Syslog (RFC 5424, TLS) is a thin adapter on top of the same enriched event model — iterate the event stream, serialize as CEF, and write to a TCP/TLS socket. Not in scope for Sprint 14 but the data model is compatible. The control-plane config gains a `SiemSyslog` table parallel to `SiemWebhook`.
+**Built (Sprint 22).** RFC 5424 syslog is a thin adapter on top of the same enriched event model — iterate the event stream, serialize as CEF or JSON into the MSG field, and write to a TCP/TLS/UDP socket. The control-plane config is a `SiemSyslog` table parallel to `SiemWebhook`, with the same cursor/backoff/auto-disable delivery shape but no signing secret (syslog has no HMAC concept).
+
+```
+SiemSyslog {
+    id                  UUID
+    tenant_id           UUID | null     // null = org-wide (admin only)
+    name                string
+    host                string          // collector address (hostname or IP literal)
+    port                int             // default 514
+    transport           "tcp" | "tls" | "udp"   // default "tls"
+    format              "cef" | "json"  // default "cef"
+    facility            int             // RFC 5424 facility, default 16 (local0)
+    app_name            string          // RFC 5424 APP-NAME header field, default "mantis-dns"
+    batch_size          int             // events per delivery cycle, default 200, max 2000
+    flush_interval_s    int             // max seconds between deliveries, default 30
+    filter_decision     "all" | "block" | "allow"
+    enabled             bool
+    last_delivered_seq  int64           // this sink's own cursor into QueryEvent.seq
+    last_delivered_at   timestamp | null
+    last_error          string | null
+    consecutive_failures int            // reset to 0 on success; auto-disables at 6
+    next_retry_at       timestamp | null
+    created_at          timestamp
+}
+```
+
+**Message format.** One RFC 5424 line per event:
+
+```
+<PRI>1 TIMESTAMP HOSTNAME APP-NAME PROCID MSGID STRUCTURED-DATA MSG
+```
+
+`PRI = facility × 8 + severity`, where severity is `4` (Warning) for `decision=block` and `6` (Informational) for `decision=allow` — a block is a security-relevant decision worth flagging, not a system failure. `TIMESTAMP` is `occurred_at` in UTC with microsecond precision (`2026-07-23T14:32:01.123456Z`). `HOSTNAME`, `PROCID`, `MSGID`, and `STRUCTURED-DATA` are all NILVALUE (`-`) — the enriched event in `MSG` already carries tenant/group/client identity, which those fields would otherwise duplicate. `MSG` is the same CEF line (§20.5) or a single JSON object, per the sink's `format`.
+
+**Framing.** TCP and TLS use RFC 6587 octet-counting (`"<byte-length> <message>"` per event) so a stream receiver can split messages without a trailer scan. UDP sends one message per datagram, no framing prefix.
+
+**Transport.** TLS is the recommended default; verification uses the system CA trust store, with SNI/certificate checks against the configured hostname even though the connection itself dials a pre-resolved IP literal (closes the same DNS-rebinding TOCTOU gap `resolve_pinned_webhook_url` closes for the webhook path — see `resolve_pinned_syslog_host` in `ssrf_guard.py`). UDP is supported for collectors that only speak classic syslog, but is explicitly best-effort: no application-layer acknowledgment exists for any transport here (a TCP/TLS write success only means the collector's kernel accepted the bytes), and UDP is additionally lossy at the network layer with no delivery signal at all. The delivery cursor only advances on a successful send, so a refused/closed connection is retried like any other failure — a receiver that silently drops accepted bytes is outside what any of these transports can detect.
+
+**Host validation.** `check_probe_target_safe` (not the stricter `check_webhook_url_safe`) gates sink hosts: only loopback and link-local/cloud-metadata addresses are blocked, since self-hosted collectors are routinely on RFC-1918 addresses, same reasoning as §20.4's webhook guard.
+
+**Retention interaction.** `prune_query_events` (§6) takes the minimum `last_delivered_seq` across every *enabled* `SiemWebhook` **and** `SiemSyslog` sink as a safety bound — a row isn't pruned until every enabled sink of either kind has delivered it, same protection extended to the new sink type.
 
 ---
 
@@ -857,6 +897,7 @@ Syslog (RFC 5424, TLS) is a thin adapter on top of the same enriched event model
 | **Sprint 14** | QueryEvent enrichment (client_ip, qtype, rcode, matched_category, matched_feed_id, latency_us) in Rust filter node + Postgres schema. Pull API `/api/v1/siem/events` with cursor pagination, tenant/decision filters, JSON + CEF format. Auth gated (operator+). |
 | **Sprint 15** | `SiemWebhook` model + delivery engine (async, retry/backoff, HMAC signing). Webhook management UI in Settings. Delivery status + last-error surface. |
 | **Sprint 16** | Client registry (CRUD API + UI, auto-discovery from query events, `client_name` embedded in events). |
+| **Sprint 22** | `SiemSyslog` model + delivery engine (RFC 5424, TCP/TLS/UDP, retry/backoff, auto-disable). Syslog sink management UI in Settings, alongside webhook config. Retention safety bound extended to cover syslog cursors. See sprint-plan.md Epic N. |
 
 ---
 

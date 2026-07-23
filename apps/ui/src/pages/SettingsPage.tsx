@@ -46,6 +46,7 @@ import { useDisclosure } from "@mantine/hooks";
 import { modals } from "@mantine/modals";
 import { notifications } from "@mantine/notifications";
 import {
+  IconAntenna,
   IconCheck,
   IconChevronRight,
   IconCircleFilled,
@@ -64,16 +65,22 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import {
   useChangePassword,
+  useCreateSiemSyslogSink,
   useCreateSiemWebhook,
+  useDeleteSiemSyslogSink,
   useDeleteSiemWebhook,
+  useSiemSyslogSinks,
   useSiemWebhooks,
+  useTestSiemSyslogSink,
   useTestSiemWebhook,
+  useUpdateSiemSyslogSink,
   useUpdateSiemWebhook,
 } from "../api/hooks";
 import { API_BASE, apiUrl } from "../api/client";
 import type { components } from "../api/schema";
 
 type SiemWebhook = components["schemas"]["SiemWebhookOut"];
+type SiemSyslogSink = components["schemas"]["SiemSyslogOut"];
 
 // ─── SIEM webhook form ────────────────────────────────────────────────────────
 
@@ -134,6 +141,87 @@ function AddWebhookForm({ onDone }: { onDone: () => void }) {
         <Group justify="flex-end">
           <Button variant="default" onClick={onDone}>Cancel</Button>
           <Button type="submit" loading={createWebhook.isPending}>Add webhook</Button>
+        </Group>
+      </Stack>
+    </form>
+  );
+}
+
+// ─── SIEM syslog form ─────────────────────────────────────────────────────────
+
+function AddSyslogForm({ onDone }: { onDone: () => void }) {
+  const createSyslog = useCreateSiemSyslogSink();
+  const form = useForm({
+    initialValues: {
+      name: "",
+      host: "",
+      port: 514,
+      transport: "tls" as const,
+      format: "cef" as const,
+      facility: 16,
+      app_name: "mantis-dns",
+      batch_size: 200,
+      flush_interval_s: 30,
+      filter_decision: "all" as const,
+      enabled: true,
+    },
+    validate: {
+      name: (v) => (v.trim().length < 2 ? "Required" : null),
+      host: (v) => (v.trim().length === 0 ? "Required" : null),
+      port: (v) => (v < 1 || v > 65535 ? "Must be 1–65535" : null),
+    },
+  });
+
+  return (
+    <form
+      onSubmit={form.onSubmit((values) => {
+        createSyslog.mutate(values, {
+          onSuccess: () => {
+            notifications.show({ message: `Syslog sink "${values.name}" created`, color: "green" });
+            onDone();
+          },
+          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+        });
+      })}
+    >
+      <Stack>
+        <TextInput label="Name" placeholder="Wazuh collector" required {...form.getInputProps("name")} />
+        <SimpleGrid cols={2}>
+          <TextInput label="Host" placeholder="10.8.1.20" required {...form.getInputProps("host")} />
+          <NumberInput label="Port" min={1} max={65535} {...form.getInputProps("port")} />
+        </SimpleGrid>
+        <SimpleGrid cols={2}>
+          <Select
+            label="Transport"
+            data={[
+              { value: "tls", label: "TLS (recommended)" },
+              { value: "tcp", label: "TCP" },
+              { value: "udp", label: "UDP (best-effort, no delivery guarantee)" },
+            ]}
+            {...form.getInputProps("transport")}
+          />
+          <Select label="Format" data={[{ value: "cef", label: "CEF (ArcSight)" }, { value: "json", label: "JSON" }]} {...form.getInputProps("format")} />
+        </SimpleGrid>
+        <SimpleGrid cols={2}>
+          <NumberInput label="Facility" description="RFC 5424, default local0" min={0} max={23} {...form.getInputProps("facility")} />
+          <TextInput label="APP-NAME" description="RFC 5424 header field" {...form.getInputProps("app_name")} />
+        </SimpleGrid>
+        <Select
+          label="Event filter"
+          data={[
+            { value: "all", label: "All queries" },
+            { value: "block", label: "Blocked only" },
+            { value: "allow", label: "Allowed only" },
+          ]}
+          {...form.getInputProps("filter_decision")}
+        />
+        <SimpleGrid cols={2}>
+          <NumberInput label="Batch size" min={1} max={1000} {...form.getInputProps("batch_size")} />
+          <NumberInput label="Flush interval (s)" min={5} {...form.getInputProps("flush_interval_s")} />
+        </SimpleGrid>
+        <Group justify="flex-end">
+          <Button variant="default" onClick={onDone}>Cancel</Button>
+          <Button type="submit" loading={createSyslog.isPending}>Add syslog sink</Button>
         </Group>
       </Stack>
     </form>
@@ -308,6 +396,141 @@ function SiemSection() {
 
       <Modal opened={addOpened} onClose={closeAdd} title="Add SIEM webhook" size="lg">
         <AddWebhookForm onDone={closeAdd} />
+      </Modal>
+    </Stack>
+  );
+}
+
+// ─── SIEM syslog section ──────────────────────────────────────────────────────
+
+function SiemSyslogSection() {
+  const { data: sinks, isLoading } = useSiemSyslogSinks();
+  const updateSyslog = useUpdateSiemSyslogSink();
+  const deleteSyslog = useDeleteSiemSyslogSink();
+  const testSyslog = useTestSiemSyslogSink();
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [addOpened, { open: openAdd, close: closeAdd }] = useDisclosure(false);
+
+  function toggleEnabled(s: SiemSyslogSink) {
+    updateSyslog.mutate(
+      { syslogId: s.id, body: { enabled: !s.enabled } },
+      { onError: (e) => notifications.show({ message: String(e), color: "red" }) }
+    );
+  }
+
+  function test(s: SiemSyslogSink) {
+    setTestingId(s.id);
+    testSyslog.mutate(s.id, {
+      onSuccess: (r) =>
+        notifications.show({
+          message: r.success ? `${s.name}: sent` : `${s.name}: failed — ${r.error}`,
+          color: r.success ? "green" : "red",
+        }),
+      onError: (e) => notifications.show({ message: String(e), color: "red" }),
+      onSettled: () => setTestingId(null),
+    });
+  }
+
+  function confirmDelete(s: SiemSyslogSink) {
+    modals.openConfirmModal({
+      title: "Delete syslog sink",
+      children: <Text size="sm">Delete <strong>{s.name}</strong>? This stops all delivery to {s.host}:{s.port}.</Text>,
+      labels: { confirm: "Delete", cancel: "Cancel" },
+      confirmProps: { color: "red" },
+      onConfirm: () =>
+        deleteSyslog.mutate(s.id, {
+          onSuccess: () => notifications.show({ message: `Syslog sink "${s.name}" deleted`, color: "green" }),
+          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+        }),
+    });
+  }
+
+  return (
+    <Stack gap="md">
+      <Group justify="space-between">
+        <Stack gap={2}>
+          <Group gap={8}>
+            <ThemeIcon size="sm" variant="light" color="teal"><IconAntenna size={14} /></ThemeIcon>
+            <Text fw={600}>SIEM syslog</Text>
+          </Group>
+          <Text size="xs" c="dimmed">
+            Push enriched DNS events as RFC 5424 syslog (CEF or JSON payload) over TCP/TLS/UDP — e.g. Wazuh's native syslog listener.
+          </Text>
+        </Stack>
+        <Button size="xs" leftSection={<IconPlus size={14} />} onClick={openAdd}>
+          Add syslog sink
+        </Button>
+      </Group>
+
+      {isLoading && <Center h={80}><Loader size="sm" /></Center>}
+
+      {!isLoading && (!sinks || sinks.length === 0) && (
+        <Card withBorder padding="lg" style={{ borderStyle: "dashed" }}>
+          <Text c="dimmed" size="sm" ta="center">No syslog sinks configured. Add one to start streaming DNS events.</Text>
+        </Card>
+      )}
+
+      {sinks && sinks.length > 0 && (
+        <Table striped highlightOnHover withTableBorder withColumnBorders>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Destination</Table.Th>
+              <Table.Th w={90}>Transport</Table.Th>
+              <Table.Th w={80}>Format</Table.Th>
+              <Table.Th w={110}>Filter</Table.Th>
+              <Table.Th w={160}>Last delivery</Table.Th>
+              <Table.Th w={70}>On</Table.Th>
+              <Table.Th w={130} />
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {sinks.map((s) => (
+              <Table.Tr key={s.id}>
+                <Table.Td>
+                  <Text size="sm" fw={500}>{s.name}</Text>
+                  <Text size="xs" c="dimmed" ff="monospace">{s.host}:{s.port}</Text>
+                </Table.Td>
+                <Table.Td>
+                  <Badge size="sm" variant="light" color={s.transport === "udp" ? "orange" : "teal"}>{s.transport.toUpperCase()}</Badge>
+                </Table.Td>
+                <Table.Td>
+                  <Badge size="sm" variant="light">{s.format.toUpperCase()}</Badge>
+                </Table.Td>
+                <Table.Td>
+                  <Text size="sm">{s.filter_decision}</Text>
+                </Table.Td>
+                <Table.Td>
+                  {s.last_error ? (
+                    <Badge size="sm" color="red">{s.consecutive_failures} failures</Badge>
+                  ) : s.last_delivered_at ? (
+                    <Badge size="sm" color="green">
+                      {new Date(s.last_delivered_at).toLocaleTimeString()}
+                    </Badge>
+                  ) : (
+                    <Badge size="sm" color="gray">no deliveries yet</Badge>
+                  )}
+                </Table.Td>
+                <Table.Td>
+                  <Switch checked={s.enabled} onChange={() => toggleEnabled(s)} size="sm" />
+                </Table.Td>
+                <Table.Td>
+                  <Group gap={4} wrap="nowrap" justify="flex-end">
+                    <Button size="xs" variant="default" leftSection={<IconSend size={12} />} onClick={() => test(s)} loading={testingId === s.id}>
+                      Test
+                    </Button>
+                    <Button size="xs" variant="subtle" color="red" leftSection={<IconTrash size={12} />} onClick={() => confirmDelete(s)}>
+                      Delete
+                    </Button>
+                  </Group>
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      )}
+
+      <Modal opened={addOpened} onClose={closeAdd} title="Add syslog sink" size="lg">
+        <AddSyslogForm onDone={closeAdd} />
       </Modal>
     </Stack>
   );
@@ -548,9 +771,14 @@ export function SettingsPage() {
         <Tabs.Panel value="integrations">
           <Stack gap="md">
             {isAdmin ? (
-              <Card withBorder padding="md">
-                <SiemSection />
-              </Card>
+              <>
+                <Card withBorder padding="md">
+                  <SiemSection />
+                </Card>
+                <Card withBorder padding="md">
+                  <SiemSyslogSection />
+                </Card>
+              </>
             ) : (
               <Card withBorder padding="md">
                 <Text c="dimmed" size="sm">Admin role required to manage integrations.</Text>

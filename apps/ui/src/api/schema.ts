@@ -761,6 +761,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/siem/syslog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Syslog */
+        get: operations["list_syslog_api_v1_siem_syslog_get"];
+        put?: never;
+        /** Create Syslog */
+        post: operations["create_syslog_api_v1_siem_syslog_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/siem/syslog/{syslog_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Syslog */
+        delete: operations["delete_syslog_api_v1_siem_syslog__syslog_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Syslog */
+        patch: operations["update_syslog_api_v1_siem_syslog__syslog_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/siem/syslog/{syslog_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test Syslog
+         * @description Sends one synthetic event to the configured host, framed the same way
+         *     real batches are, without touching the sink's delivery cursor.
+         */
+        post: operations["test_syslog_api_v1_siem_syslog__syslog_id__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tenants/{tenant_id}/clients": {
         parameters: {
             query?: never;
@@ -3243,6 +3300,128 @@ export interface components {
             /** Enabled */
             enabled?: boolean | null;
         };
+        /** SiemSyslogCreate */
+        SiemSyslogCreate: {
+            /** Tenant Id */
+            tenant_id?: string | null;
+            /** Name */
+            name: string;
+            /** Host */
+            host: string;
+            /**
+             * Port
+             * @default 514
+             */
+            port: number;
+            /**
+             * Transport
+             * @default tls
+             * @enum {string}
+             */
+            transport: "tcp" | "tls" | "udp";
+            /**
+             * Format
+             * @default cef
+             * @enum {string}
+             */
+            format: "json" | "cef";
+            /**
+             * Facility
+             * @default 16
+             */
+            facility: number;
+            /**
+             * App Name
+             * @default mantis-dns
+             */
+            app_name: string;
+            /**
+             * Batch Size
+             * @default 200
+             */
+            batch_size: number;
+            /**
+             * Flush Interval S
+             * @default 30
+             */
+            flush_interval_s: number;
+            /**
+             * Filter Decision
+             * @default all
+             * @enum {string}
+             */
+            filter_decision: "all" | "block" | "allow";
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+        };
+        /** SiemSyslogOut */
+        SiemSyslogOut: {
+            /** Id */
+            id: string;
+            /** Tenant Id */
+            tenant_id: string | null;
+            /** Name */
+            name: string;
+            /** Host */
+            host: string;
+            /** Port */
+            port: number;
+            /** Transport */
+            transport: string;
+            /** Format */
+            format: string;
+            /** Facility */
+            facility: number;
+            /** App Name */
+            app_name: string;
+            /** Batch Size */
+            batch_size: number;
+            /** Flush Interval S */
+            flush_interval_s: number;
+            /** Filter Decision */
+            filter_decision: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Last Delivered At */
+            last_delivered_at: string | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Consecutive Failures */
+            consecutive_failures: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** SiemSyslogUpdate */
+        SiemSyslogUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Host */
+            host?: string | null;
+            /** Port */
+            port?: number | null;
+            /** Transport */
+            transport?: ("tcp" | "tls" | "udp") | null;
+            /** Format */
+            format?: ("json" | "cef") | null;
+            /** Facility */
+            facility?: number | null;
+            /** App Name */
+            app_name?: string | null;
+            /** Batch Size */
+            batch_size?: number | null;
+            /** Flush Interval S */
+            flush_interval_s?: number | null;
+            /** Filter Decision */
+            filter_decision?: ("all" | "block" | "allow") | null;
+            /** Enabled */
+            enabled?: boolean | null;
+        };
         /** SiemWebhookCreate */
         SiemWebhookCreate: {
             /** Tenant Id */
@@ -3348,6 +3527,13 @@ export interface components {
             assigned_addresses: number;
             /** Declined Addresses */
             declined_addresses: number;
+        };
+        /** SyslogTestResult */
+        SyslogTestResult: {
+            /** Success */
+            success: boolean;
+            /** Error */
+            error: string | null;
         };
         /** TenantCreate */
         TenantCreate: {
@@ -5167,6 +5353,154 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TestDeliveryResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_syslog_api_v1_siem_syslog_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiemSyslogOut"][];
+                };
+            };
+        };
+    };
+    create_syslog_api_v1_siem_syslog_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SiemSyslogCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiemSyslogOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_syslog_api_v1_siem_syslog__syslog_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                syslog_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_syslog_api_v1_siem_syslog__syslog_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                syslog_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SiemSyslogUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiemSyslogOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_syslog_api_v1_siem_syslog__syslog_id__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                syslog_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyslogTestResult"];
                 };
             };
             /** @description Validation Error */

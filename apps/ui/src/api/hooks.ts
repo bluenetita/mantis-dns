@@ -29,6 +29,8 @@ type FeedCreate = components["schemas"]["FeedCreate"];
 type FeedUpdate = components["schemas"]["FeedUpdate"];
 type SiemWebhookCreate = components["schemas"]["SiemWebhookCreate"];
 type SiemWebhookUpdate = components["schemas"]["SiemWebhookUpdate"];
+type SiemSyslogCreate = components["schemas"]["SiemSyslogCreate"];
+type SiemSyslogUpdate = components["schemas"]["SiemSyslogUpdate"];
 type ClientUpsert = components["schemas"]["ClientUpsert"];
 type UserCreate = components["schemas"]["UserCreate"];
 type UserUpdate = components["schemas"]["UserUpdate"];
@@ -467,6 +469,49 @@ export function useTestSiemWebhook() {
   return useMutation({
     mutationFn: async (webhookId: string) =>
       unwrap(await apiClient.POST("/api/v1/siem/webhooks/{webhook_id}/test", { params: { path: { webhook_id: webhookId } } })),
+  });
+}
+
+// --- SIEM syslog ---
+
+export function useSiemSyslogSinks() {
+  return useQuery({
+    queryKey: ["siem-syslog"],
+    queryFn: async () => unwrap(await apiClient.GET("/api/v1/siem/syslog")),
+    refetchInterval: 15_000,
+  });
+}
+
+export function useCreateSiemSyslogSink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: SiemSyslogCreate) => unwrap(await apiClient.POST("/api/v1/siem/syslog", { body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["siem-syslog"] }),
+  });
+}
+
+export function useUpdateSiemSyslogSink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ syslogId, body }: { syslogId: string; body: SiemSyslogUpdate }) =>
+      unwrap(await apiClient.PATCH("/api/v1/siem/syslog/{syslog_id}", { params: { path: { syslog_id: syslogId } }, body })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["siem-syslog"] }),
+  });
+}
+
+export function useDeleteSiemSyslogSink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (syslogId: string) =>
+      unwrap(await apiClient.DELETE("/api/v1/siem/syslog/{syslog_id}", { params: { path: { syslog_id: syslogId } } })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["siem-syslog"] }),
+  });
+}
+
+export function useTestSiemSyslogSink() {
+  return useMutation({
+    mutationFn: async (syslogId: string) =>
+      unwrap(await apiClient.POST("/api/v1/siem/syslog/{syslog_id}/test", { params: { path: { syslog_id: syslogId } } })),
   });
 }
 

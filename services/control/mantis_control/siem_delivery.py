@@ -40,10 +40,8 @@ from mantis_control.audit import write_audit_log
 from mantis_control.crypto import decrypt_secret
 from mantis_control.db import models
 from mantis_control.db.session import SessionLocal
+from mantis_control.siem_common import BACKOFF_SECONDS, MAX_CONSECUTIVE_FAILURES, as_aware
 from mantis_control.ssrf_guard import resolve_pinned_webhook_url
-
-BACKOFF_SECONDS = [5, 30, 120, 600, 3600]
-MAX_CONSECUTIVE_FAILURES = 6
 
 
 def _sign(secret: str, body: bytes) -> str:
@@ -117,20 +115,16 @@ async def deliver_test_event(webhook: models.SiemWebhook, client: httpx.AsyncCli
     return await _post(webhook, body, content_type, client, delivery_id)
 
 
-def _as_aware(dt: datetime) -> datetime:
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
-
-
 async def _process_webhook(db: Session, webhook: models.SiemWebhook, client: httpx.AsyncClient) -> None:
     now = datetime.now(timezone.utc)
 
     if webhook.next_retry_at is not None:
         # In backoff after a failure — next_retry_at supersedes flush_interval_s.
-        if _as_aware(webhook.next_retry_at) > now:
+        if as_aware(webhook.next_retry_at) > now:
             return
     elif webhook.last_delivered_at is not None:
         # Happy path: don't fire more often than the webhook's configured cadence.
-        elapsed = (now - _as_aware(webhook.last_delivered_at)).total_seconds()
+        elapsed = (now - as_aware(webhook.last_delivered_at)).total_seconds()
         if elapsed < webhook.flush_interval_s:
             return
 
