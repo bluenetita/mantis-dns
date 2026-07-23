@@ -52,6 +52,9 @@ from mantis_control.scheduler import kick_feed_now, mark_shutting_down, schedule
 from mantis_control.siem_delivery import run_webhook_delivery_cycle
 from mantis_control.siem_syslog_delivery import run_syslog_delivery_cycle
 from mantis_control.dhcp.lease_sync import sync_dhcp_leases
+from mantis_control.dhcp import kea_config
+from mantis_control.dhcp.kea_config import try_push
+from mantis_control.dhcp.kea_config6 import try_push6
 
 
 _SERVICE_ROOT = Path(__file__).resolve().parent.parent  # services/control/
@@ -140,6 +143,38 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         replace_existing=True,
     )
 
+    async def _dhcp_reconcile_job() -> None:
+        # See DHCP_RECONCILE_INTERVAL_S's docstring: Kea's subnet4/subnet6
+        # lists are runtime-only state that a kea-dhcp4/6 restart wipes
+        # independent of this control plane, so this job is the only thing
+        # that notices and repairs that drift. Skip a family entirely when
+        # its ctrl URL isn't configured (native installs without that Kea
+        # role) rather than logging a "not configured" warning every tick.
+        db = SessionLocal()
+        try:
+            if kea_config.KEA4_CTRL_URL:
+                err = await try_push(db)
+                if err:
+                    logging.getLogger(__name__).warning(
+                        "Periodic Kea DHCPv4 reconcile failed: %s", err
+                    )
+            if kea_config.KEA6_CTRL_URL:
+                err6 = await try_push6(db)
+                if err6:
+                    logging.getLogger(__name__).warning(
+                        "Periodic Kea DHCPv6 reconcile failed: %s", err6
+                    )
+        finally:
+            db.close()
+
+    scheduler.add_job(
+        _dhcp_reconcile_job,
+        "interval",
+        seconds=settings.DHCP_RECONCILE_INTERVAL_S,
+        id="dhcp-kea-reconcile",
+        replace_existing=True,
+    )
+
     def _query_event_retention_job() -> None:
         db = SessionLocal()
         try:
@@ -177,6 +212,18 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # each job's `date` trigger fires immediately with no misfire risk.
     for feed_id in enabled_feed_ids:
         kick_feed_now(feed_id)
+
+    # Same reasoning as kick_feed_now above, applied to _dhcp_reconcile_job:
+    # its recurring interval job won't tick for up to DHCP_RECONCILE_INTERVAL_S
+    # (default 5 min), so run it once immediately — this is also what covers
+    # a *control-plane* restart reconciling Kea right away, on top of the
+    # periodic job covering a *Kea* restart independent of this process.
+    scheduler.add_job(
+        _dhcp_reconcile_job,
+        id="startup-dhcp-reconcile",
+        replace_existing=True,
+        misfire_grace_time=None,
+    )
 
     try:
         yield

@@ -73,6 +73,15 @@ class Settings(BaseSettings):
 
     DHCP_LEASE_SYNC_INTERVAL_S: int = 60
 
+    # Kea's subnet4/subnet6 lists live only in the daemon's memory (pushed at
+    # runtime via subnet_cmds — see kea_config.py's module docstring), never
+    # persisted to its static conf. A kea-dhcp4/6 restart independent of this
+    # control plane (crash, host reboot, package upgrade) silently empties
+    # both lists with no other signal, so this periodic push is the only
+    # thing that notices and repairs it instead of leaving DHCP dark until
+    # someone remembers the manual /dhcp/push endpoint.
+    DHCP_RECONCILE_INTERVAL_S: int = 300
+
     # query_events has no other bound on growth — every DNS query on every
     # filter node becomes one row forever without this (see retention.py).
     # 90 days is a reasonable default log-retention window; a consuming SIEM
