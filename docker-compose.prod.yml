@@ -119,8 +119,7 @@ services:
     network_mode: host
     # Opt-in: `docker compose -f docker-compose.prod.yml --profile dhcp up -d`.
     # Left out of the default `up` (what scripts/bootstrap.sh --prod runs)
-    # because it needs MANTIS_DHCP_SERVER_IP set to a real host interface
-    # address and host networking — neither is a sane default.
+    # because it needs host networking — not a sane default.
     profiles:
       - dhcp
     environment:
@@ -129,8 +128,9 @@ services:
       - MANTIS_CTRL_URL=http://localhost:8000
       - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:?required}
       - MANTIS_FILTER_NODE_IP=${MANTIS_FILTER_NODE_IP:-}
-      # mantis-dhcp itself refuses to start without this — see the comment
-      # in docker-compose.yml for why it isn't `:?required` here.
+      # Fallback server identifier — see the comment in docker-compose.yml;
+      # mantis-dhcp starts fine without it now (only relayed/interface-less
+      # scopes need it).
       - MANTIS_DHCP_SERVER_IP=${MANTIS_DHCP_SERVER_IP:-}
       - MANTIS_DHCP_METRICS_BIND_ADDR=${MANTIS_DHCP_METRICS_BIND_ADDR:-}
     restart: unless-stopped

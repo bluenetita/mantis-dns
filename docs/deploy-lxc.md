@@ -14,12 +14,16 @@ via `docker compose --profile dhcp up -d` / `--profile dhcp6 up -d` in
 with the Rocky native installer's `INSTALL_DHCP=1` / `INSTALL_DHCP6=1` options
 when this LXC is meant to serve DHCP directly. Both talk to Postgres directly
 and report lease/DDNS events to the control plane's `/internal/dhcp-event`
-endpoint — there is no management API/port to reach or publish, unlike Kea;
-the only thing to get right is `MANTIS_DHCP_SERVER_IP` for v4 (this host's
-DHCP-serving interface address, which clients echo back on every renewal) or
-`MANTIS_DHCP6_SERVER_ID` for v6 (a stable IPv6 address used only to derive
-this server's DUID) — each daemon refuses to start without its respective
-variable.
+endpoint — there is no management API/port to reach or publish, unlike Kea.
+For v6, the only thing to get right is `MANTIS_DHCP6_SERVER_ID` (a stable
+IPv6 address used only to derive this server's DUID) — mantis-dhcp6 refuses
+to start without it. For v4, a scope with its own `interface` set gets its
+own address auto-derived from that interface at startup (`getifaddrs(3)`),
+so `MANTIS_DHCP_SERVER_IP` is only needed as a fallback — relayed traffic and
+any scope with no `interface` configured use it, and mantis-dhcp will start
+without it (just logging a warning and dropping anything that would've
+needed it) since scopes are usually configured later via the UI/API, after
+the host is already up.
 
 ## Option A — full stack, Docker Compose inside LXC
 
@@ -164,9 +168,10 @@ Set `INSTALL_FILTER=0` in the environment to skip the `mantis-filter` build
 and get management-plane-only behavior equivalent to Option C, e.g. if edge
 DNS nodes live on separate hosts.
 
-Set `INSTALL_DHCP=1` (with `MANTIS_DHCP_SERVER_IP` set to this LXC's
-DHCP-serving interface address) to build and install mantis-dhcp from source
-and create `mantis-dhcp.service`:
+Set `INSTALL_DHCP=1` (recommended: also set `MANTIS_DHCP_SERVER_IP` to this
+LXC's DHCP-serving interface address — a single-NIC LXC without per-scope
+`interface` overrides relies on it for every reply, see the note above) to
+build and install mantis-dhcp from source and create `mantis-dhcp.service`:
 
 ```
 CORS_ALLOW_ORIGINS=https://<this-host-hostname-or-ip> \

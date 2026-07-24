@@ -32,3 +32,9 @@ uuid = { version = "1", features = ["v4"] }
 # sequential scan the way v4's small pools use isn't feasible.
 rand = "0.10"
 socket2 = { version = "0.5", features = ["all"] } # "all" gates bind_device (SO_BINDTODEVICE), Linux-only regardless
+# Already resolved transitively (tokio/socket2's own dependency tree); declared
+# directly because main.rs calls getifaddrs(3) itself, to auto-derive each
+# per-interface socket's own server-identifier address (see main.rs's
+# interface_ipv4_addr) instead of stamping one global operator-configured IP
+# into every reply regardless of which subnet it's actually going out on.
+libc = "0.2"

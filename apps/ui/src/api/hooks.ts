@@ -1051,6 +1051,16 @@ export function useDhcpStats() {
   });
 }
 
+// Shared by both the v4 and v6 scope forms' `interface` picker — see
+// dhcp_routers.py's list_interfaces for why this only covers one host.
+export function useDhcpInterfaces() {
+  return useQuery({
+    queryKey: ["dhcp-interfaces"],
+    queryFn: () => rawGet<string[]>("/api/v1/dhcp/interfaces"),
+    staleTime: 60_000,
+  });
+}
+
 // ── DHCPv6 ────────────────────────────────────────────────────────────────────
 
 export interface DhcpScope6 {

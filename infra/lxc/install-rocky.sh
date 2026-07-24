@@ -32,8 +32,15 @@
 #   ENABLE_HTTPS=1          Generate/use a local self-signed cert and listen on 443
 #   INSTALL_FILTER=0        Skip mantis-filter
 #   INSTALL_DHCP=1          Build and run mantis-dhcp (native DHCPv4 server) locally
-#   MANTIS_DHCP_SERVER_IP   Required with INSTALL_DHCP=1 — this host's DHCP-serving
-#                           interface address (clients echo it back on renewal)
+#   MANTIS_DHCP_SERVER_IP   Optional with INSTALL_DHCP=1 — fallback server identifier
+#                           (option 54) for relayed traffic and any scope with no
+#                           `interface` set. A scope *with* an `interface` gets its
+#                           own address auto-derived from that interface at startup
+#                           instead (see design.md §22.1/§22.2), so this is only
+#                           actually required if some scope will be relayed or has
+#                           no `interface` configured; the script warns, not fails,
+#                           if it's unset, since scopes are configured later via the
+#                           UI/API and the script can't know that in advance.
 #   INSTALL_DHCP6=1         Build and run mantis-dhcp6 (native DHCPv6 server, RFC 8415) locally
 #   MANTIS_DHCP6_SERVER_ID  Required with INSTALL_DHCP6=1 — a stable IPv6 address used only to
 #                           derive this server's DUID (never itself handed out to a client)
@@ -68,8 +75,10 @@ fi
 REQUESTED_CORS_ALLOW_ORIGINS="$CORS_ALLOW_ORIGINS"
 INSTALL_FILTER=${INSTALL_FILTER:-1}
 INSTALL_DHCP=${INSTALL_DHCP:-0}
-if [ "$INSTALL_DHCP" = "1" ]; then
-  : "${MANTIS_DHCP_SERVER_IP:?set MANTIS_DHCP_SERVER_IP to this hosts DHCP-serving interface address (clients echo it back on every renewal)}"
+if [ "$INSTALL_DHCP" = "1" ] && [ -z "${MANTIS_DHCP_SERVER_IP:-}" ]; then
+  echo "==> MANTIS_DHCP_SERVER_IP not set -- relayed traffic and any scope with no" \
+       "'interface' configured won't get a DHCP reply until one is set and mantis-dhcp" \
+       "is restarted (a scope with 'interface' set doesn't need it -- see design.md §22.1)."
 fi
 INSTALL_DHCP6=${INSTALL_DHCP6:-0}
 if [ "$INSTALL_DHCP6" = "1" ]; then
@@ -177,7 +186,7 @@ User=mantis
 Group=mantis
 EnvironmentFile=${ENV_FILE}
 Environment=MANTIS_CTRL_URL=http://127.0.0.1:8000
-Environment=MANTIS_DHCP_SERVER_IP=${MANTIS_DHCP_SERVER_IP}
+Environment=MANTIS_DHCP_SERVER_IP=${MANTIS_DHCP_SERVER_IP:-}
 ExecStart=/usr/bin/mantis-dhcp
 Restart=on-failure
 RestartSec=2
@@ -593,7 +602,11 @@ if [ "$INSTALL_FILTER" = "1" ]; then
   echo "DNS filter listening on :53 (mantis-filter) — point clients/DHCP at this host's IP."
 fi
 if [ "$INSTALL_DHCP" = "1" ]; then
-  echo "mantis-dhcp listening on :67 (DHCPv4), serving MANTIS_DHCP_SERVER_IP=${MANTIS_DHCP_SERVER_IP}."
+  if [ -n "${MANTIS_DHCP_SERVER_IP:-}" ]; then
+    echo "mantis-dhcp listening on :67 (DHCPv4); fallback server identifier MANTIS_DHCP_SERVER_IP=${MANTIS_DHCP_SERVER_IP} (scopes with their own 'interface' set use that interface's own address instead)."
+  else
+    echo "mantis-dhcp listening on :67 (DHCPv4); MANTIS_DHCP_SERVER_IP unset -- only scopes with 'interface' set will get a valid DHCP reply until it's configured."
+  fi
 else
   echo "mantis-dhcp not installed here — run it via docker-compose.prod.yml or its own host, pointed at this Postgres directly."
 fi

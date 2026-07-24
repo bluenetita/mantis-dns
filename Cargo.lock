@@ -1325,6 +1325,7 @@ dependencies = [
  "dhcproto",
  "hex",
  "ipnet",
+ "libc",
  "rand 0.10.2",
  "reqwest",
  "serde",

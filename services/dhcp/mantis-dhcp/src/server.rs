@@ -25,6 +25,7 @@
 //! server doesn't do yet; both are additive, not correctness gaps for a
 //! single-interface-or-relayed deployment (see `db::Snapshot::find_scope_for_direct`).
 
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
@@ -44,6 +45,13 @@ pub struct Server {
     pub cfg: Arc<Config>,
     pub http: reqwest::Client,
     pub metrics: Arc<crate::metrics::Counters>,
+    /// Interface name -> that interface's own address, resolved once at
+    /// startup (`main.rs`'s `interface_ipv4_addr`) for every interface a
+    /// dedicated socket was actually bound on. Empty on non-Linux (no
+    /// per-interface sockets at all there) or if resolution failed for every
+    /// configured interface — `server_ip_for` falls back to `cfg.server_ip`
+    /// either way.
+    pub interface_server_ips: HashMap<String, Ipv4Addr>,
 }
 
 pub struct Reply {
@@ -214,6 +222,19 @@ fn find_scope<'s>(snapshot: &'s Snapshot, req: &Message, recv_interface: Option<
     }
 }
 
+/// The server identifier (option 54) to use for a packet: a dedicated
+/// per-interface socket's own resolved address if it arrived on one,
+/// otherwise `fallback` (relayed traffic, and scopes with no `interface`
+/// restriction, both always arrive with `recv_interface: None` on the
+/// wildcard socket — see `db::Snapshot::find_scope_for_direct`'s docs).
+/// `None` means neither is available; the caller must drop the packet
+/// rather than send a reply lacking a mandatory field (RFC 2131 Table 3).
+/// A free function (not a `Server` method) so it's testable without a real
+/// `PgPool` — same reasoning as `reply_dest`/`siaddr_for` below.
+fn server_ip_for(interface_server_ips: &HashMap<String, Ipv4Addr>, fallback: Option<Ipv4Addr>, recv_interface: Option<&str>) -> Option<Ipv4Addr> {
+    recv_interface.and_then(|iface| interface_server_ips.get(iface).copied()).or(fallback)
+}
+
 impl Server {
     /// `recv_interface` identifies which socket the packet arrived on — see
     /// `db::Snapshot::find_scope_for_direct`'s docs. `None` for the wildcard
@@ -223,6 +244,15 @@ impl Server {
         self.metrics.record(mtype);
         let snapshot = self.snapshot.load();
         let scope = find_scope(&snapshot, req, recv_interface)?;
+        let Some(server_ip) = server_ip_for(&self.interface_server_ips, self.cfg.server_ip, recv_interface) else {
+            tracing::warn!(
+                "no server identifier available for scope {} ({} recv_interface={recv_interface:?}) -- \
+                 set MANTIS_DHCP_SERVER_IP as a fallback, or fix that interface's own address; \
+                 dropping the {mtype:?}",
+                scope.id, scope.name
+            );
+            return None;
+        };
         let mac = mac_from_chaddr(req);
         let client_id = match req.opts().get(OptionCode::ClientIdentifier) {
             Some(DhcpOption::ClientIdentifier(bytes)) => Some(hex::encode(bytes)),
@@ -236,12 +266,14 @@ impl Server {
         let custom_options = snapshot.custom_options_for(&scope.id, reservation.as_ref());
 
         let result = match mtype {
-            MessageType::Discover => self.handle_discover(req, scope, &mac, reservation.as_ref(), &custom_options).await,
+            MessageType::Discover => {
+                self.handle_discover(req, scope, &mac, reservation.as_ref(), &custom_options, server_ip).await
+            }
             MessageType::Request => {
                 // A REQUEST addressed to a different server (SELECTING
                 // state) must be silently ignored, not ACK'd/NAK'd by us
                 // too — see `server_identifier`'s docs.
-                if server_identifier(req).is_some_and(|sid| sid != self.cfg.server_ip) {
+                if server_identifier(req).is_some_and(|sid| sid != server_ip) {
                     None
                 } else {
                     self.handle_request(
@@ -252,6 +284,7 @@ impl Server {
                         requested_hostname.as_deref(),
                         reservation.as_ref(),
                         &custom_options,
+                        server_ip,
                     )
                     .await
                 }
@@ -262,7 +295,7 @@ impl Server {
                 // different server (e.g. a client that broadcast rather than
                 // unicast its RELEASE) rather than tearing down a lease this
                 // server still considers ours. Same guard v6 already applies.
-                if server_identifier(req).is_some_and(|sid| sid != self.cfg.server_ip) {
+                if server_identifier(req).is_some_and(|sid| sid != server_ip) {
                     None
                 } else {
                     match db::release(&self.pool, &scope.id, &mac).await {
@@ -285,7 +318,7 @@ impl Server {
                 }
                 None
             }
-            MessageType::Inform => self.handle_inform(req, scope, &custom_options).await,
+            MessageType::Inform => self.handle_inform(req, scope, &custom_options, server_ip).await,
             _ => None,
         };
 
@@ -300,6 +333,7 @@ impl Server {
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_discover(
         &self,
         req: &Message,
@@ -307,6 +341,7 @@ impl Server {
         mac: &str,
         reservation: Option<&db::Reservation>,
         custom_options: &[db::CustomOption],
+        server_ip: Ipv4Addr,
     ) -> Option<Reply> {
         let offer_ip = if let Some(res) = reservation {
             res.ip_address
@@ -321,7 +356,7 @@ impl Server {
             }
         };
 
-        let mut opts = options::build(scope, self.cfg.server_ip, self.cfg.filter_node_ip);
+        let mut opts = options::build(scope, server_ip, self.cfg.filter_node_ip);
         options::apply_custom(&mut opts, custom_options);
         let mut reply = base_reply(req, offer_ip, siaddr_for(scope, reservation), MessageType::Offer, opts);
         if let Some(file) = select_boot_filename(scope, reservation, is_uefi_client(req)) {
@@ -392,6 +427,7 @@ impl Server {
         hostname: Option<&str>,
         reservation: Option<&db::Reservation>,
         custom_options: &[db::CustomOption],
+        server_ip: Ipv4Addr,
     ) -> Option<Reply> {
         let lease_s = scope.lease_time_s.max(1) as i64;
         let want = requested_ip(req).or_else(|| (req.ciaddr() != Ipv4Addr::UNSPECIFIED).then_some(req.ciaddr()));
@@ -438,14 +474,14 @@ impl Server {
         };
 
         let Some(ip) = granted else {
-            return Some(Reply { message: nak_reply(req, self.cfg.server_ip), dest: nak_dest(req) });
+            return Some(Reply { message: nak_reply(req, server_ip), dest: nak_dest(req) });
         };
 
         if scope.ddns_enabled {
             self.notify_ddns("add", scope, ip, effective_hostname, mac).await;
         }
 
-        let mut opts = options::build(scope, self.cfg.server_ip, self.cfg.filter_node_ip);
+        let mut opts = options::build(scope, server_ip, self.cfg.filter_node_ip);
         options::apply_custom(&mut opts, custom_options);
         let mut reply = base_reply(req, ip, siaddr_for(scope, reservation), MessageType::Ack, opts);
         if let Some(file) = select_boot_filename(scope, reservation, is_uefi_client(req)) {
@@ -454,11 +490,17 @@ impl Server {
         Some(Reply { message: reply, dest: reply_dest(req) })
     }
 
-    async fn handle_inform(&self, req: &Message, scope: &Scope, custom_options: &[db::CustomOption]) -> Option<Reply> {
+    async fn handle_inform(
+        &self,
+        req: &Message,
+        scope: &Scope,
+        custom_options: &[db::CustomOption],
+        server_ip: Ipv4Addr,
+    ) -> Option<Reply> {
         // RFC 2131 §4.3.5: an INFORM reply MUST NOT carry a lease expiration
         // time (`build_inform` strips options 51/58/59) — the client already
         // has its address and is only asking for configuration parameters.
-        let mut opts = options::build_inform(scope, self.cfg.server_ip, self.cfg.filter_node_ip);
+        let mut opts = options::build_inform(scope, server_ip, self.cfg.filter_node_ip);
         options::apply_custom(&mut opts, custom_options);
         let reply = base_reply(req, Ipv4Addr::UNSPECIFIED, Ipv4Addr::UNSPECIFIED, MessageType::Ack, opts);
         Some(Reply { message: reply, dest: reply_dest(req) })
@@ -554,6 +596,36 @@ mod tests {
         let ciaddr: Ipv4Addr = "10.1.2.3".parse().unwrap();
         let m = msg(ciaddr, Ipv4Addr::UNSPECIFIED, &[0; 6], false);
         assert_eq!(reply_dest(&m), SocketAddr::new(ciaddr.into(), 68));
+    }
+
+    #[test]
+    fn server_ip_for_prefers_the_receiving_interfaces_own_address() {
+        let mut ifaces = HashMap::new();
+        ifaces.insert("eth1".to_string(), "192.168.1.5".parse().unwrap());
+        let fallback: Ipv4Addr = "10.0.0.5".parse().unwrap();
+        assert_eq!(server_ip_for(&ifaces, Some(fallback), Some("eth1")), Some("192.168.1.5".parse().unwrap()));
+    }
+
+    #[test]
+    fn server_ip_for_falls_back_when_the_interface_has_no_resolved_address() {
+        let ifaces = HashMap::new();
+        let fallback: Ipv4Addr = "10.0.0.5".parse().unwrap();
+        assert_eq!(server_ip_for(&ifaces, Some(fallback), Some("eth1")), Some(fallback));
+    }
+
+    #[test]
+    fn server_ip_for_falls_back_on_the_wildcard_socket() {
+        let mut ifaces = HashMap::new();
+        ifaces.insert("eth1".to_string(), "192.168.1.5".parse().unwrap());
+        let fallback: Ipv4Addr = "10.0.0.5".parse().unwrap();
+        assert_eq!(server_ip_for(&ifaces, Some(fallback), None), Some(fallback));
+    }
+
+    #[test]
+    fn server_ip_for_none_when_nothing_resolves_and_no_fallback_configured() {
+        let ifaces = HashMap::new();
+        assert_eq!(server_ip_for(&ifaces, None, Some("eth1")), None);
+        assert_eq!(server_ip_for(&ifaces, None, None), None);
     }
 
     #[test]

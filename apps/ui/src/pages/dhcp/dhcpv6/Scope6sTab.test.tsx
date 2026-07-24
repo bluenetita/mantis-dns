@@ -22,6 +22,7 @@ import { renderWithProviders } from "../../../test/utils";
 import {
   useCreateDhcpScope6,
   useDeleteDhcpScope6,
+  useDhcpInterfaces,
   useDhcpScopes6,
   useUpdateDhcpScope6,
   type DhcpScope6,
@@ -36,6 +37,7 @@ vi.mock("../../../api/hooks", async (importOriginal) => {
     useCreateDhcpScope6: vi.fn(),
     useUpdateDhcpScope6: vi.fn(),
     useDeleteDhcpScope6: vi.fn(),
+    useDhcpInterfaces: vi.fn(),
   };
 });
 
@@ -47,6 +49,7 @@ const mockUseDhcpScopes6 = useDhcpScopes6 as MockedFunction<typeof useDhcpScopes
 const mockUseCreateDhcpScope6 = useCreateDhcpScope6 as MockedFunction<typeof useCreateDhcpScope6>;
 const mockUseUpdateDhcpScope6 = useUpdateDhcpScope6 as MockedFunction<typeof useUpdateDhcpScope6>;
 const mockUseDeleteDhcpScope6 = useDeleteDhcpScope6 as MockedFunction<typeof useDeleteDhcpScope6>;
+const mockUseDhcpInterfaces = useDhcpInterfaces as MockedFunction<typeof useDhcpInterfaces>;
 
 const tenantOptions = [{ value: "t1", label: "Acme" }];
 
@@ -86,6 +89,7 @@ beforeEach(() => {
   mockUseCreateDhcpScope6.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
   mockUseUpdateDhcpScope6.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
   mockUseDeleteDhcpScope6.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
+  mockUseDhcpInterfaces.mockReturnValue({ data: ["eth0", "eth1"], isLoading: false } as never);
 });
 
 describe("Scope6sTab", () => {
@@ -114,14 +118,15 @@ describe("Scope6sTab", () => {
     expect(screen.getByLabelText(/^Name/)).toHaveValue("");
   });
 
-  it("has a free-text interface field", async () => {
+  it("offers the fetched interfaces in the interface dropdown", async () => {
     const user = userEvent.setup();
     mockUseDhcpScopes6.mockReturnValue({ data: [], isLoading: false } as never);
     renderWithProviders(<Scope6sTab tenantOptions={tenantOptions} />);
     await user.click(screen.getByRole("button", { name: /add scope/i }));
-    const field = await screen.findByLabelText(/^Interface/);
-    await user.type(field, "eth2");
-    expect(field).toHaveValue("eth2");
+    const field = await screen.findByRole("combobox", { name: /^Interface/ });
+    await user.click(field);
+    await user.click(await screen.findByText("eth1"));
+    expect(field).toHaveValue("eth1");
   });
 
   it("deletes a scope after confirming, via modals.openConfirmModal", async () => {

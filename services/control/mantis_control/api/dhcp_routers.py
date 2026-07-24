@@ -25,6 +25,7 @@ allocation state), not a separate daemon's schema.
 from __future__ import annotations
 
 import logging
+import socket
 from datetime import datetime
 from ipaddress import ip_address
 from typing import Any
@@ -559,3 +560,22 @@ def dhcp_stats(
             declined_addresses=c.declined if c else 0,
         ))
     return result
+
+
+# ── Network interfaces (for the scope form's `interface` picker) ──────────────
+
+@router.get("/interfaces", response_model=list[str])
+def list_interfaces(user: Any = Depends(require_role("viewer"))) -> list[str]:
+    """Interface names on *this* (the control plane's) host, for the scope
+    form's `interface` dropdown -- shared by both the v4 and v6 forms, since
+    a scope's `interface` value is just the name mantis-dhcp passes straight
+    to SO_BINDTODEVICE (v4) at startup.
+
+    This only reflects the control plane's own host. In the common
+    single-host deployment that's also where mantis-dhcp runs, so the list
+    is accurate; a scope pointed at a second, separate mantis-dhcp host's
+    interface (design.md §22.6's multi-host HA) won't show up here -- the
+    field still accepts free text typed directly for that case, this
+    endpoint only supplies the convenience list.
+    """
+    return sorted(name for _, name in socket.if_nameindex())

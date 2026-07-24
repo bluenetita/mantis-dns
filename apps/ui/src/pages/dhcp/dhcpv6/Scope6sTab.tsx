@@ -25,6 +25,7 @@ import { useState } from "react";
 import {
   useCreateDhcpScope6,
   useDeleteDhcpScope6,
+  useDhcpInterfaces,
   useDhcpScopes6,
   useUpdateDhcpScope6,
   type DhcpScope6,
@@ -44,6 +45,13 @@ function Scope6Form({
   onCancel: () => void;
   saving: boolean;
 }) {
+  const { data: interfaces } = useDhcpInterfaces();
+  // Keep the current value selectable even if it's not in the fetched list
+  // (e.g. a scope pointed at a second mantis-dhcp host's interface).
+  const interfaceOptions = Array.from(
+    new Set([...(interfaces ?? []), ...(initial?.interface ? [initial.interface] : [])]),
+  );
+
   const form = useForm({
     initialValues: {
       tenant_id: initial?.tenant_id ?? "",
@@ -101,10 +109,15 @@ function Scope6Form({
         </Group>
         <TextInput label="DNS servers" placeholder="2001:4860:4860::8888" {...form.getInputProps("dns_servers")} />
         <TextInput label="Domain name" {...form.getInputProps("domain_name")} />
-        <TextInput
+        <Select
           label="Interface (optional)"
-          placeholder="eth0 — empty serves all interfaces"
+          placeholder="All interfaces"
+          description="mantis-dhcp6 doesn't bind per-interface sockets yet (design.md §22.9) — setting this excludes the scope from direct-attach (unrelayed) traffic entirely; leave blank unless this scope is relay-only"
+          data={interfaceOptions}
+          searchable
+          clearable
           {...form.getInputProps("interface")}
+          onChange={(value) => form.setFieldValue("interface", value ?? "")}
         />
         <Group grow>
           <NumberInput label="Preferred lifetime (s)" min={60} {...form.getInputProps("preferred_lifetime_s")} />

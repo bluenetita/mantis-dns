@@ -1321,6 +1321,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dhcp/interfaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Interfaces
+         * @description Interface names on *this* (the control plane's) host, for the scope
+         *     form's `interface` dropdown -- shared by both the v4 and v6 forms, since
+         *     a scope's `interface` value is just the name mantis-dhcp passes straight
+         *     to SO_BINDTODEVICE (v4) at startup.
+         *
+         *     This only reflects the control plane's own host. In the common
+         *     single-host deployment that's also where mantis-dhcp runs, so the list
+         *     is accurate; a scope pointed at a second, separate mantis-dhcp host's
+         *     interface (design.md §22.6's multi-host HA) won't show up here -- the
+         *     field still accepts free text typed directly for that case, this
+         *     endpoint only supplies the convenience list.
+         */
+        get: operations["list_interfaces_api_v1_dhcp_interfaces_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/internal/dhcp-event": {
         parameters: {
             query?: never;
@@ -6791,6 +6821,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubnetStatOut"][];
+                };
+            };
+        };
+    };
+    list_interfaces_api_v1_dhcp_interfaces_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
                 };
             };
         };

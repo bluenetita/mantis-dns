@@ -22,6 +22,7 @@ import { renderWithProviders } from "../../test/utils";
 import {
   useCreateDhcpScope,
   useDeleteDhcpScope,
+  useDhcpInterfaces,
   useDhcpScopes,
   useUpdateDhcpScope,
   type DhcpScope,
@@ -36,6 +37,7 @@ vi.mock("../../api/hooks", async (importOriginal) => {
     useCreateDhcpScope: vi.fn(),
     useUpdateDhcpScope: vi.fn(),
     useDeleteDhcpScope: vi.fn(),
+    useDhcpInterfaces: vi.fn(),
   };
 });
 
@@ -47,6 +49,7 @@ const mockUseDhcpScopes = useDhcpScopes as MockedFunction<typeof useDhcpScopes>;
 const mockUseCreateDhcpScope = useCreateDhcpScope as MockedFunction<typeof useCreateDhcpScope>;
 const mockUseUpdateDhcpScope = useUpdateDhcpScope as MockedFunction<typeof useUpdateDhcpScope>;
 const mockUseDeleteDhcpScope = useDeleteDhcpScope as MockedFunction<typeof useDeleteDhcpScope>;
+const mockUseDhcpInterfaces = useDhcpInterfaces as MockedFunction<typeof useDhcpInterfaces>;
 
 const tenantOptions = [{ value: "t1", label: "Acme" }];
 const zoneOptions = [{ value: "z1", label: "corp.local" }];
@@ -91,6 +94,7 @@ beforeEach(() => {
   mockUseCreateDhcpScope.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
   mockUseUpdateDhcpScope.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
   mockUseDeleteDhcpScope.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
+  mockUseDhcpInterfaces.mockReturnValue({ data: ["eth0", "eth1"], isLoading: false } as never);
 });
 
 describe("ScopesTab", () => {
@@ -119,14 +123,27 @@ describe("ScopesTab", () => {
     expect(screen.getByLabelText(/^Name/)).toHaveValue("");
   });
 
-  it("has a free-text interface field", async () => {
+  it("offers the fetched interfaces in the interface dropdown", async () => {
     const user = userEvent.setup();
     mockUseDhcpScopes.mockReturnValue({ data: [], isLoading: false } as never);
     renderWithProviders(<ScopesTab tenantOptions={tenantOptions} zoneOptions={zoneOptions} />);
     await user.click(screen.getByRole("button", { name: /add scope/i }));
-    const field = await screen.findByLabelText(/^Interface/);
-    await user.type(field, "eth1");
+    const field = await screen.findByRole("combobox", { name: /^Interface/ });
+    await user.click(field);
+    await user.click(await screen.findByText("eth1"));
     expect(field).toHaveValue("eth1");
+  });
+
+  it("keeps a scope's existing interface selectable even if it's not in the fetched list", async () => {
+    const user = userEvent.setup();
+    mockUseDhcpScopes.mockReturnValue({
+      data: [makeScope({ id: "s1", interface: "eth9" })],
+      isLoading: false,
+    } as never);
+    renderWithProviders(<ScopesTab tenantOptions={tenantOptions} zoneOptions={zoneOptions} />);
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const field = await screen.findByRole("combobox", { name: /^Interface/ });
+    expect(field).toHaveValue("eth9");
   });
 
   it("opens the edit modal prefilled with the scope's values", async () => {

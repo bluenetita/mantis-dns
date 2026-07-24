@@ -25,6 +25,7 @@ import { useState } from "react";
 import {
   useCreateDhcpScope,
   useDeleteDhcpScope,
+  useDhcpInterfaces,
   useDhcpScopes,
   useUpdateDhcpScope,
   type DhcpScope,
@@ -46,6 +47,13 @@ function ScopeForm({
   onCancel: () => void;
   saving: boolean;
 }) {
+  const { data: interfaces } = useDhcpInterfaces();
+  // Keep the current value selectable even if it's not in the fetched list
+  // (e.g. a scope pointed at a second mantis-dhcp host's interface).
+  const interfaceOptions = Array.from(
+    new Set([...(interfaces ?? []), ...(initial?.interface ? [initial.interface] : [])]),
+  );
+
   const form = useForm({
     initialValues: {
       tenant_id: initial?.tenant_id ?? "",
@@ -152,10 +160,15 @@ function ScopeForm({
             {...form.getInputProps("pxe_uefi_boot_filename")}
           />
         </Group>
-        <TextInput
+        <Select
           label="Interface (optional)"
-          placeholder="eth0 — empty serves all interfaces"
+          placeholder="All interfaces"
+          description="Binds a dedicated socket to this interface at startup — a daemon restart is needed after changing it"
+          data={interfaceOptions}
+          searchable
+          clearable
           {...form.getInputProps("interface")}
+          onChange={(value) => form.setFieldValue("interface", value ?? "")}
         />
         <Switch label="Enabled" {...form.getInputProps("enabled", { type: "checkbox" })} />
         <Group justify="flex-end" mt="sm">

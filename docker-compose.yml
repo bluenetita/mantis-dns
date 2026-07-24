@@ -95,8 +95,7 @@ services:
     network_mode: host
     # Opt-in: `docker compose --profile dhcp up -d`. Left out of the default
     # `docker compose up` (what scripts/bootstrap.sh runs) because it needs
-    # MANTIS_DHCP_SERVER_IP set to a real host interface address and host
-    # networking — neither is a sane default for someone just trying the DNS
+    # host networking — not a sane default for someone just trying the DNS
     # filtering stack.
     profiles:
       - dhcp
@@ -106,12 +105,13 @@ services:
       - MANTIS_CTRL_URL=http://localhost:8000
       - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
       - MANTIS_FILTER_NODE_IP=${MANTIS_FILTER_NODE_IP:-}
-      # mantis-dhcp itself refuses to start without this (clients echo it
-      # back on every renewal, so it must be the real DHCP-serving
-      # interface's address) — not enforced with compose's `:?required`
-      # here, since compose interpolates every service's env unconditionally
-      # even when `dhcp` isn't in the active --profile, which would break
-      # the default `docker compose up` for everyone else.
+      # Fallback server identifier (option 54) for relayed traffic and any
+      # scope with no `interface` set — a scope *with* one gets its own
+      # address auto-derived from that interface at startup instead (see
+      # config.rs's `server_ip` docs), so mantis-dhcp now starts fine without
+      # this (just warns and drops anything that would've needed it). Still
+      # worth setting for a typical single-NIC host with no per-scope
+      # `interface` overrides, where every reply falls back to it.
       - MANTIS_DHCP_SERVER_IP=${MANTIS_DHCP_SERVER_IP:-}
       # Opt-in Prometheus /metrics listener, e.g. 127.0.0.1:9101 — blank (default) disables it.
       - MANTIS_DHCP_METRICS_BIND_ADDR=${MANTIS_DHCP_METRICS_BIND_ADDR:-}

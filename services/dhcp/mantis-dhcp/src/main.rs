@@ -24,8 +24,14 @@
 //! multi-subnet direct-attach setups (`bind_interface_socket` below) is
 //! Linux-only (`SO_BINDTODEVICE`) — on other platforms only the wildcard
 //! socket runs, same single-candidate behavior as before (see
-//! db::Snapshot::find_scope_for_direct).
+//! db::Snapshot::find_scope_for_direct). Each bound interface's own address
+//! is auto-derived (`interface_ipv4_addr`, `getifaddrs(3)`) for that
+//! interface's server-identifier option instead of using one global address
+//! for every reply regardless of which subnet it's actually going out on —
+//! see config.rs's `server_ip` docs and `server::server_ip_for`.
 
+use std::collections::HashMap;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -39,7 +45,11 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let cfg = Arc::new(config::Config::from_env()?);
-    tracing::info!("mantis-dhcp starting: bind={} server_ip={}", cfg.bind_addr, cfg.server_ip);
+    tracing::info!(
+        "mantis-dhcp starting: bind={} server_ip={}",
+        cfg.bind_addr,
+        cfg.server_ip.map(|ip| ip.to_string()).unwrap_or_else(|| "<unset>".to_string())
+    );
 
     let pool = PgPoolOptions::new()
         .max_connections(10)
@@ -117,27 +127,28 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    let srv = server::Server {
-        pool,
-        snapshot,
-        cfg: cfg.clone(),
-        http: reqwest::Client::new(),
-        metrics: metrics_counters,
-    };
-
     // One socket per distinct scope `interface` (Linux: SO_BINDTODEVICE),
     // bound once at startup — a scope interface added later needs a
     // restart to get its own dedicated socket, same as most DHCP servers'
-    // interface config. Each gets its own background task; the wildcard
-    // socket (relayed traffic, and scopes with no `interface` set) runs in
-    // the foreground below and keeps the process alive.
+    // interface config. Resolved and bound *before* constructing `Server`,
+    // since it carries the completed interface -> address map every clone
+    // of it (one per socket task, plus the wildcard one) shares.
+    let mut interface_sockets = Vec::new();
+    let mut interface_server_ips: HashMap<String, Ipv4Addr> = HashMap::new();
     for iface in &interfaces {
+        let Some(addr) = interface_ipv4_addr(iface) else {
+            tracing::warn!(
+                "could not determine {iface:?}'s own IPv4 address — skipping its dedicated socket; \
+                 direct-attach traffic on it will only be served if it's the sole interface-less scope \
+                 (see db::Snapshot::find_scope_for_direct), using MANTIS_DHCP_SERVER_IP if set"
+            );
+            continue;
+        };
         match bind_interface_socket(&cfg.bind_addr, iface) {
             Ok(socket) => {
-                tracing::info!("bound dedicated DHCP socket on interface {iface:?}");
-                let srv = srv.clone();
-                let iface = iface.clone();
-                tokio::spawn(async move { socket_loop(socket, srv, Some(iface)).await });
+                tracing::info!("bound dedicated DHCP socket on interface {iface:?}, server_ip={addr}");
+                interface_server_ips.insert(iface.clone(), addr);
+                interface_sockets.push((socket, iface.clone()));
             }
             Err(e) => tracing::warn!(
                 "could not bind a dedicated socket for interface {iface:?} ({e}) — \
@@ -147,9 +158,73 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    if cfg.server_ip.is_none() {
+        tracing::warn!(
+            "MANTIS_DHCP_SERVER_IP is not set — relayed traffic and any scope with no `interface` \
+             restriction will get no DHCP reply at all (option 54 is mandatory and there's no \
+             fallback); scopes served through a dedicated per-interface socket with a \
+             successfully-resolved address are unaffected"
+        );
+    }
+
+    let srv = server::Server {
+        pool,
+        snapshot,
+        cfg: cfg.clone(),
+        http: reqwest::Client::new(),
+        metrics: metrics_counters,
+        interface_server_ips,
+    };
+
+    // Each dedicated socket gets its own background task; the wildcard
+    // socket (relayed traffic, and scopes with no `interface` set) runs in
+    // the foreground below and keeps the process alive.
+    for (socket, iface) in interface_sockets {
+        let srv = srv.clone();
+        tokio::spawn(async move { socket_loop(socket, srv, Some(iface)).await });
+    }
+
     let wildcard = bind_socket(&cfg.bind_addr)?;
     socket_loop(wildcard, srv, None).await;
     Ok(())
+}
+
+/// This interface's own IPv4 address (`getifaddrs(3)`), for the server
+/// identifier a dedicated per-interface socket's replies should carry — see
+/// config.rs's `server_ip` docs. `None` if the interface has no IPv4 address
+/// configured at all, or (non-Linux) unconditionally, since per-interface
+/// sockets themselves are Linux-only (`bind_interface_socket` below).
+#[cfg(target_os = "linux")]
+fn interface_ipv4_addr(name: &str) -> Option<Ipv4Addr> {
+    use std::ffi::CStr;
+
+    unsafe {
+        let mut ifap: *mut libc::ifaddrs = std::ptr::null_mut();
+        if libc::getifaddrs(&mut ifap) != 0 {
+            return None;
+        }
+        let mut cur = ifap;
+        let mut found = None;
+        while !cur.is_null() {
+            let ifa = &*cur;
+            if !ifa.ifa_addr.is_null()
+                && i32::from((*ifa.ifa_addr).sa_family) == libc::AF_INET
+                && CStr::from_ptr(ifa.ifa_name).to_str() == Ok(name)
+            {
+                let sockaddr_in = &*(ifa.ifa_addr as *const libc::sockaddr_in);
+                found = Some(Ipv4Addr::from(u32::from_be(sockaddr_in.sin_addr.s_addr)));
+                break;
+            }
+            cur = ifa.ifa_next;
+        }
+        libc::freeifaddrs(ifap);
+        found
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn interface_ipv4_addr(_name: &str) -> Option<Ipv4Addr> {
+    None
 }
 
 fn distinct_interfaces(scopes: &[db::Scope]) -> Vec<String> {

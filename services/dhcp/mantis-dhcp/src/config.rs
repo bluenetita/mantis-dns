@@ -18,12 +18,20 @@ use std::net::Ipv4Addr;
 pub struct Config {
     pub database_url: String,
     pub bind_addr: String,
-    /// This server's own address, sent as DHCP option 54 (server identifier)
-    /// and used as the PXE `siaddr` fallback. Unlike a DNS/filter node, a
-    /// DHCP server's IP genuinely can't be inferred from a 0.0.0.0 bind —
-    /// clients echo this address back in every renewal, so it must be the
-    /// real interface IP the DHCP broadcast domain resolves to.
-    pub server_ip: Ipv4Addr,
+    /// Fallback server identifier (option 54) for traffic that isn't
+    /// dispatched through a dedicated per-interface socket: relayed traffic
+    /// (arrives on the wildcard socket regardless of which of this host's
+    /// interfaces it came in on) and any scope with no `interface`
+    /// restriction. A scope *with* an `interface` gets its own dedicated
+    /// socket's own address auto-derived at startup instead (`main.rs`'s
+    /// `interface_ipv4_addr`, via `getifaddrs(3)`) — a single global address
+    /// is wrong for that case whenever the interface's subnet differs from
+    /// this one, since a client's later unicast RENEW targets whatever
+    /// address it was handed here. `None` is valid (e.g. every scope has its
+    /// own `interface` and none are relayed) but risky: anything that does
+    /// fall back to it gets no reply at all rather than a wrong one — see
+    /// `Server::server_ip_for`.
+    pub server_ip: Option<Ipv4Addr>,
     pub control_url: String,
     pub internal_token: String,
     /// Fallback DNS server pushed to clients (option 6) when a scope has no
@@ -54,9 +62,13 @@ impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         let database_url = std::env::var("DATABASE_URL")
             .map_err(|_| anyhow::anyhow!("DATABASE_URL is required"))?;
-        let server_ip: Ipv4Addr = std::env::var("MANTIS_DHCP_SERVER_IP")
-            .map_err(|_| anyhow::anyhow!("MANTIS_DHCP_SERVER_IP is required (this host's DHCP-serving interface address; clients echo it back on every renewal, so it can't be inferred from a 0.0.0.0 bind)"))?
-            .parse()?;
+        // Optional now -- see `server_ip`'s docs. Still worth setting on any
+        // deployment that relays or has an interface-less scope; main.rs
+        // warns at startup if it's unset and looks like it'll be needed.
+        let server_ip: Option<Ipv4Addr> = match std::env::var("MANTIS_DHCP_SERVER_IP") {
+            Ok(v) if !v.is_empty() => Some(v.parse()?),
+            _ => None,
+        };
         let filter_node_ip = match std::env::var("MANTIS_FILTER_NODE_IP") {
             Ok(v) if !v.is_empty() => Some(v.parse()?),
             _ => None,
