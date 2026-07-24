@@ -235,6 +235,31 @@ fn server_ip_for(interface_server_ips: &HashMap<String, Ipv4Addr>, fallback: Opt
     recv_interface.and_then(|iface| interface_server_ips.get(iface).copied()).or(fallback)
 }
 
+/// The DNS server (option 6) to push when a scope has no `dns_servers` of its
+/// own. `filter_node_ip` is a single configured address, which is off-subnet —
+/// and so unreachable — on every interface but the one it names. When it's the
+/// *co-located* filter (its IP is one of this host's own addresses), the filter
+/// listens on all of them, so hand out the same per-interface address already
+/// used as this packet's server identifier (`server_ip`) — the one reachable on
+/// the client's own link. A `filter_node_ip` pointing at a *separate* host is
+/// passed through verbatim (routing, not on-link, gets the client there).
+fn dns_fallback_for(
+    interface_server_ips: &HashMap<String, Ipv4Addr>,
+    global_server_ip: Option<Ipv4Addr>,
+    filter_node_ip: Option<Ipv4Addr>,
+    server_ip: Ipv4Addr,
+) -> Option<Ipv4Addr> {
+    match filter_node_ip {
+        Some(fip)
+            if global_server_ip == Some(fip)
+                || interface_server_ips.values().any(|a| *a == fip) =>
+        {
+            Some(server_ip)
+        }
+        other => other,
+    }
+}
+
 impl Server {
     /// `recv_interface` identifies which socket the packet arrived on — see
     /// `db::Snapshot::find_scope_for_direct`'s docs. `None` for the wildcard
@@ -375,7 +400,8 @@ impl Server {
             }
         };
 
-        let mut opts = options::build(scope, server_ip, self.cfg.filter_node_ip);
+        let fallback_dns = dns_fallback_for(&self.interface_server_ips, self.cfg.server_ip, self.cfg.filter_node_ip, server_ip);
+        let mut opts = options::build(scope, server_ip, fallback_dns);
         options::apply_custom(&mut opts, custom_options);
         let mut reply = base_reply(req, offer_ip, siaddr_for(scope, reservation), MessageType::Offer, opts);
         if let Some(file) = select_boot_filename(scope, reservation, is_uefi_client(req)) {
@@ -500,7 +526,8 @@ impl Server {
             self.notify_ddns("add", scope, ip, effective_hostname, mac).await;
         }
 
-        let mut opts = options::build(scope, server_ip, self.cfg.filter_node_ip);
+        let fallback_dns = dns_fallback_for(&self.interface_server_ips, self.cfg.server_ip, self.cfg.filter_node_ip, server_ip);
+        let mut opts = options::build(scope, server_ip, fallback_dns);
         options::apply_custom(&mut opts, custom_options);
         let mut reply = base_reply(req, ip, siaddr_for(scope, reservation), MessageType::Ack, opts);
         if let Some(file) = select_boot_filename(scope, reservation, is_uefi_client(req)) {
@@ -519,7 +546,8 @@ impl Server {
         // RFC 2131 §4.3.5: an INFORM reply MUST NOT carry a lease expiration
         // time (`build_inform` strips options 51/58/59) — the client already
         // has its address and is only asking for configuration parameters.
-        let mut opts = options::build_inform(scope, server_ip, self.cfg.filter_node_ip);
+        let fallback_dns = dns_fallback_for(&self.interface_server_ips, self.cfg.server_ip, self.cfg.filter_node_ip, server_ip);
+        let mut opts = options::build_inform(scope, server_ip, fallback_dns);
         options::apply_custom(&mut opts, custom_options);
         let reply = base_reply(req, Ipv4Addr::UNSPECIFIED, Ipv4Addr::UNSPECIFIED, MessageType::Ack, opts);
         Some(Reply { message: reply, dest: reply_dest(req) })
@@ -645,6 +673,44 @@ mod tests {
         let ifaces = HashMap::new();
         assert_eq!(server_ip_for(&ifaces, None, Some("eth1")), None);
         assert_eq!(server_ip_for(&ifaces, None, None), None);
+    }
+
+    #[test]
+    fn dns_fallback_tracks_the_interface_when_filter_is_co_located() {
+        // filter_node_ip == this host's eth0 address => co-located filter,
+        // reachable on every interface. A client on eth1 must get eth1's
+        // address (server_ip), not eth0's off-subnet one.
+        let mut ifaces = HashMap::new();
+        ifaces.insert("eth0".to_string(), "10.0.0.1".parse().unwrap());
+        ifaces.insert("eth1".to_string(), "192.168.1.1".parse().unwrap());
+        let filter: Ipv4Addr = "10.0.0.1".parse().unwrap();
+        let eth1_ip: Ipv4Addr = "192.168.1.1".parse().unwrap();
+        assert_eq!(dns_fallback_for(&ifaces, None, Some(filter), eth1_ip), Some(eth1_ip));
+    }
+
+    #[test]
+    fn dns_fallback_matches_co_location_against_the_global_server_ip_too() {
+        let ifaces = HashMap::new();
+        let filter: Ipv4Addr = "10.0.0.1".parse().unwrap();
+        let eth1_ip: Ipv4Addr = "192.168.1.1".parse().unwrap();
+        assert_eq!(dns_fallback_for(&ifaces, Some(filter), Some(filter), eth1_ip), Some(eth1_ip));
+    }
+
+    #[test]
+    fn dns_fallback_passes_through_a_separate_filter_host_verbatim() {
+        // filter_node_ip belongs to no interface of this host => external
+        // resolver, reached by routing; hand it out unchanged on every link.
+        let mut ifaces = HashMap::new();
+        ifaces.insert("eth1".to_string(), "192.168.1.1".parse().unwrap());
+        let filter: Ipv4Addr = "9.9.9.9".parse().unwrap();
+        let eth1_ip: Ipv4Addr = "192.168.1.1".parse().unwrap();
+        assert_eq!(dns_fallback_for(&ifaces, None, Some(filter), eth1_ip), Some(filter));
+    }
+
+    #[test]
+    fn dns_fallback_none_when_unconfigured() {
+        let ifaces = HashMap::new();
+        assert_eq!(dns_fallback_for(&ifaces, None, None, "10.0.0.1".parse().unwrap()), None);
     }
 
     #[test]
