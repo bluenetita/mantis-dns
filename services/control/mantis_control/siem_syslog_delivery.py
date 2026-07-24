@@ -21,9 +21,9 @@ model. TCP/TLS use RFC 6587 octet-counting framing so a stream receiver can
 split messages without a trailer scan; UDP sends one message per datagram
 (no framing prefix, per convention).
 
-Same cursor/backoff/auto-disable shape as siem_delivery.py, run on its own
-scheduler tick (see main.py) so a stalled syslog collector can't affect
-webhook delivery or vice versa.
+Cursor/backoff/auto-disable bookkeeping is shared with the webhook sink in
+siem_common.py, run on its own scheduler tick (see main.py) so a stalled
+syslog collector can't affect webhook delivery or vice versa.
 
 Delivery guarantee note: TCP/TLS write success only means the collector's
 kernel accepted the bytes — syslog has no application-layer acknowledgment,
@@ -40,16 +40,13 @@ from __future__ import annotations
 import asyncio
 import socket
 import ssl
-from datetime import datetime, timedelta, timezone
+from datetime import timezone
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from mantis_control.api.siem_routers import SiemEvent, _to_cef, build_siem_events
-from mantis_control.audit import write_audit_log
+from mantis_control.api.siem_routers import SiemEvent, _to_cef
 from mantis_control.db import models
-from mantis_control.db.session import SessionLocal
-from mantis_control.siem_common import BACKOFF_SECONDS, MAX_CONSECUTIVE_FAILURES, as_aware
+from mantis_control.siem_common import build_test_event, process_delivery_sink, run_delivery_cycle
 from mantis_control.ssrf_guard import resolve_pinned_syslog_host
 
 _CONNECT_TIMEOUT_S = 10.0
@@ -58,14 +55,6 @@ _CONNECT_TIMEOUT_S = 10.0
 # but not a system failure, so Warning rather than Error; allow is routine.
 _SEVERITY = {"block": 4, "allow": 6}  # Warning / Informational
 _DEFAULT_SEVERITY = 6
-
-
-def describe_error(e: Exception) -> str:
-    """`str(asyncio.TimeoutError())` (the common failure mode here — a dead
-    or firewalled collector) is `""`, which would otherwise leave
-    `last_error` blank and give an admin nothing to diagnose a stuck sink
-    with. Falls back to the exception's type name whenever str() is empty."""
-    return str(e) or type(e).__name__
 
 
 def _to_syslog_line(sink: models.SiemSyslog, e: SiemEvent) -> str:
@@ -132,99 +121,13 @@ async def _send(sink: models.SiemSyslog, events: list[SiemEvent]) -> None:
 
 
 async def deliver_test_event(sink: models.SiemSyslog) -> None:
-    """One synthetic event, used by the Settings UI's "send test event"
-    button. Never touches the sink's real delivery cursor."""
-    now = datetime.now(timezone.utc)
-    fake = SiemEvent(
-        id="00000000-0000-0000-0000-000000000000",
-        seq=0,
-        occurred_at=now,
-        tenant_id=sink.tenant_id,
-        group_id="test",
-        client_ip="203.0.113.1",
-        client_name="test-client",
-        qname="siem-test-event.mantis.local.",
-        qtype="A",
-        decision="block",
-        matched_rule="category",
-        matched_category="test",
-        matched_feed_id="mantis-test",
-        response_code="NXDomain",
-        cache_hit=False,
-        latency_us=1234,
-    )
+    fake = build_test_event(sink.tenant_id)
     await _send(sink, [fake])
 
 
 async def _process_syslog(db: Session, sink: models.SiemSyslog) -> None:
-    now = datetime.now(timezone.utc)
-
-    if sink.next_retry_at is not None:
-        if as_aware(sink.next_retry_at) > now:
-            return
-    elif sink.last_delivered_at is not None:
-        elapsed = (now - as_aware(sink.last_delivered_at)).total_seconds()
-        if elapsed < sink.flush_interval_s:
-            return
-
-    query = select(models.QueryEvent).where(models.QueryEvent.seq > sink.last_delivered_seq)
-    if sink.tenant_id:
-        query = query.where(models.QueryEvent.tenant_id == sink.tenant_id)
-    if sink.filter_decision != "all":
-        query = query.where(models.QueryEvent.decision == sink.filter_decision)
-    query = query.order_by(models.QueryEvent.seq.asc()).limit(sink.batch_size)
-    rows = list(db.execute(query).scalars().all())
-    if not rows:
-        return
-    events = build_siem_events(db, rows)
-
-    try:
-        await _send(sink, events)
-    except Exception as e:
-        sink.consecutive_failures += 1
-        sink.last_error = describe_error(e)[:2000]
-        backoff_idx = min(sink.consecutive_failures - 1, len(BACKOFF_SECONDS) - 1)
-        sink.next_retry_at = now + timedelta(seconds=BACKOFF_SECONDS[backoff_idx])
-        if sink.consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-            sink.enabled = False
-            write_audit_log(
-                db,
-                "siem_syslog.disabled",
-                "siem_syslog",
-                sink.id,
-                detail=f"disabled after {sink.consecutive_failures} consecutive failures: {sink.last_error}",
-                actor="system",
-            )
-        db.commit()
-        return
-
-    sink.last_delivered_seq = events[-1].seq
-    sink.last_delivered_at = now
-    sink.consecutive_failures = 0
-    sink.last_error = None
-    sink.next_retry_at = None
-    db.commit()
+    await process_delivery_sink(db, sink, send=lambda events: _send(sink, events), resource_type="siem_syslog")
 
 
 async def run_syslog_delivery_cycle() -> None:
-    db = SessionLocal()
-    try:
-        sink_ids = [
-            s.id for s in db.query(models.SiemSyslog).filter(models.SiemSyslog.enabled.is_(True)).all()
-        ]
-    finally:
-        db.close()
-    if not sink_ids:
-        return
-
-    for sink_id in sink_ids:
-        db = SessionLocal()
-        try:
-            sink = db.get(models.SiemSyslog, sink_id)
-            if sink is None or not sink.enabled:
-                continue
-            await _process_syslog(db, sink)
-        except Exception:
-            db.rollback()
-        finally:
-            db.close()
+    await run_delivery_cycle(models.SiemSyslog, _process_syslog)

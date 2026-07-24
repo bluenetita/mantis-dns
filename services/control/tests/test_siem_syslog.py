@@ -34,11 +34,8 @@ from mantis_control.api.siem_syslog_routers import (
     update_syslog,
 )
 from mantis_control.db.models import AuditLog, Base, QueryEvent, SiemSyslog
-from mantis_control.siem_syslog_delivery import (
-    _process_syslog,
-    _to_syslog_line,
-    describe_error,
-)
+from mantis_control.siem_common import describe_error
+from mantis_control.siem_syslog_delivery import _process_syslog, _to_syslog_line
 
 
 def _event(**overrides) -> SiemEvent:
@@ -267,6 +264,26 @@ async def test_process_syslog_filters_by_decision(db, monkeypatch):
 
     assert sink.last_delivered_seq == 2
     assert len(sent[0]) == 1
+
+
+async def test_process_syslog_filtered_no_matches_still_advances_cursor(db, monkeypatch):
+    """A filter_decision="block" sink on an allow-only window must not rescan
+    the same growing span forever — the cursor should jump to the newest seq
+    even though nothing matched (regression: previously `return`ed with the
+    cursor untouched)."""
+    _query_event(db, seq=1, decision="allow")
+    _query_event(db, seq=2, decision="allow")
+    sink = _sink(filter_decision="block")
+    db.add(sink)
+    db.commit()
+
+    send_mock = AsyncMock()
+    monkeypatch.setattr("mantis_control.siem_syslog_delivery._send", send_mock)
+
+    await _process_syslog(db, sink)
+
+    send_mock.assert_not_called()
+    assert sink.last_delivered_seq == 2
 
 
 # ─── router validation ─────────────────────────────────────────────────────

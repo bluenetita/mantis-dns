@@ -106,19 +106,17 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     finally:
         db.close()
 
-    scheduler.add_job(
-        run_webhook_delivery_cycle,
-        "interval",
-        seconds=10,
-        id="siem-webhook-delivery",
-        replace_existing=True,
-    )
+    async def _run_siem_delivery_cycles() -> None:
+        # Both sinks poll the same QueryEvent table on the same cadence —
+        # one job for both instead of two identical scheduler entries.
+        await run_webhook_delivery_cycle()
+        await run_syslog_delivery_cycle()
 
     scheduler.add_job(
-        run_syslog_delivery_cycle,
+        _run_siem_delivery_cycles,
         "interval",
         seconds=10,
-        id="siem-syslog-delivery",
+        id="siem-delivery",
         replace_existing=True,
     )
 

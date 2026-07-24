@@ -122,7 +122,10 @@ def _cef_ext(value: str) -> str:
         .replace("=", "\\=")
         .replace("\n", "\\n")
         .replace("\r", "\\r")
-        .replace(" ", "\\s")   # Unicode LINE SEPARATOR — some parsers split on it
+        # Not a standard CEF escape (no defined encoding for these two
+        # code points) — deliberately lossy, just enough that a
+        # line-based parser downstream doesn't split a value on them.
+        .replace(" ", "\\s")   # Unicode LINE SEPARATOR
         .replace(" ", "\\s")   # Unicode PARAGRAPH SEPARATOR
     )
 
@@ -202,7 +205,12 @@ def list_siem_events(
     events = build_siem_events(db, rows)
 
     if format == "cef":
-        return PlainTextResponse("\n".join(_to_cef(e) for e in events), media_type="text/plain")
+        # CEF has no cursor field of its own (deviceExternalId carries the
+        # event id, not seq) — expose the same pagination cursor the JSON
+        # format returns in-body as a header, so a CEF-consuming poller can
+        # still page through the backlog.
+        headers = {"X-Mantis-Next-Cursor": str(rows[-1].seq)} if has_more else {}
+        return PlainTextResponse("\n".join(_to_cef(e) for e in events), media_type="text/plain", headers=headers)
 
     return SiemEventsPage(
         events=events,

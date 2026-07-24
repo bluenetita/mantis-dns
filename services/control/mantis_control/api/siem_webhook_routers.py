@@ -31,10 +31,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from mantis_control.audit import write_audit_log
-from mantis_control.auth import check_tenant_access, require_role, user_tenant_filter
+from mantis_control.auth import require_role, user_tenant_filter
 from mantis_control.crypto import encrypt_secret
 from mantis_control.db import models
 from mantis_control.db.session import get_db
+from mantis_control.siem_common import get_sink_or_404
 from mantis_control.siem_delivery import deliver_test_event
 from mantis_control.ssrf_guard import check_webhook_url_safe
 
@@ -138,11 +139,7 @@ def update_webhook(
     db: Session = Depends(get_db),
     admin: models.User = Depends(require_role("admin")),
 ) -> models.SiemWebhook:
-    webhook = db.get(models.SiemWebhook, webhook_id)
-    if webhook is None:
-        raise HTTPException(404, "webhook not found")
-    if webhook.tenant_id is not None:
-        check_tenant_access(admin, webhook.tenant_id)
+    webhook = get_sink_or_404(db, models.SiemWebhook, webhook_id, admin, not_found_msg="webhook not found")
 
     changes = payload.model_dump(exclude_unset=True, exclude={"secret"})
     if "url" in changes:
@@ -171,11 +168,7 @@ def delete_webhook(
     db: Session = Depends(get_db),
     admin: models.User = Depends(require_role("admin")),
 ) -> None:
-    webhook = db.get(models.SiemWebhook, webhook_id)
-    if webhook is None:
-        raise HTTPException(404, "webhook not found")
-    if webhook.tenant_id is not None:
-        check_tenant_access(admin, webhook.tenant_id)
+    webhook = get_sink_or_404(db, models.SiemWebhook, webhook_id, admin, not_found_msg="webhook not found")
     write_audit_log(db, "siem_webhook.delete", "siem_webhook", webhook.id, detail=f"name={webhook.name}", actor=admin.email, tenant_id=webhook.tenant_id)
     db.delete(webhook)
     db.commit()
@@ -189,11 +182,7 @@ async def test_webhook(
 ) -> TestDeliveryResult:
     """Sends one synthetic event to the configured URL, signed the same way
     real batches are, without touching the webhook's delivery cursor."""
-    webhook = db.get(models.SiemWebhook, webhook_id)
-    if webhook is None:
-        raise HTTPException(404, "webhook not found")
-    if webhook.tenant_id is not None:
-        check_tenant_access(admin, webhook.tenant_id)
+    webhook = get_sink_or_404(db, models.SiemWebhook, webhook_id, admin, not_found_msg="webhook not found")
 
     async with httpx.AsyncClient() as client:
         try:

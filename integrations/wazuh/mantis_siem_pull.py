@@ -81,15 +81,12 @@ def write_cursor(state_file: Path, cursor: str) -> None:
 def append_events(output_file: Path, events: list[dict]) -> None:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(output_file), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-    try:
-        with os.fdopen(fd, "a") as f:
-            for event in events:
-                f.write(json.dumps(event, separators=(",", ":")))
-                f.write("\n")
-            f.flush()
-            os.fsync(f.fileno())
-    finally:
-        pass  # os.fdopen's context manager already closed fd
+    with os.fdopen(fd, "a") as f:
+        for event in events:
+            f.write(json.dumps(event, separators=(",", ":")))
+            f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def run(args: argparse.Namespace) -> int:
@@ -101,6 +98,7 @@ def run(args: argparse.Namespace) -> int:
     cursor = read_cursor(state_file)
     total = 0
     pages = 0
+    relogin_attempted = False
     while True:
         params = {"limit": args.limit, "format": "json"}
         if cursor:
@@ -114,8 +112,12 @@ def run(args: argparse.Namespace) -> int:
         try:
             page = _get_json(url, token)
         except urllib.error.HTTPError as e:
-            if e.code == 401 and not args.token:
-                # Token expired mid-run (12h TTL) — re-login once and retry this page.
+            if e.code == 401 and not args.token and not relogin_attempted:
+                # Token expired mid-run (12h TTL) — re-login once and retry
+                # this page. Capped at one attempt: a 401 that survives a
+                # fresh login means something other than expiry (revoked
+                # account, role change) and would otherwise loop forever.
+                relogin_attempted = True
                 token = login(api_base, args.email, args.password)
                 continue
             raise
@@ -124,16 +126,21 @@ def run(args: argparse.Namespace) -> int:
         if events:
             append_events(output_file, events)
             total += len(events)
+            # Checkpoint after every non-empty page, not just when the
+            # server reports more pages remain — a backlog that fits in one
+            # page (the common case) would otherwise never persist a
+            # cursor, and the next run would re-fetch and re-append
+            # everything from scratch.
+            cursor = str(events[-1]["seq"])
+            write_cursor(state_file, cursor)
 
         next_cursor = page.get("next_cursor")
-        if next_cursor:
-            write_cursor(state_file, next_cursor)
-            cursor = next_cursor
-            pages += 1
-            if pages >= args.max_pages:
-                break
-            continue
-        break
+        if not next_cursor:
+            break
+        cursor = next_cursor
+        pages += 1
+        if pages >= args.max_pages:
+            break
 
     if args.verbose:
         print(f"mantis_siem_pull: wrote {total} event(s) across {pages} page(s)", file=sys.stderr)

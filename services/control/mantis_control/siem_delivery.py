@@ -20,6 +20,9 @@ own `flush_interval_s` (that field governs how much a webhook batches
 before considering itself "caught up" — not how often this loop checks).
 HMAC-signed, retried with exponential backoff, auto-disables after too many
 consecutive failures so a dead SIEM endpoint can't accumulate silently.
+
+Cursor/backoff/auto-disable bookkeeping is shared with the syslog sink in
+siem_common.py — this module only supplies the "how to send a batch" part.
 """
 
 from __future__ import annotations
@@ -28,19 +31,16 @@ import asyncio
 import hashlib
 import hmac
 import json as jsonlib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import httpx
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from mantis_control.api.siem_routers import SiemEvent, _to_cef, build_siem_events
-from mantis_control.audit import write_audit_log
+from mantis_control.api.siem_routers import SiemEvent, _to_cef
 from mantis_control.crypto import decrypt_secret
 from mantis_control.db import models
-from mantis_control.db.session import SessionLocal
-from mantis_control.siem_common import BACKOFF_SECONDS, MAX_CONSECUTIVE_FAILURES, as_aware
+from mantis_control.siem_common import build_test_event, process_delivery_sink, run_delivery_cycle
 from mantis_control.ssrf_guard import resolve_pinned_webhook_url
 
 
@@ -88,112 +88,25 @@ async def _post(webhook: models.SiemWebhook, body: bytes, content_type: str, cli
 
 
 async def deliver_test_event(webhook: models.SiemWebhook, client: httpx.AsyncClient) -> int:
-    """One synthetic event, used by the Settings UI's "send test event"
-    button. Never touches the webhook's real delivery cursor or the client
-    registry — deliberately not a real ClientEntry lookup."""
-    now = datetime.now(timezone.utc)
-    fake = SiemEvent(
-        id="00000000-0000-0000-0000-000000000000",
-        seq=0,
-        occurred_at=now,
-        tenant_id=webhook.tenant_id,
-        group_id="test",
-        client_ip="203.0.113.1",
-        client_name="test-client",
-        qname="siem-test-event.mantis.local.",
-        qtype="A",
-        decision="block",
-        matched_rule="category",
-        matched_category="test",
-        matched_feed_id="mantis-test",
-        response_code="NXDomain",
-        cache_hit=False,
-        latency_us=1234,
-    )
+    fake = build_test_event(webhook.tenant_id)
     delivery_id = str(uuid4())
     body, content_type = _serialize_events(webhook, [fake], delivery_id)
     return await _post(webhook, body, content_type, client, delivery_id)
 
 
 async def _process_webhook(db: Session, webhook: models.SiemWebhook, client: httpx.AsyncClient) -> None:
-    now = datetime.now(timezone.utc)
-
-    if webhook.next_retry_at is not None:
-        # In backoff after a failure — next_retry_at supersedes flush_interval_s.
-        if as_aware(webhook.next_retry_at) > now:
-            return
-    elif webhook.last_delivered_at is not None:
-        # Happy path: don't fire more often than the webhook's configured cadence.
-        elapsed = (now - as_aware(webhook.last_delivered_at)).total_seconds()
-        if elapsed < webhook.flush_interval_s:
-            return
-
-    query = select(models.QueryEvent).where(models.QueryEvent.seq > webhook.last_delivered_seq)
-    if webhook.tenant_id:
-        query = query.where(models.QueryEvent.tenant_id == webhook.tenant_id)
-    if webhook.filter_decision != "all":
-        query = query.where(models.QueryEvent.decision == webhook.filter_decision)
-    query = query.order_by(models.QueryEvent.seq.asc()).limit(webhook.batch_size)
-    rows = list(db.execute(query).scalars().all())
-    if not rows:
-        return
-    events = build_siem_events(db, rows)
-
-    try:
+    async def send(events: list[SiemEvent]) -> None:
         delivery_id = str(uuid4())
         body, content_type = _serialize_events(webhook, events, delivery_id)
         await _post(webhook, body, content_type, client, delivery_id)
-    except Exception as e:
-        webhook.consecutive_failures += 1
-        webhook.last_error = str(e)[:2000]
-        backoff_idx = min(webhook.consecutive_failures - 1, len(BACKOFF_SECONDS) - 1)
-        webhook.next_retry_at = now + timedelta(seconds=BACKOFF_SECONDS[backoff_idx])
-        if webhook.consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-            webhook.enabled = False
-            write_audit_log(
-                db,
-                "siem_webhook.disabled",
-                "siem_webhook",
-                webhook.id,
-                detail=f"disabled after {webhook.consecutive_failures} consecutive failures: {webhook.last_error}",
-                actor="system",
-            )
-        db.commit()
-        return
 
-    webhook.last_delivered_seq = events[-1].seq
-    webhook.last_delivered_at = now
-    webhook.consecutive_failures = 0
-    webhook.last_error = None
-    webhook.next_retry_at = None
-    db.commit()
+    await process_delivery_sink(db, webhook, send=send, resource_type="siem_webhook")
 
 
 async def run_webhook_delivery_cycle() -> None:
-    db = SessionLocal()
-    try:
-        webhook_ids = [
-            w.id for w in db.query(models.SiemWebhook).filter(models.SiemWebhook.enabled.is_(True)).all()
-        ]
-    finally:
-        db.close()
-    if not webhook_ids:
-        return
-
-    # One connection per webhook, held only for that webhook's read + POST +
-    # write — not one connection pinned across every webhook's HTTP call.
-    # A shared connection here would sit checked-out from the pool for the
-    # combined duration of all deliveries (up to 10s each), starving other
-    # requests (e.g. bundle-compile) of pool connections.
+    # One shared client for the whole cycle (its own internal connection
+    # pooling) — separate from the DB session, which run_delivery_cycle
+    # opens fresh per webhook so one slow delivery can't hold a pooled DB
+    # connection for the combined duration of every webhook in this tick.
     async with httpx.AsyncClient() as client:
-        for webhook_id in webhook_ids:
-            db = SessionLocal()
-            try:
-                webhook = db.get(models.SiemWebhook, webhook_id)
-                if webhook is None or not webhook.enabled:
-                    continue
-                await _process_webhook(db, webhook, client)
-            except Exception:
-                db.rollback()
-            finally:
-                db.close()
+        await run_delivery_cycle(models.SiemWebhook, lambda db, webhook: _process_webhook(db, webhook, client))
