@@ -1360,11 +1360,10 @@ export interface paths {
         };
         /**
          * Dhcp Health
-         * @description Every mantis-dhcp/mantis-dhcp6 instance that's reported in recently
-         *     enough to still have a row (`DhcpDaemonHeartbeat`'s docstring) -- a
-         *     daemon that's been down longer than its own pruning window simply has no
-         *     row at all, rather than one stuck showing `stale`. `operator`, not
-         *     `viewer`: this exposes hostnames/topology, not tenant-scoped data.
+         * @description Every mantis-dhcp/mantis-dhcp6 instance that has ever reported in
+         *     (`DhcpDaemonHeartbeat`'s docstring — one row per `(hostname, family)`,
+         *     never auto-pruned). `operator`, not `viewer`: this exposes
+         *     hostnames/topology, not tenant-scoped data.
          */
         get: operations["dhcp_health_api_v1_dhcp_health_get"];
         put?: never;
