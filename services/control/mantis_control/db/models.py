@@ -730,3 +730,22 @@ class DhcpLease6(Base):
     state: Mapped[int] = mapped_column(default=0)
     allocated_at: Mapped[datetime] = mapped_column(default=_now)
     expires_at: Mapped[datetime] = mapped_column(index=True)
+
+
+class DhcpDaemonHeartbeat(Base):
+    """Liveness signal for a running mantis-dhcp/mantis-dhcp6 instance
+    (design.md §22.11) — otherwise a crashed or bootlooping daemon has no
+    way to show up anywhere in the control plane; the lease/utilisation
+    numbers just stop updating silently. `instance_id` is a fresh UUID the
+    daemon generates at its own startup (not persisted anywhere else), so a
+    restarted process is a new row; the daemon prunes its own stale rows
+    (same family, past a staleness threshold) on every heartbeat tick, so
+    this table doesn't need a separate sweep job."""
+
+    __tablename__ = "dhcp_daemon_heartbeats"
+
+    instance_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    family: Mapped[str] = mapped_column(String(1), index=True)  # "4" | "6"
+    hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(default=_now)
+    last_seen_at: Mapped[datetime] = mapped_column(default=_now)

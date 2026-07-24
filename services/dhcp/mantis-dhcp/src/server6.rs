@@ -254,9 +254,20 @@ impl Server {
         self.metrics.record(mtype);
 
         let snapshot = self.snapshot.load();
-        let scope = find_scope(&snapshot, link_addr, recv_interface)?;
-        let cid = client_id(req)?;
+        let Some(cid) = client_id(req) else {
+            tracing::debug!(
+                "{mtype:?} (link_addr={link_addr:?}, recv_interface={recv_interface:?}): no ClientId, dropping"
+            );
+            return None;
+        };
         let duid_hex = hex::encode(&cid);
+        let Some(scope) = find_scope(&snapshot, link_addr, recv_interface) else {
+            tracing::debug!(
+                "{mtype:?} from {duid_hex} (link_addr={link_addr:?}, recv_interface={recv_interface:?}): no scope matched, dropping"
+            );
+            return None;
+        };
+        tracing::debug!("{mtype:?} from {duid_hex}, scope {} ({})", scope.name, scope.id);
 
         // RFC 8415 §16 message-validation: the Server Identifier option's
         // presence rules differ per message type, and a violation MUST be
@@ -266,6 +277,10 @@ impl Server {
             // else is addressed to a different server (or malformed).
             MessageType::Request | MessageType::Renew | MessageType::Release | MessageType::Decline => {
                 if server_id(req).as_deref() != Some(self.cfg.server_duid.as_slice()) {
+                    tracing::debug!(
+                        "scope {}: {mtype:?} from {duid_hex} names a different (or no) Server Identifier, dropping",
+                        scope.name
+                    );
                     return None;
                 }
             }
@@ -274,12 +289,20 @@ impl Server {
             // malformed.
             MessageType::Solicit | MessageType::Confirm | MessageType::Rebind => {
                 if server_id(req).is_some() {
+                    tracing::debug!(
+                        "scope {}: {mtype:?} from {duid_hex} unexpectedly carries a Server Identifier, dropping",
+                        scope.name
+                    );
                     return None;
                 }
             }
             // MAY carry a Server Identifier; if it does, it must be ours
             // (a mismatch means it's directed at a different server).
             MessageType::InformationRequest if server_id(req).is_some_and(|sid| sid != self.cfg.server_duid) => {
+                tracing::debug!(
+                    "scope {}: INFORMATION-REQUEST from {duid_hex} names a different Server Identifier, dropping",
+                    scope.name
+                );
                 return None;
             }
             _ => {}
@@ -300,8 +323,12 @@ impl Server {
             _ => None,
         };
 
-        if let Some(reply) = &result {
-            self.metrics.record(reply.msg_type());
+        match &result {
+            Some(reply) => {
+                self.metrics.record(reply.msg_type());
+                tracing::debug!("scope {}: {:?} to {duid_hex}", scope.name, reply.msg_type());
+            }
+            None => tracing::debug!("scope {}: no reply for {mtype:?} from {duid_hex}", scope.name),
         }
         result
     }

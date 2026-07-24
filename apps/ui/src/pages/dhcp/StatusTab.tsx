@@ -16,13 +16,59 @@
  */
 
 import { Badge, Card, Group, Loader, Progress, Stack, Table, Text, Title } from "@mantine/core";
-import { useDhcpStats } from "../../api/hooks";
+import { useDhcpHealth, useDhcpStats } from "../../api/hooks";
+
+function timeAgo(iso: string): string {
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(`${iso}Z`).getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  return `${Math.round(seconds / 3600)}h ago`;
+}
 
 export function StatusTab() {
   const { data: stats = [], isLoading: statsLoading } = useDhcpStats();
+  const { data: instances = [], isLoading: healthLoading } = useDhcpHealth();
 
   return (
     <Stack gap="lg">
+      <Card withBorder p="md">
+        <Title order={5} mb="sm">DHCP daemon health</Title>
+        {healthLoading ? (
+          <Loader size="xs" />
+        ) : instances.length === 0 ? (
+          <Text c="dimmed" size="sm">
+            No mantis-dhcp/mantis-dhcp6 instance has reported in — either none is running, or none has been up long
+            enough for its first heartbeat yet.
+          </Text>
+        ) : (
+          <Table striped>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Family</Table.Th>
+                <Table.Th>Host</Table.Th>
+                <Table.Th>Started</Table.Th>
+                <Table.Th>Last seen</Table.Th>
+                <Table.Th>Status</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {instances.map((i) => (
+                <Table.Tr key={i.instance_id}>
+                  <Table.Td>DHCPv{i.family}</Table.Td>
+                  <Table.Td>{i.hostname ?? <Text c="dimmed" size="xs">unknown</Text>}</Table.Td>
+                  <Table.Td>{timeAgo(i.started_at)}</Table.Td>
+                  <Table.Td>{timeAgo(i.last_seen_at)}</Table.Td>
+                  <Table.Td>
+                    {i.stale
+                      ? <Badge size="xs" color="red">Not responding</Badge>
+                      : <Badge size="xs" color="green">Online</Badge>}
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        )}
+      </Card>
       <Card withBorder p="md">
         <Title order={5} mb="sm">Subnet utilisation</Title>
         {statsLoading ? (

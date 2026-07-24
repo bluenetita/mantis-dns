@@ -243,17 +243,24 @@ impl Server {
         let mtype = message_type(req)?;
         self.metrics.record(mtype);
         let snapshot = self.snapshot.load();
-        let scope = find_scope(&snapshot, req, recv_interface)?;
+        let mac = mac_from_chaddr(req);
+        let Some(scope) = find_scope(&snapshot, req, recv_interface) else {
+            tracing::debug!(
+                "{mtype:?} from {mac} (recv_interface={recv_interface:?}, giaddr={}): no scope matched, dropping",
+                req.giaddr()
+            );
+            return None;
+        };
+        tracing::debug!("{mtype:?} from {mac}, scope {} ({})", scope.name, scope.id);
         let Some(server_ip) = server_ip_for(&self.interface_server_ips, self.cfg.server_ip, recv_interface) else {
             tracing::warn!(
                 "no server identifier available for scope {} ({} recv_interface={recv_interface:?}) -- \
                  set MANTIS_DHCP_SERVER_IP as a fallback, or fix that interface's own address; \
-                 dropping the {mtype:?}",
+                 dropping the {mtype:?} from {mac}",
                 scope.id, scope.name
             );
             return None;
         };
-        let mac = mac_from_chaddr(req);
         let client_id = match req.opts().get(OptionCode::ClientIdentifier) {
             Some(DhcpOption::ClientIdentifier(bytes)) => Some(hex::encode(bytes)),
             _ => None,
@@ -274,6 +281,10 @@ impl Server {
                 // state) must be silently ignored, not ACK'd/NAK'd by us
                 // too — see `server_identifier`'s docs.
                 if server_identifier(req).is_some_and(|sid| sid != server_ip) {
+                    tracing::debug!(
+                        "scope {}: REQUEST from {mac} names a different Server Identifier, ignoring",
+                        scope.name
+                    );
                     None
                 } else {
                     self.handle_request(
@@ -296,6 +307,10 @@ impl Server {
                 // unicast its RELEASE) rather than tearing down a lease this
                 // server still considers ours. Same guard v6 already applies.
                 if server_identifier(req).is_some_and(|sid| sid != server_ip) {
+                    tracing::debug!(
+                        "scope {}: RELEASE from {mac} names a different Server Identifier, ignoring",
+                        scope.name
+                    );
                     None
                 } else {
                     match db::release(&self.pool, &scope.id, &mac).await {
@@ -325,10 +340,14 @@ impl Server {
         // Records OFFER/ACK/NAK — whatever the reply actually turned out to
         // be (e.g. a REQUEST can yield either an ACK or a NAK), rather than
         // assuming from the incoming message type alone.
-        if let Some(reply) = &result {
-            if let Some(reply_type) = message_type(&reply.message) {
-                self.metrics.record(reply_type);
+        match &result {
+            Some(reply) => {
+                if let Some(reply_type) = message_type(&reply.message) {
+                    self.metrics.record(reply_type);
+                    tracing::debug!("scope {}: {reply_type:?} to {mac} ({})", scope.name, reply.dest);
+                }
             }
+            None => tracing::debug!("scope {}: no reply for {mtype:?} from {mac}", scope.name),
         }
         result
     }

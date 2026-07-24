@@ -1351,6 +1351,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dhcp/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Dhcp Health
+         * @description Every mantis-dhcp/mantis-dhcp6 instance that's reported in recently
+         *     enough to still have a row (`DhcpDaemonHeartbeat`'s docstring) -- a
+         *     daemon that's been down longer than its own pruning window simply has no
+         *     row at all, rather than one stuck showing `stale`. `operator`, not
+         *     `viewer`: this exposes hostnames/topology, not tenant-scoped data.
+         */
+        get: operations["dhcp_health_api_v1_dhcp_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/internal/dhcp-event": {
         parameters: {
             query?: never;
@@ -1710,6 +1734,27 @@ export interface components {
              * @default []
              */
             tags: string[];
+        };
+        /** DaemonHeartbeatOut */
+        DaemonHeartbeatOut: {
+            /** Instance Id */
+            instance_id: string;
+            /** Family */
+            family: string;
+            /** Hostname */
+            hostname: string | null;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+            /** Stale */
+            stale: boolean;
         };
         /** DhcpEvent */
         DhcpEvent: {
@@ -6841,6 +6886,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": string[];
+                };
+            };
+        };
+    };
+    dhcp_health_api_v1_dhcp_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DaemonHeartbeatOut"][];
                 };
             };
         };

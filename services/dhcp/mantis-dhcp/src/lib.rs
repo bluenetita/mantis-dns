@@ -33,3 +33,27 @@ pub mod db6;
 pub mod metrics6;
 pub mod options6;
 pub mod server6;
+
+/// This host's hostname, best-effort — reported alongside each daemon's
+/// heartbeat row (design.md §22.11) so an operator can tell instances apart
+/// without cross-referencing `/etc/hosts` on every host. Reads
+/// `/proc/sys/kernel/hostname` directly rather than the `HOSTNAME`
+/// environment variable, which systemd doesn't export to spawned services
+/// (it's a shell-only variable in bash, not a real env var) — the file read
+/// just fails harmlessly (`None`) on a non-Linux host or a minimal
+/// container without `/proc` mounted.
+pub fn hostname() -> Option<String> {
+    std::fs::read_to_string("/proc/sys/kernel/hostname").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hostname_never_panics_and_is_non_empty_when_present() {
+        if let Some(h) = hostname() {
+            assert!(!h.is_empty());
+        }
+    }
+}

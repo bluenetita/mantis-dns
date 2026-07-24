@@ -1061,6 +1061,23 @@ export function useDhcpInterfaces() {
   });
 }
 
+export interface DaemonHeartbeat {
+  instance_id: string;
+  family: string;
+  hostname: string | null;
+  started_at: string;
+  last_seen_at: string;
+  stale: boolean;
+}
+
+export function useDhcpHealth() {
+  return useQuery({
+    queryKey: ["dhcp-health"],
+    queryFn: () => rawGet<DaemonHeartbeat[]>("/api/v1/dhcp/health"),
+    refetchInterval: 15_000,
+  });
+}
+
 // ── DHCPv6 ────────────────────────────────────────────────────────────────────
 
 export interface DhcpScope6 {

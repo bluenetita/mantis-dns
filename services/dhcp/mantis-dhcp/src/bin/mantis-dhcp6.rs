@@ -107,6 +107,24 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Liveness signal for the control-plane UI — see main.rs's matching
+    // v4 loop for why this exists at all.
+    {
+        let pool = pool.clone();
+        let instance_id = uuid::Uuid::new_v4().to_string();
+        let hostname = mantis_dhcp::hostname();
+        let interval_s = cfg.scope_refresh_interval_s;
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_s));
+            loop {
+                ticker.tick().await;
+                if let Err(e) = db6::upsert_heartbeat(&pool, &instance_id, hostname.as_deref()).await {
+                    tracing::warn!("v6 heartbeat upsert failed: {e}");
+                }
+            }
+        });
+    }
+
     let metrics_counters = Arc::new(metrics6::Counters::default());
     if let Some(bind_addr) = cfg.metrics_bind_addr {
         let pool = pool.clone();

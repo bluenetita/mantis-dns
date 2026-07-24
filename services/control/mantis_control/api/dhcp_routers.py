@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import socket
-from datetime import datetime
+from datetime import datetime, timezone
 from ipaddress import ip_address
 from typing import Any
 
@@ -37,7 +37,14 @@ from sqlalchemy.orm import Session
 
 from mantis_control.audit import write_audit_log
 from mantis_control.auth import check_tenant_access, require_role, user_tenant_filter
-from mantis_control.db.models import DhcpLease, DhcpOption, DhcpRelayConfig, DhcpScope, DhcpStaticLease
+from mantis_control.db.models import (
+    DhcpDaemonHeartbeat,
+    DhcpLease,
+    DhcpOption,
+    DhcpRelayConfig,
+    DhcpScope,
+    DhcpStaticLease,
+)
 from mantis_control.db.session import get_db
 
 router = APIRouter(prefix="/dhcp", tags=["dhcp"])
@@ -579,3 +586,42 @@ def list_interfaces(user: Any = Depends(require_role("viewer"))) -> list[str]:
     endpoint only supplies the convenience list.
     """
     return sorted(name for _, name in socket.if_nameindex())
+
+
+# ── Daemon health (design.md §22.11) ───────────────────────────────────────────
+
+# 3x the daemons' own heartbeat cadence (their scope-refresh interval, 10s) --
+# a couple of missed ticks in a row, not just one, before calling it stale.
+HEARTBEAT_STALE_AFTER_S = 30
+
+
+class DaemonHeartbeatOut(BaseModel):
+    instance_id: str
+    family: str
+    hostname: str | None
+    started_at: datetime
+    last_seen_at: datetime
+    stale: bool
+
+
+@router.get("/health", response_model=list[DaemonHeartbeatOut])
+def dhcp_health(db: Session = Depends(get_db), user: Any = Depends(require_role("operator"))) -> list[DaemonHeartbeatOut]:
+    """Every mantis-dhcp/mantis-dhcp6 instance that's reported in recently
+    enough to still have a row (`DhcpDaemonHeartbeat`'s docstring) -- a
+    daemon that's been down longer than its own pruning window simply has no
+    row at all, rather than one stuck showing `stale`. `operator`, not
+    `viewer`: this exposes hostnames/topology, not tenant-scoped data.
+    """
+    rows = db.query(DhcpDaemonHeartbeat).order_by(DhcpDaemonHeartbeat.family, DhcpDaemonHeartbeat.started_at).all()
+    now = datetime.now(timezone.utc)
+    return [
+        DaemonHeartbeatOut(
+            instance_id=r.instance_id,
+            family=r.family,
+            hostname=r.hostname,
+            started_at=r.started_at,
+            last_seen_at=r.last_seen_at,
+            stale=(now - r.last_seen_at.replace(tzinfo=timezone.utc)).total_seconds() > HEARTBEAT_STALE_AFTER_S,
+        )
+        for r in rows
+    ]
