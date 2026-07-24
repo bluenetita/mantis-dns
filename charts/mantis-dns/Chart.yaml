@@ -1,6 +1,6 @@
 apiVersion: v2
 name: mantis-dns
-description: Mantis-DNS control plane (control API + management UI). Filter nodes and Kea DHCP are deployed separately — see README "Production deploy".
+description: Mantis-DNS control plane (control API + management UI). Filter nodes and mantis-dhcp are deployed separately — see README "Production deploy".
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

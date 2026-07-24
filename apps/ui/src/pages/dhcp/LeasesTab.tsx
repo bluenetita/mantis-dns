@@ -24,9 +24,9 @@ import { fmtExpire, LEASE_STATE } from "./helpers";
 
 const columns: CrudColumn<DhcpLease>[] = [
   { key: "ip", header: "IP", render: (l) => <code>{l.ip_address}</code> },
-  { key: "mac", header: "MAC", render: (l) => <code>{l.mac_address ?? "—"}</code> },
+  { key: "mac", header: "MAC", render: (l) => <code>{l.mac_address}</code> },
   { key: "hostname", header: "Hostname", render: (l) => l.hostname || <Text size="xs" c="dimmed">—</Text> },
-  { key: "expires", header: "Expires in", render: (l) => <Text size="xs">{fmtExpire(l.expire)}</Text> },
+  { key: "expires", header: "Expires in", render: (l) => <Text size="xs">{fmtExpire(l.expires_at)}</Text> },
   {
     key: "state",
     header: "State",

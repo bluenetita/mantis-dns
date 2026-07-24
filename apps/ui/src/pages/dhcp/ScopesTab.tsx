@@ -15,19 +15,17 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { ActionIcon, Autocomplete, Badge, Button, Group, NumberInput, Select, Stack, Switch, Text, TextInput, Title, Tooltip } from "@mantine/core";
+import { Badge, Button, Group, NumberInput, Select, Stack, Switch, Text, TextInput, Title } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { modals } from "@mantine/modals";
 import { notifications } from "@mantine/notifications";
-import { IconBolt, IconPlus, IconRefresh } from "@tabler/icons-react";
-import { useMemo, useState } from "react";
+import { IconPlus } from "@tabler/icons-react";
+import { useState } from "react";
 import {
   useCreateDhcpScope,
   useDeleteDhcpScope,
-  useDhcpPush,
   useDhcpScopes,
-  useKeaInterfaces,
   useUpdateDhcpScope,
   type DhcpScope,
 } from "../../api/hooks";
@@ -68,6 +66,7 @@ function ScopeForm({
       ddns_ttl_s: initial?.ddns_ttl_s ?? 300,
       pxe_next_server: initial?.pxe_next_server ?? "",
       pxe_boot_filename: initial?.pxe_boot_filename ?? "",
+      pxe_uefi_boot_filename: initial?.pxe_uefi_boot_filename ?? "",
       enabled: initial?.enabled ?? true,
     },
     validate: {
@@ -90,36 +89,12 @@ function ScopeForm({
       description: v.description || null,
       pxe_next_server: v.pxe_next_server || null,
       pxe_boot_filename: v.pxe_boot_filename || null,
+      pxe_uefi_boot_filename: v.pxe_uefi_boot_filename || null,
       ddns_zone_id: v.ddns_zone_id || null,
     };
     if (!initial?.id) payload.tenant_id = v.tenant_id;
     onSave(payload);
   });
-
-  const { data: ifaceData, isFetching: interfacesFetching, refetch: refetchInterfaces } = useKeaInterfaces();
-  const interfaceOptions = useMemo(() => {
-    const opts = (ifaceData?.interfaces ?? []).map((i) => ({
-      value: i.name,
-      label: i.name === "*"
-        ? "All interfaces (*)"
-        : `${i.name}${i.addresses.length ? ` - ${i.addresses.join(", ")}` : ""} - ${i.up ? "up" : "down"}`,
-      disabled: !i.up && i.name !== initial?.interface,
-    }));
-    if (initial?.interface && !opts.some((o) => o.value === initial.interface)) {
-      opts.push({ value: initial.interface, label: `${initial.interface} (not currently detected)`, disabled: false });
-    }
-    return opts;
-  }, [ifaceData, initial?.interface]);
-  const interfaceDropdownData = interfaceOptions.length > 0
-    ? interfaceOptions
-    : [{
-        value: "__no_kea_interfaces__",
-        label: ifaceData?.ok ? "No interfaces detected" : "No Kea interfaces loaded",
-        disabled: true,
-      }];
-  const refreshInterfaces = () => {
-    void refetchInterfaces();
-  };
 
   return (
     <form onSubmit={submit}>
@@ -169,30 +144,19 @@ function ScopeForm({
         )}
         <Group grow>
           <TextInput label="PXE next-server (siaddr)" placeholder="192.168.1.10" {...form.getInputProps("pxe_next_server")} />
-          <TextInput label="PXE boot filename" placeholder="pxelinux.0" {...form.getInputProps("pxe_boot_filename")} />
-        </Group>
-        <Group align="flex-end" gap="xs" wrap="nowrap">
-          <Autocomplete
-            label="Interface (optional)"
-            placeholder={interfaceOptions.length > 0 ? "Select or type interface" : "Type interface or refresh"}
-            data={interfaceDropdownData}
-            clearable
-            inputWrapperOrder={["label", "input", "description", "error"]}
-            style={{ flex: 1 }}
-            {...form.getInputProps("interface")}
+          <TextInput label="PXE boot filename (BIOS)" placeholder="pxelinux.0" {...form.getInputProps("pxe_boot_filename")} />
+          <TextInput
+            label="PXE boot filename (UEFI)"
+            placeholder="shimx64.efi"
+            description="Used when the client's arch option (93) is UEFI"
+            {...form.getInputProps("pxe_uefi_boot_filename")}
           />
-          <Tooltip label="Refresh Kea interfaces">
-            <ActionIcon
-              aria-label="Refresh Kea interfaces"
-              variant="default"
-              size="lg"
-              loading={interfacesFetching}
-              onClick={refreshInterfaces}
-            >
-              <IconRefresh size={16} />
-            </ActionIcon>
-          </Tooltip>
         </Group>
+        <TextInput
+          label="Interface (optional)"
+          placeholder="eth0 — empty serves all interfaces"
+          {...form.getInputProps("interface")}
+        />
         <Switch label="Enabled" {...form.getInputProps("enabled", { type: "checkbox" })} />
         <Group justify="flex-end" mt="sm">
           <Button variant="default" onClick={onCancel}>Cancel</Button>
@@ -214,7 +178,6 @@ export function ScopesTab({
   const create = useCreateDhcpScope();
   const update = useUpdateDhcpScope();
   const del = useDeleteDhcpScope();
-  const push = useDhcpPush();
 
   const [editing, setEditing] = useState<DhcpScope | null>(null);
   const [modalOpen, { open, close }] = useDisclosure(false);
@@ -227,12 +190,9 @@ export function ScopesTab({
       ? update.mutateAsync({ id: editing.id, body })
       : create.mutateAsync(body);
     mut
-      .then((res) => {
+      .then(() => {
         close();
-        if (res.kea_push_error)
-          notifications.show({ color: "orange", title: "Saved (Kea push failed)", message: res.kea_push_error });
-        else
-          notifications.show({ color: "green", message: editing ? "Scope updated" : "Scope created" });
+        notifications.show({ color: "green", message: editing ? "Scope updated" : "Scope created" });
       })
       .catch((e: Error) => notifications.show({ color: "red", title: "Error", message: e.message }));
   };
@@ -240,7 +200,7 @@ export function ScopesTab({
   const confirmDelete = (s: DhcpScope) =>
     modals.openConfirmModal({
       title: "Delete scope",
-      children: <Text size="sm">Delete <b>{s.name}</b> ({s.subnet})? This removes it from Kea immediately.</Text>,
+      children: <Text size="sm">Delete <b>{s.name}</b> ({s.subnet})? mantis-dhcp stops serving it immediately.</Text>,
       labels: { confirm: "Delete", cancel: "Cancel" },
       confirmProps: { color: "red" },
       onConfirm: () =>
@@ -266,11 +226,6 @@ export function ScopesTab({
       render: (s) => (s.ddns_enabled ? <Badge size="xs" color="blue">DDNS</Badge> : <Text size="xs" c="dimmed">—</Text>),
     },
     {
-      key: "kea_id",
-      header: "Kea ID",
-      render: (s) => <Text size="xs" c="dimmed">{s.kea_subnet_id != null ? `#${s.kea_subnet_id}` : "—"}</Text>,
-    },
-    {
       key: "enabled",
       header: "Enabled",
       render: (s) => (
@@ -287,29 +242,9 @@ export function ScopesTab({
     <>
       <Group justify="space-between" mb="md">
         <Title order={4}>DHCP Scopes</Title>
-        <Group>
-          <Tooltip label="Re-push all scopes to Kea">
-            <Button
-              size="xs"
-              variant="default"
-              leftSection={<IconBolt size={14} />}
-              loading={push.isPending}
-              onClick={() =>
-                push.mutateAsync()
-                  .then((r) => r.ok
-                    ? notifications.show({ color: "green", message: "Config pushed to Kea" })
-                    : notifications.show({ color: "red", title: "Push failed", message: r.error ?? "" })
-                  )
-                  .catch((e: Error) => notifications.show({ color: "red", title: "Error", message: e.message }))
-              }
-            >
-              Push to Kea
-            </Button>
-          </Tooltip>
-          <Button size="xs" leftSection={<IconPlus size={14} />} onClick={openCreate}>
-            Add scope
-          </Button>
-        </Group>
+        <Button size="xs" leftSection={<IconPlus size={14} />} onClick={openCreate}>
+          Add scope
+        </Button>
       </Group>
 
       <CrudTable

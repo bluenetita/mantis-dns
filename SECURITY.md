@@ -12,7 +12,7 @@ Email **support@bluenetworks.it** with:
 
 - A description of the vulnerability and its impact.
 - Steps to reproduce (PoC code/config welcome).
-- Affected component (filter node, control plane, UI, Kea integration,
+- Affected component (filter node, control plane, UI, mantis-dhcp,
   packaging) and version/commit.
 
 You should receive an acknowledgment within 3 business days. We'll work with
@@ -26,8 +26,8 @@ security fixes. There is no LTS branch at this stage of the project.
 
 ## Scope
 
-In scope: `services/filter`, `services/control`, `apps/ui`, `services/kea`
-integration, `packaging/`, `charts/`, `infra/cloud-init`, and the release
+In scope: `services/filter`, `services/control`, `apps/ui`, `services/dhcp`,
+`packaging/`, `charts/`, `infra/cloud-init`, and the release
 pipeline in `.github/workflows/`.
 
 Out of scope: vulnerabilities in third-party dependencies upstream of this

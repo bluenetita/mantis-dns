@@ -28,16 +28,6 @@ services:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-mantis}:${POSTGRES_PASSWORD:-mantis}@postgres:5432/${POSTGRES_DB:-mantis}
       - CORS_ALLOW_ORIGINS=http://localhost:5173,http://localhost:5174,http://localhost:59144
-      - KEA_CTRL_URL=http://kea:8004/
-      - KEA4_CTRL_URL=http://kea:8004/
-      - KEA6_CTRL_URL=http://kea:8006/
-      # Must be the real (non-symlink) hooks dir Debian's isc-kea-hooks
-      # package installs to inside the kea image — Kea 3.x rejects
-      # hooks-libraries paths that resolve through a symlink. The kea
-      # image's /usr/lib/kea/hooks is a convenience symlink to this real
-      # path; only override if the kea image is built for a different arch
-      # (the triplet varies, e.g. aarch64-linux-gnu on arm64 hosts).
-      - KEA_HOOKS_DIR=${KEA_HOOKS_DIR:-/usr/lib/x86_64-linux-gnu/kea/hooks}
       - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
       - MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN:-}
       - MANTIS_FILTER_NODE_IP=${MANTIS_FILTER_NODE_IP:-}
@@ -50,8 +40,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      kea:
-        condition: service_started
 
   ui:
     build:
@@ -95,66 +83,96 @@ services:
     depends_on:
       - control
 
-  kea:
+  dhcp:
     build:
-      context: services/kea
-      dockerfile: Dockerfile
-    ports:
-      - "67:67/udp"    # DHCPv4
-      - "547:547/udp"  # DHCPv6
-      # Direct Kea management HTTP sockets. Bound to loopback by default so a
-      # native/LXC control plane on the same host can reach them without
-      # exposing config-write APIs to the LAN. Set KEA_CTRL_PUBLISH_ADDR to a
-      # specific management IP when the control plane runs on another host.
-      - "${KEA_CTRL_PUBLISH_ADDR:-127.0.0.1}:8004:8004"
-      - "${KEA_CTRL_PUBLISH_ADDR:-127.0.0.1}:8006:8006"
-    environment:
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_USER=${POSTGRES_USER:-mantis}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mantis}
-      - POSTGRES_DB=${POSTGRES_DB:-mantis}
-      - MANTIS_CTRL_URL=http://control:8000
-      - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
-      - KEA_ROLE=primary
-      - KEA_PEER_URL=http://kea-secondary:8004/
-    restart: unless-stopped
-    volumes:
-      - kea-primary-run:/var/run/kea
-    depends_on:
-      postgres:
-        condition: service_healthy
-    cap_add:
-      - NET_ADMIN
-
-  kea-secondary:
-    build:
-      context: services/kea
-      dockerfile: Dockerfile
-    # Kea management HTTP sockets are deliberately not published — same
-    # reasoning as the primary `kea` service above.
-    environment:
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_USER=${POSTGRES_USER:-mantis}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mantis}
-      - POSTGRES_DB=${POSTGRES_DB:-mantis}
-      - MANTIS_CTRL_URL=http://control:8000
-      - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
-      - KEA_ROLE=secondary
-      - KEA_PEER_URL=http://kea:8004/
-    volumes:
-      - kea-secondary-run:/var/run/kea
-    depends_on:
-      postgres:
-        condition: service_healthy
-    cap_add:
-      - NET_ADMIN
+      context: .
+      dockerfile: services/dhcp/Dockerfile
+    # DHCP replies to un-addressed clients are broadcast (dnsmasq-style —
+    # see design.md §22.1), which needs the real host L2/broadcast domain.
+    # Docker's bridge network NATs and drops broadcast between the container
+    # and the LAN, so this has to run on host networking rather than
+    # publishing 67/udp the normal way.
+    network_mode: host
+    # Opt-in: `docker compose --profile dhcp up -d`. Left out of the default
+    # `docker compose up` (what scripts/bootstrap.sh runs) because it needs
+    # MANTIS_DHCP_SERVER_IP set to a real host interface address and host
+    # networking — neither is a sane default for someone just trying the DNS
+    # filtering stack.
     profiles:
-      - ha   # opt-in: `docker compose --profile ha up`
+      - dhcp
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-mantis}:${POSTGRES_PASSWORD:-mantis}@localhost:5432/${POSTGRES_DB:-mantis}
+      - MANTIS_CTRL_URL=http://localhost:8000
+      - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
+      - MANTIS_FILTER_NODE_IP=${MANTIS_FILTER_NODE_IP:-}
+      # mantis-dhcp itself refuses to start without this (clients echo it
+      # back on every renewal, so it must be the real DHCP-serving
+      # interface's address) — not enforced with compose's `:?required`
+      # here, since compose interpolates every service's env unconditionally
+      # even when `dhcp` isn't in the active --profile, which would break
+      # the default `docker compose up` for everyone else.
+      - MANTIS_DHCP_SERVER_IP=${MANTIS_DHCP_SERVER_IP:-}
+      # Opt-in Prometheus /metrics listener, e.g. 127.0.0.1:9101 — blank (default) disables it.
+      - MANTIS_DHCP_METRICS_BIND_ADDR=${MANTIS_DHCP_METRICS_BIND_ADDR:-}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      control:
+        condition: service_started
+    # Binds :67 as a non-root user (see services/dhcp/Dockerfile's setcap).
+    # Still no AF_PACKET/raw-socket packet crafting (see server.rs's module
+    # docs) — NET_RAW here is only for SO_BINDTODEVICE (per-interface
+    # dispatch, Linux quirk: that setsockopt needs CAP_NET_RAW even on a
+    # plain UDP socket).
+    cap_add:
+      - NET_BIND_SERVICE
+      - NET_RAW
+
+  # DHCPv6 (design.md §22.9) — same image, entrypoint override to run the v6
+  # binary instead (services/dhcp/Dockerfile builds both). Own opt-in profile
+  # since a site may run v4 only.
+  dhcp6:
+    build:
+      context: .
+      dockerfile: services/dhcp/Dockerfile
+    entrypoint: ["/usr/local/bin/mantis-dhcp6"]
+    # Host networking for the same reason as `dhcp` — a direct-attach
+    # deployment needs the real multicast group (ff02::1:2), which Docker's
+    # bridge network doesn't forward any better than it forwards broadcast.
+    network_mode: host
+    profiles:
+      - dhcp6
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-mantis}:${POSTGRES_PASSWORD:-mantis}@localhost:5432/${POSTGRES_DB:-mantis}
+      - MANTIS_CTRL_URL=http://localhost:8000
+      - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
+      # mantis-dhcp6 refuses to start without this (a stable IPv6 address
+      # used only to derive this server's DUID — see config6.rs; it's never
+      # itself handed out to a client). Not `:?required` for the same reason
+      # MANTIS_DHCP_SERVER_IP isn't — compose interpolates every service's
+      # env unconditionally even when `dhcp6` isn't in the active --profile.
+      - MANTIS_DHCP6_SERVER_ID=${MANTIS_DHCP6_SERVER_ID:-}
+      - MANTIS_DHCP6_METRICS_BIND_ADDR=${MANTIS_DHCP6_METRICS_BIND_ADDR:-}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      control:
+        condition: service_started
+    # Binds :547 as a non-root user. No SO_BINDTODEVICE/ICMP probing on the
+    # v6 side yet, so no CAP_NET_RAW needed (unlike `dhcp`).
+    cap_add:
+      - NET_BIND_SERVICE
+
+  # HA note: unlike Kea, there is no peer config here — run a second `dhcp`
+  # instance (a separate host, since network_mode: host means only one
+  # process per host can bind :67) pointed at the same Postgres and it's
+  # active/active. Allocation runs inside a Postgres advisory lock keyed on
+  # the scope id (see design.md §22.3); the lock *is* the coordination.
 
 
 volumes:
   pgdata:
-  kea-primary-run:
-  kea-secondary-run:

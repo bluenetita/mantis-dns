@@ -508,10 +508,10 @@ class Feed(Base):
     last_domain_count: Mapped[int | None] = mapped_column(nullable=True)
 
 
-# ── DHCP (Epic M — ISC Kea integration, Sprint 19) ───────────────────────────
+# ── DHCP (Epic M — native mantis-dhcp server, design.md §22) ─────────────────
 
 class DhcpScope(Base):
-    """DHCP subnet/scope pushed to Kea via subnet_cmds (design.md §22)."""
+    """DHCP subnet/scope served natively by mantis-dhcp (design.md §22)."""
 
     __tablename__ = "dhcp_scopes"
     __table_args__ = (UniqueConstraint("tenant_id", "subnet", name="uq_dhcp_scope_subnet"),)
@@ -537,9 +537,10 @@ class DhcpScope(Base):
     ddns_zone_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     ddns_ttl_s: Mapped[int] = mapped_column(default=300)
     pxe_next_server: Mapped[str | None] = mapped_column(String(45), nullable=True)   # siaddr for all PXE clients
-    pxe_boot_filename: Mapped[str | None] = mapped_column(String(255), nullable=True) # option 67 default
-    kea_subnet_id: Mapped[int | None] = mapped_column(nullable=True)
-    last_pushed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    pxe_boot_filename: Mapped[str | None] = mapped_column(String(255), nullable=True) # option 67, BIOS/default
+    # option 67 override when the client's option 93 (architecture, RFC 4578)
+    # indicates UEFI (codes 6-10, 15-16) rather than legacy BIOS.
+    pxe_uefi_boot_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     enabled: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
@@ -574,7 +575,8 @@ class DhcpStaticLease(Base):
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     next_server: Mapped[str | None] = mapped_column(String(45), nullable=True)  # PXE siaddr
-    boot_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    boot_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)  # BIOS/default
+    uefi_boot_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)  # see DhcpScope.pxe_uefi_boot_filename
     enabled: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
@@ -631,44 +633,32 @@ class DhcpRelayConfig(Base):
     scope: Mapped["DhcpScope"] = relationship(back_populates="relay_configs")
 
 
-class DhcpHaConfig(Base):
-    """ISC Kea HA (High Availability) configuration for a tenant.
+class DhcpLease(Base):
+    """Native IPv4 lease table — mantis-dhcp's own allocation state, replacing
+    Kea's lease4. Allocation is a DB transaction (SELECT ... FOR UPDATE
+    SKIP LOCKED over the scope's pool, insert here, commit): running more
+    than one mantis-dhcp instance against this same table *is* HA — active/
+    active, no peer protocol, no heartbeat config, because the lock is the
+    coordination mechanism. See design.md §22.5."""
 
-    One row per tenant.  When enabled, `build_dhcp4_config()` injects
-    libdhcp_ha.so + libdhcp_lease_cmds.so hook blocks into the Kea config.
-    Supports hot-standby and load-balancing modes.
-    """
-
-    __tablename__ = "dhcp_ha_configs"
+    __tablename__ = "dhcp_leases"
+    __table_args__ = (UniqueConstraint("scope_id", "ip_address", name="uq_dhcp_lease_ip"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    # HA mode: "hot-standby" (active/passive) or "load-balancing" (active/active)
-    mode: Mapped[str] = mapped_column(String(32), default="hot-standby")
-
-    # This server's identity within the HA pair
-    this_server_name: Mapped[str] = mapped_column(String(128), default="primary")
-    this_server_url: Mapped[str] = mapped_column(String(255), default="http://kea:8004/")
-
-    # Peer (the other Kea instance)
-    peer_name: Mapped[str] = mapped_column(String(128), default="secondary")
-    peer_url: Mapped[str] = mapped_column(String(255), default="http://kea-secondary:8004/")
-    peer_role: Mapped[str] = mapped_column(String(32), default="standby")  # "standby" or "primary"
-
-    # Thresholds (Kea defaults shown)
-    max_unacked_clients: Mapped[int | None] = mapped_column(Integer, nullable=True, default=10)
-    max_ack_delay_ms: Mapped[int | None] = mapped_column(Integer, nullable=True, default=10000)
-    heartbeat_delay_ms: Mapped[int | None] = mapped_column(Integer, nullable=True, default=10000)
-    retry_wait_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True, default=5000)
-
-    created_at: Mapped[datetime] = mapped_column(default=_now)
-    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+    scope_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("dhcp_scopes.id", ondelete="CASCADE"), index=True
+    )
+    ip_address: Mapped[str] = mapped_column(String(45), index=True)
+    mac_address: Mapped[str] = mapped_column(String(17))
+    client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    state: Mapped[int] = mapped_column(default=0)  # 0=active, 1=declined, 2=expired-reclaimed
+    allocated_at: Mapped[datetime] = mapped_column(default=_now)
+    expires_at: Mapped[datetime] = mapped_column(index=True)
 
 
 class DhcpScope6(Base):
-    """IPv6 DHCP subnet/scope pushed to kea-dhcp6 via subnet_cmds (Sprint 22)."""
+    """IPv6 DHCP subnet/scope served natively by mantis-dhcp (Sprint 22)."""
 
     __tablename__ = "dhcp_scopes6"
     __table_args__ = (UniqueConstraint("tenant_id", "subnet", name="uq_dhcp_scope6_subnet"),)
@@ -692,8 +682,6 @@ class DhcpScope6(Base):
     ddns_enabled: Mapped[bool] = mapped_column(default=False)
     ddns_zone_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     ddns_ttl_s: Mapped[int] = mapped_column(default=300)
-    kea_subnet_id: Mapped[int | None] = mapped_column(nullable=True)
-    last_pushed_at: Mapped[datetime | None] = mapped_column(nullable=True)
     enabled: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
@@ -722,3 +710,23 @@ class DhcpStaticLease6(Base):
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
     scope: Mapped["DhcpScope6"] = relationship(back_populates="reservations6")
+
+
+class DhcpLease6(Base):
+    """Native IPv6 lease table — mantis-dhcp's IA_NA allocation state,
+    replacing Kea's lease6. See DhcpLease's docstring for the HA model."""
+
+    __tablename__ = "dhcp_leases6"
+    __table_args__ = (UniqueConstraint("scope_id", "ip_address", name="uq_dhcp_lease6_ip"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    scope_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("dhcp_scopes6.id", ondelete="CASCADE"), index=True
+    )
+    ip_address: Mapped[str] = mapped_column(String(45), index=True)
+    duid: Mapped[str] = mapped_column(String(255))
+    hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    lease_type: Mapped[int] = mapped_column(default=0)  # 0=IA_NA, 2=IA_PD
+    state: Mapped[int] = mapped_column(default=0)
+    allocated_at: Mapped[datetime] = mapped_column(default=_now)
+    expires_at: Mapped[datetime] = mapped_column(index=True)

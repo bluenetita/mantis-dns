@@ -13,8 +13,8 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Internal DHCP event endpoint — called by the Kea run_script hook via
-mantis-ddns-bridge.sh (design.md §22, Sprint 20).
+"""Internal DHCP event endpoint — called directly by mantis-dhcp (services/dhcp,
+Rust) on lease commit/expire, for DDNS + client-registry updates (design.md §22).
 
 Authentication: X-Internal-Token header (MANTIS_INTERNAL_TOKEN env var).
 Not exposed in the public API docs and never reaches user-facing clients.
@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException
@@ -37,6 +38,22 @@ from mantis_control.db.session import get_db
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 log = logging.getLogger(__name__)
+
+# Unlike the operator-authenticated zone-records API (_validate_record_field,
+# which only rejects a leading '$'), the record *name* here comes straight
+# from an unauthenticated DHCP client's hostname option (RFC 2131 option 12).
+# export_zone() writes name as the first whitespace-delimited field of a zone
+# line — a hostname containing spaces/';'/'(' could inject extra zone-file
+# fields or malform the line. Restrict to a real DNS label sequence (or "@").
+_DDNS_NAME_RE = re.compile(
+    r"^(?:@|(?!-)[a-zA-Z0-9-]{1,63}(?<!-)(?:\.(?!-)[a-zA-Z0-9-]{1,63}(?<!-))*)$"
+)
+
+
+def _validate_ddns_name(name: str) -> str | None:
+    if not _DDNS_NAME_RE.match(name):
+        return None
+    return name
 
 def _verify_internal(x_internal_token: str | None = Header(None)) -> None:
     if not x_internal_token or not hmac.compare_digest(x_internal_token, settings.MANTIS_INTERNAL_TOKEN):
@@ -53,10 +70,10 @@ class DhcpEvent(BaseModel):
     event: str          # "add" | "expire"
     ip: str
     hostname: str
-    family: str = "4"   # "4" | "6" — which Kea daemon/scope table this event is from
+    family: str = "4"   # "4" | "6" — which scope table (dhcp_scopes / dhcp_scopes6) this is from
     mac: str = ""        # family "4": DHCP client hwaddr
     duid: str = ""        # family "6": DHCP client DUID
-    subnet_id: int = 0
+    scope_id: str = ""    # DhcpScope/DhcpScope6.id the lease belongs to
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -85,9 +102,9 @@ def _mac_fmt(raw: str) -> str | None:
 
 
 def _duid_fmt(raw: str) -> str | None:
-    """Normalise a DUID to lowercase colon-separated hex. Kea already sends
-    LEASEx_DUID in that form; this just guards against case drift so the
-    same client's DUID always compares equal as an ownership key."""
+    """Normalise a DUID to lowercase colon-separated hex — guards against
+    case drift so the same client's DUID always compares equal as an
+    ownership key."""
     if not raw:
         return None
     return raw.strip().lower()
@@ -138,6 +155,14 @@ def _upsert_a_record(db: Session, scope: DhcpScope, hostname: str, ip: str, mac:
         ip = _validate_record_field(ip, "Record data")
     except ValueError as e:
         log.warning("DDNS update for %s/%s rejected: %s", zone.name, hostname, e)
+        return
+    # _validate_record_field only rejects a leading '$'; a name here is
+    # unauthenticated (straight from a DHCP client's hostname option), and
+    # export_zone() writes it as the first whitespace-delimited field of a
+    # zone line, so anything with embedded whitespace/';'/'(' etc. could
+    # inject extra zone-file fields. Require a real DNS label sequence.
+    if _validate_ddns_name(name) is None:
+        log.warning("DDNS update for %s/%s rejected: invalid record name %r", zone.name, hostname, name)
         return
 
     existing = (
@@ -226,6 +251,12 @@ def _upsert_aaaa_record(db: Session, scope: DhcpScope6, hostname: str, ip: str, 
     except ValueError as e:
         log.warning("DDNS update for %s/%s rejected: %s", zone.name, hostname, e)
         return
+    # See _upsert_a_record's matching check — same zone-line-injection
+    # protection, needed here too since v6 DDNS names are just as
+    # unauthenticated (DUID-keyed, not admin-authored).
+    if _validate_ddns_name(name) is None:
+        log.warning("DDNS update for %s/%s rejected: invalid record name %r", zone.name, hostname, name)
+        return
 
     existing = (
         db.query(DnsRecord)
@@ -298,8 +329,8 @@ def dhcp_event(
     db: Session = Depends(get_db),
     _: None = Depends(_verify_internal),
 ) -> None:
-    """Receives lease add/expire events from the Kea run_script hook, for
-    both kea-dhcp4 (family="4") and kea-dhcp6 (family="6").
+    """Receives lease add/expire events directly from mantis-dhcp, for both
+    IPv4 (family="4") and IPv6 (family="6") scopes.
 
     For each event:
     - Always upserts ClientEntry (client registry)
@@ -309,13 +340,9 @@ def dhcp_event(
     hostname = body.hostname.strip() or None
 
     if body.family == "6":
-        scope6 = (
-            db.query(DhcpScope6)
-            .filter(DhcpScope6.kea_subnet_id == body.subnet_id)
-            .first()
-        )
+        scope6 = db.get(DhcpScope6, body.scope_id)
         if scope6 is None:
-            log.debug("dhcp-event: subnet_id=%d not found in dhcp_scopes6", body.subnet_id)
+            log.debug("dhcp-event: scope_id=%s not found in dhcp_scopes6", body.scope_id)
             return
 
         duid = _duid_fmt(body.duid) if body.duid else None
@@ -332,14 +359,10 @@ def dhcp_event(
         db.commit()
         return
 
-    scope = (
-        db.query(DhcpScope)
-        .filter(DhcpScope.kea_subnet_id == body.subnet_id)
-        .first()
-    )
+    scope = db.get(DhcpScope, body.scope_id)
     if scope is None:
-        # Subnet not managed by Mantis (shouldn't happen; log and ignore)
-        log.debug("dhcp-event: subnet_id=%d not found in dhcp_scopes", body.subnet_id)
+        # Scope not found (shouldn't happen; log and ignore)
+        log.debug("dhcp-event: scope_id=%s not found in dhcp_scopes", body.scope_id)
         return
 
     mac = _mac_fmt(body.mac) if body.mac else None

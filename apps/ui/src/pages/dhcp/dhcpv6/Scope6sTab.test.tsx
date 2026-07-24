@@ -22,9 +22,7 @@ import { renderWithProviders } from "../../../test/utils";
 import {
   useCreateDhcpScope6,
   useDeleteDhcpScope6,
-  useDhcpPush6,
   useDhcpScopes6,
-  useKeaInterfaces6,
   useUpdateDhcpScope6,
   type DhcpScope6,
 } from "../../../api/hooks";
@@ -38,8 +36,6 @@ vi.mock("../../../api/hooks", async (importOriginal) => {
     useCreateDhcpScope6: vi.fn(),
     useUpdateDhcpScope6: vi.fn(),
     useDeleteDhcpScope6: vi.fn(),
-    useDhcpPush6: vi.fn(),
-    useKeaInterfaces6: vi.fn(),
   };
 });
 
@@ -51,8 +47,6 @@ const mockUseDhcpScopes6 = useDhcpScopes6 as MockedFunction<typeof useDhcpScopes
 const mockUseCreateDhcpScope6 = useCreateDhcpScope6 as MockedFunction<typeof useCreateDhcpScope6>;
 const mockUseUpdateDhcpScope6 = useUpdateDhcpScope6 as MockedFunction<typeof useUpdateDhcpScope6>;
 const mockUseDeleteDhcpScope6 = useDeleteDhcpScope6 as MockedFunction<typeof useDeleteDhcpScope6>;
-const mockUseDhcpPush6 = useDhcpPush6 as MockedFunction<typeof useDhcpPush6>;
-const mockUseKeaInterfaces6 = useKeaInterfaces6 as MockedFunction<typeof useKeaInterfaces6>;
 
 const tenantOptions = [{ value: "t1", label: "Acme" }];
 
@@ -77,12 +71,9 @@ function makeScope6(overrides: Partial<DhcpScope6> = {}): DhcpScope6 {
     ddns_enabled: false,
     ddns_zone_id: null,
     ddns_ttl_s: 300,
-    kea_subnet_id: 1,
-    last_pushed_at: null,
     enabled: true,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
-    kea_push_error: null,
     ...overrides,
   };
 }
@@ -92,17 +83,9 @@ beforeEach(() => {
   mockUseCreateDhcpScope6.mockReset();
   mockUseUpdateDhcpScope6.mockReset();
   mockUseDeleteDhcpScope6.mockReset();
-  mockUseDhcpPush6.mockReset();
-  mockUseKeaInterfaces6.mockReset();
   mockUseCreateDhcpScope6.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
   mockUseUpdateDhcpScope6.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
   mockUseDeleteDhcpScope6.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
-  mockUseDhcpPush6.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
-  mockUseKeaInterfaces6.mockReturnValue({
-    data: { ok: false, interfaces: [] },
-    isFetching: false,
-    refetch: vi.fn(),
-  } as never);
 });
 
 describe("Scope6sTab", () => {
@@ -131,49 +114,14 @@ describe("Scope6sTab", () => {
     expect(screen.getByLabelText(/^Name/)).toHaveValue("");
   });
 
-  it("shows the interface field as a dropdown of Kea's detected IPv6 interfaces", async () => {
+  it("has a free-text interface field", async () => {
     const user = userEvent.setup();
     mockUseDhcpScopes6.mockReturnValue({ data: [], isLoading: false } as never);
-    mockUseKeaInterfaces6.mockReturnValue({
-      data: { ok: true, interfaces: [{ name: "eth2", addresses: ["2001:db8::1"], up: true }] },
-      isFetching: false,
-      refetch: vi.fn(),
-    } as never);
     renderWithProviders(<Scope6sTab tenantOptions={tenantOptions} />);
     await user.click(screen.getByRole("button", { name: /add scope/i }));
-    const field = await screen.findByPlaceholderText("Select or type interface");
-    await user.click(field);
-    expect(await screen.findByText("eth2 - 2001:db8::1 - up")).toBeInTheDocument();
-  });
-
-  it("keeps the interface field as a dropdown when Kea returns an empty IPv6 interface list", async () => {
-    const user = userEvent.setup();
-    mockUseDhcpScopes6.mockReturnValue({ data: [], isLoading: false } as never);
-    mockUseKeaInterfaces6.mockReturnValue({
-      data: { ok: true, interfaces: [] },
-      isFetching: false,
-      refetch: vi.fn(),
-    } as never);
-    renderWithProviders(<Scope6sTab tenantOptions={tenantOptions} />);
-    await user.click(screen.getByRole("button", { name: /add scope/i }));
-    const field = await screen.findByPlaceholderText("Type interface or refresh");
-    await user.click(field);
-    expect(await screen.findByText("No interfaces detected")).toBeInTheDocument();
-  });
-
-  it("refreshes Kea's detected IPv6 interfaces from the scope form", async () => {
-    const user = userEvent.setup();
-    const refetch = vi.fn();
-    mockUseDhcpScopes6.mockReturnValue({ data: [], isLoading: false } as never);
-    mockUseKeaInterfaces6.mockReturnValue({
-      data: { ok: true, interfaces: [{ name: "eth2", addresses: ["2001:db8::1"], up: true }] },
-      isFetching: false,
-      refetch,
-    } as never);
-    renderWithProviders(<Scope6sTab tenantOptions={tenantOptions} />);
-    await user.click(screen.getByRole("button", { name: /add scope/i }));
-    await user.click(await screen.findByRole("button", { name: /refresh kea interfaces/i }));
-    expect(refetch).toHaveBeenCalled();
+    const field = await screen.findByLabelText(/^Interface/);
+    await user.type(field, "eth2");
+    expect(field).toHaveValue("eth2");
   });
 
   it("deletes a scope after confirming, via modals.openConfirmModal", async () => {

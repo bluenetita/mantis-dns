@@ -39,10 +39,6 @@ spec:
               value: production
             - name: CORS_ALLOW_ORIGINS
               value: {{ required "control.corsAllowOrigins is required" .Values.control.corsAllowOrigins | quote }}
-            - name: KEA_CTRL_URL
-              value: "http://kea:8080/"
-            - name: KEA6_CTRL_URL
-              value: "http://kea:8080/"
             - name: ADMIN_EMAIL
               value: {{ .Values.control.adminEmail | quote }}
             - name: MANTIS_FILTER_NODE_IP

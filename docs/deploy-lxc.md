@@ -5,25 +5,21 @@ appliances) runs heavily on Proxmox, where LXC — not a full VM — is the
 default way to stand up a service. This page covers four ways to get
 Mantis-DNS running in an LXC container, cheapest/fastest first.
 
-Kea (DHCP) needs `NET_ADMIN`/`NET_RAW` and L2 broadcast/relay reachability
-that varies per network (see [`ARCHITECTURE.md`](../ARCHITECTURE.md)). Run it
-via [`docker-compose.prod.yml`](../docker-compose.prod.yml), on its own host,
-or with the Rocky native installer's `INSTALL_KEA=1` option when this LXC is
-meant to serve DHCP directly. Kea 3.x should be reached through the direct
-daemon HTTP control sockets: DHCPv4 on `http://<kea-host>:8004/` and DHCPv6
-on `http://<kea-host>:8006/`.
-
-The native Debian installer, and the Rocky installer without `INSTALL_KEA=1`,
-leave `KEA4_CTRL_URL` / `KEA6_CTRL_URL` blank unless you provide them. If the
-UI shows `http://127.0.0.1:8004/`, the control plane is trying to call the
-same LXC. That is correct only when local Kea is installed in that exact LXC;
-otherwise change `KEA4_CTRL_URL` / `KEA6_CTRL_URL` to the Kea host's
-management IP and publish the Kea ports on that IP.
-
-When Kea runs from `docker-compose.prod.yml`, its management ports are
-published on `127.0.0.1` by default. That is reachable only from Docker's host,
-not from a separate LXC. For a separate LXC, set `KEA_CTRL_PUBLISH_ADDR` to the
-Kea host's management IP before starting the Kea compose stack.
+**mantis-dhcp** (native DHCPv4 server) and **mantis-dhcp6** (native DHCPv6
+server, RFC 8415) — both built from `services/dhcp` — need host networking and
+L2 broadcast (v4) or multicast (v6) reachability to the client subnet (see
+[`ARCHITECTURE.md`](../ARCHITECTURE.md)), so both are opt-in everywhere below:
+via `docker compose --profile dhcp up -d` / `--profile dhcp6 up -d` in
+[`docker-compose.prod.yml`](../docker-compose.prod.yml), on their own host, or
+with the Rocky native installer's `INSTALL_DHCP=1` / `INSTALL_DHCP6=1` options
+when this LXC is meant to serve DHCP directly. Both talk to Postgres directly
+and report lease/DDNS events to the control plane's `/internal/dhcp-event`
+endpoint — there is no management API/port to reach or publish, unlike Kea;
+the only thing to get right is `MANTIS_DHCP_SERVER_IP` for v4 (this host's
+DHCP-serving interface address, which clients echo back on every renewal) or
+`MANTIS_DHCP6_SERVER_ID` for v6 (a stable IPv6 address used only to derive
+this server's DUID) — each daemon refuses to start without its respective
+variable.
 
 ## Option A — full stack, Docker Compose inside LXC
 
@@ -114,33 +110,11 @@ The script generates and stores secrets in
 redeploy a new version — it reuses the existing Postgres role and secrets
 rather than regenerating them.
 
-For a separate Kea host, set these before the first run or edit
-`/etc/mantis-control/mantis-control.env` later:
-
-```
-KEA_CTRL_URL=http://<kea-host>:8004/
-KEA4_CTRL_URL=http://<kea-host>:8004/
-KEA6_CTRL_URL=http://<kea-host>:8006/
-KEA_HOOKS_DIR=<kea-host's real hooks directory, e.g. /usr/lib64/kea/hooks or /usr/lib/x86_64-linux-gnu/kea/hooks>
-```
-
-Kea's hook loader validates `hooks-libraries` paths against its own
-compiled-in directory and rejects anything else, including a symlink to that
-directory — so `KEA_HOOKS_DIR` must be the real path as Kea itself resolves
-it on that host, not a convenience symlink. Find it with `rpm -ql
-isc-kea-hooks | grep libdhcp_lease_cmds` (RPM-based) or `dpkg -L
-isc-kea-hooks | grep libdhcp_lease_cmds` (Debian-based) and use that file's
-directory.
-
-If that Kea host is Docker Compose based, expose the management sockets to the
-control-plane LXC before starting it:
-
-```
-KEA_CTRL_PUBLISH_ADDR=<kea-host-management-ip> docker compose -f docker-compose.prod.yml up -d kea
-```
-
-Keep the management ports private to the control plane; they accept
-configuration-write commands.
+This script does not install mantis-dhcp or mantis-dhcp6 — they need L2
+broadcast/multicast reachability this management-plane LXC shouldn't have
+(see the intro above). Run either via `docker-compose.prod.yml` or their own
+host, pointed at this LXC's Postgres directly (both read scopes and write
+leases straight to the DB — no control-plane-facing port to configure).
 
 Combine with Option B: point one or more edge `mantis-filter` LXCs at this
 container's address as `CONTROL_URL`.
@@ -165,8 +139,9 @@ automatically.
 sibling of Option C's script, extended to also build and install
 `mantis-filter` from source (no `.rpm` is published — CI only ships a
 `.deb`). By default a single Rocky 10 LXC runs Postgres, the control plane,
-UI, and the DNS filter listening on `:53`. Kea DHCP is available as an
-explicit opt-in because it needs additional network capabilities:
+UI, and the DNS filter listening on `:53`. mantis-dhcp and mantis-dhcp6 are
+available as an explicit opt-in because they need L2 broadcast/multicast
+reachability most LXC network setups don't have:
 
 ```
 pct create <vmid> <rocky-10-template> --unprivileged 1 --cores 2 --memory 1024 ...
@@ -189,19 +164,40 @@ Set `INSTALL_FILTER=0` in the environment to skip the `mantis-filter` build
 and get management-plane-only behavior equivalent to Option C, e.g. if edge
 DNS nodes live on separate hosts.
 
-Set `INSTALL_KEA=1` to install ISC Kea 3.x from ISC's RPM repository, create
-`mantis-kea-dhcp4.service` / `mantis-kea-dhcp6.service`, initialize the Kea
-PostgreSQL schema, and point Mantis at local management sockets:
+Set `INSTALL_DHCP=1` (with `MANTIS_DHCP_SERVER_IP` set to this LXC's
+DHCP-serving interface address) to build and install mantis-dhcp from source
+and create `mantis-dhcp.service`:
 
 ```
-CORS_ALLOW_ORIGINS=https://<this-host-hostname-or-ip> INSTALL_KEA=1 ./infra/lxc/install-rocky.sh
-systemctl status mantis-kea-dhcp4 --no-pager
-ss -ltnp | grep ':8004'
+CORS_ALLOW_ORIGINS=https://<this-host-hostname-or-ip> \
+  INSTALL_DHCP=1 MANTIS_DHCP_SERVER_IP=<this-lxc's-dhcp-interface-ip> \
+  ./infra/lxc/install-rocky.sh
+systemctl status mantis-dhcp --no-pager
 ```
 
-If the Kea services fail with permission or socket errors, the LXC does not
-have the network capabilities needed to serve DHCP. Use a privileged LXC, a VM,
-or run Kea on a network host that can receive DHCP broadcasts/relay traffic.
+If `mantis-dhcp` fails to start with a permission error binding `:67`, the
+`setcap cap_net_bind_service` step didn't take (rare — check `getcap
+/usr/bin/mantis-dhcp`). If it starts but no client on the LAN gets a lease,
+the LXC's network setup likely isn't on the same L2 broadcast domain as those
+clients — use a privileged LXC, a VM, or a bridged (not NAT'd) network
+interface.
+
+Set `INSTALL_DHCP6=1` (with `MANTIS_DHCP6_SERVER_ID` set to a stable IPv6
+address identifying this server — used only to derive its DUID, never itself
+handed out to a client) to build and install mantis-dhcp6 from source and
+create `mantis-dhcp6.service`:
+
+```
+CORS_ALLOW_ORIGINS=https://<this-host-hostname-or-ip> \
+  INSTALL_DHCP6=1 MANTIS_DHCP6_SERVER_ID=<a-stable-ipv6-address> \
+  ./infra/lxc/install-rocky.sh
+systemctl status mantis-dhcp6 --no-pager
+```
+
+Same failure modes apply: a permission error binding `:547` means
+`setcap cap_net_bind_service` didn't take (check `getcap
+/usr/bin/mantis-dhcp6`); no leases on the LAN means the LXC's network setup
+isn't reachable by IPv6 multicast from those clients.
 
 Same idempotency as Option C: re-running after `git pull` redeploys code and
 restarts services, reusing the existing Postgres role/secrets in
@@ -211,7 +207,8 @@ Two things Rocky needs that Debian's package manager handles implicitly:
 - **SELinux** (enforcing by default) — the script runs
   `setsebool -P httpd_can_network_connect 1` so nginx's `proxy_pass` to the
   control plane isn't blocked.
-- **firewalld** (active by default) — the script opens the `http` service.
+- **firewalld** (active by default) — the script opens the `http` service
+  (plus `dhcp`/`dhcpv6` when `INSTALL_DHCP=1`/`INSTALL_DHCP6=1`).
 
 ### Upgrading
 

@@ -1,0 +1,23 @@
+{
+  "tenant_id": "6c1136aa-ee59-46da-b184-ed4c7df5e9c8",
+  "zone_id": "af10b66f-e1ef-4d57-b1b7-b65ac644d512",
+  "scope_id": "6f4dda02-13de-4b6d-808d-de9730f12a51",
+  "reservation_mac": "02:00:00:00:00:01",
+  "reservation_ip": "172.30.0.150",
+  "scope6_id": "a7a42ddb-9087-492a-907e-e2220487907e",
+  "reservation6_duid_hex": "0003000102748a7ee686",
+  "reservation6_ip": "fd00:6d61:6e74:6973::150",
+  "client_a_mac": "02:1d:5e:db:ce:26",
+  "client_a_ip": "172.30.0.101",
+  "relay_id": "d40234c3-4dc6-45a7-9de2-330252cdc1db",
+  "expiry_mac": "02:c1:c8:36:a1:13",
+  "expiry_ip": "172.30.0.106",
+  "v6_probe_addr": "fd00:6d61:6e74:6973::1c5",
+  "v6_probe_server_id": "000200007ed9fd006d616e7469730000000000000012",
+  "client_v6_duid_hex": "00030001020f47b52b22",
+  "client_v6_iaid": 1408389130,
+  "client_v6_addr": "fd00:6d61:6e74:6973::1b4",
+  "client_v6_server_id": "000200007ed9fd006d616e7469730000000000000012",
+  "outage_mac": "02:1f:17:a8:cd:05",
+  "outage_ip": "172.30.0.111"
+}

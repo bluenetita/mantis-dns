@@ -176,3 +176,15 @@ def test_upsert_rejects_hostname_that_would_smuggle_a_bind_directive(db, zone):
     db.commit()
 
     assert db.query(DnsRecord).filter(DnsRecord.zone_id == zone.id).count() == 0
+
+
+def test_upsert_rejects_hostname_with_embedded_whitespace_that_would_inject_zone_fields(db, zone):
+    """export_zone() writes DnsRecord.name as the first whitespace-delimited
+    field of a zone-file line. _validate_record_field only rejects a leading
+    "$" — a hostname with embedded whitespace/record-syntax characters would
+    otherwise pass straight through and inject extra fields into the
+    exported line (or an entirely bogus record)."""
+    _upsert_a_record(db, _scope(zone.id), "evil IN A 6.6.6.6 ;", "10.0.0.5", MAC_A)
+    db.commit()
+
+    assert db.query(DnsRecord).filter(DnsRecord.zone_id == zone.id).count() == 0

@@ -4,6 +4,7 @@ members = [
     "services/filter/mantis-filter",
     "services/filter/mantis-bundle",
     "services/filter/mantis-policy",
+    "services/dhcp/mantis-dhcp",
 ]
 
 [workspace.package]

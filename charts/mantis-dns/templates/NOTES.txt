@@ -6,9 +6,9 @@ Control: {{ include "mantis-dns.fullname" . }}-control.{{ .Release.Namespace }}.
 Ingress: {{ if .Values.ingress.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.host }}
 {{- end }}
 
-Remember: Kea (DHCP) and mantis-filter (edge DNS) are deployed separately —
-see README "Production deploy". Point them at the control Service above via
-MANTIS_CTRL_URL / CONTROL_URL.
+Remember: mantis-dhcp and mantis-filter (edge DNS) are deployed separately —
+see README "Production deploy". Point mantis-filter at the control Service
+above via CONTROL_URL; mantis-dhcp talks to Postgres directly.
 
 Log in with ADMIN_EMAIL / the ADMIN_PASSWORD from secret
 "{{ .Values.secrets.existingSecret }}", then rotate it.

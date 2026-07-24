@@ -19,8 +19,10 @@ git clone <repo> && cd mantis-dns
 ```
 
 This generates a `.env` with random secrets and runs `docker compose up --build -d`
-(Postgres, control plane, filter node, Kea DHCP, UI). Migrations and the initial
-admin user are applied automatically on first boot.
+(Postgres, control plane, filter node, UI). Migrations and the initial
+admin user are applied automatically on first boot. DHCP (`mantis-dhcp`) is
+opt-in — see below — since it needs host networking and a real interface
+address, not a sane default for a first try.
 
 - UI: http://localhost:5173
 - API: http://localhost:8000
@@ -48,11 +50,12 @@ All release artifacts are built and published by
 See [`docs/deploy-lxc.md`](docs/deploy-lxc.md) for Proxmox LXC-specific
 recipes, including running the filter node standalone in its own container.
 
-Kea (DHCP) and `mantis-filter` are intentionally never scheduled onto a k8s pod
-network: Kea needs `NET_ADMIN` and L2 broadcast/relay reachability, and filter
-nodes belong at the network edge. Run them via compose or the `.deb` and
-point them at the control plane's address (`CONTROL_URL`/`MANTIS_CTRL_URL`),
-regardless of where control/UI itself runs.
+`mantis-dhcp` and `mantis-filter` are intentionally never scheduled onto a k8s
+pod network: `mantis-dhcp` needs host networking and L2 broadcast
+reachability, and filter nodes belong at the network edge. Run them via
+`docker compose --profile dhcp up -d` (or the `.deb`, for the filter node)
+and point them at the control plane's Postgres/address directly, regardless
+of where control/UI itself runs.
 
 ### Docker Compose (single host)
 
@@ -144,9 +147,12 @@ The generated `ADMIN_PASSWORD` is only ever written to
 `/opt/mantis-dns/.env` on the instance — retrieve it via
 `grep ADMIN_ /opt/mantis-dns/.env` over SSH, not the provider's console log.
 
-This appliance runs everything (including Kea and the filter node) on one
-box — fine for evaluation or small deployments. For the filter node at the
-edge on separate hardware, use the `.deb` above instead.
+This appliance runs Postgres, control, UI, and the filter node on one box —
+fine for evaluation or small deployments. mantis-dhcp is opt-in (`docker
+compose --profile dhcp up -d`, after setting `MANTIS_DHCP_SERVER_IP` in
+`.env`) since it needs the box to actually sit on the client LAN's broadcast
+domain, rarely true of a cloud VM. For the filter node at the edge on
+separate hardware, use the `.deb` above instead.
 
 ## Layout
 

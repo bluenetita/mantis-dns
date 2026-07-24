@@ -5,7 +5,7 @@ title: ""
 labels: bug
 ---
 
-**Component** (filter node / control plane / UI / Kea / packaging / Helm chart / cloud-init):
+**Component** (filter node / control plane / UI / mantis-dhcp / packaging / Helm chart / cloud-init):
 
 **Describe the bug**
 A clear description of what's wrong.

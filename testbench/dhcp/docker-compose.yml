@@ -1,0 +1,201 @@
+# Copyright (C) 2026 Blue Networks srl <support+github@bluenetworks.it>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# Standalone DHCP testbench stack (scripts/dhcp_testbench.sh drives it).
+#
+# Deliberately NOT the top-level docker-compose.yml's `dhcp`/`dhcp6` services
+# reused via an override file: those use `network_mode: host` (needed in a
+# real deployment for broadcast/multicast on the real LAN — see docs/design.md
+# §22.1/§22.6), which docker-compose merge can't cleanly unset, and which
+# Docker Desktop's Windows backend doesn't support reliably anyway. Instead,
+# every DHCP-relevant container sits on one dedicated bridge network
+# (`dhcptest`, dual-stack) with a static address, and the pool this stack
+# hands out (172.30.0.100-172.30.0.130) lives on that *same* subnet — a
+# plain Linux bridge already floods broadcast to every attached container,
+# so DHCPv4's broadcast-reply path (server.rs's `reply_dest`) works without
+# needing the real host network namespace at all. `dhcp` and `dhcp-ha` are
+# two independent mantis-dhcp instances sharing this one Postgres — not
+# literally two hosts the way design.md §22.6 describes production HA, but
+# enough to exercise the same advisory-lock allocation path two allocators
+# ever share.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_USER=test
+      - POSTGRES_PASSWORD=test
+      - POSTGRES_DB=test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks:
+      dhcptest:
+        ipv4_address: 172.30.0.5
+
+  control:
+    build:
+      context: ../..
+      dockerfile: services/control/Dockerfile
+    ports:
+      - "18000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql+psycopg://test:test@postgres:5432/test
+      - MANTIS_INTERNAL_TOKEN=test-internal-token
+      - ADMIN_EMAIL=admin@mantis.local
+      - ADMIN_PASSWORD=change-me-now
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    networks:
+      dhcptest:
+        ipv4_address: 172.30.0.6
+
+  dhcp:
+    build:
+      context: ../..
+      dockerfile: services/dhcp/Dockerfile
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgresql://test:test@postgres:5432/test
+      - MANTIS_CTRL_URL=http://control:8000
+      - MANTIS_INTERNAL_TOKEN=test-internal-token
+      - MANTIS_DHCP_SERVER_IP=172.30.0.10
+      - MANTIS_DHCP_METRICS_BIND_ADDR=0.0.0.0:9100
+    depends_on:
+      postgres:
+        condition: service_healthy
+      control:
+        condition: service_healthy
+    cap_add:
+      - NET_BIND_SERVICE
+      - NET_RAW
+    networks:
+      dhcptest:
+        ipv4_address: 172.30.0.10
+
+  # Second mantis-dhcp instance against the *same* dhcp_scopes/dhcp_leases —
+  # see module docstring above. Used only by the HA phase; kept out of the
+  # default `docker compose up` (own profile) so every *other* phase's
+  # broadcast DISCOVERs get exactly one OFFER, not a race between two
+  # instances answering the same broadcast.
+  dhcp-ha:
+    profiles: ["ha"]
+    build:
+      context: ../..
+      dockerfile: services/dhcp/Dockerfile
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgresql://test:test@postgres:5432/test
+      - MANTIS_CTRL_URL=http://control:8000
+      - MANTIS_INTERNAL_TOKEN=test-internal-token
+      - MANTIS_DHCP_SERVER_IP=172.30.0.11
+      - MANTIS_DHCP_METRICS_BIND_ADDR=0.0.0.0:9100
+    depends_on:
+      postgres:
+        condition: service_healthy
+      control:
+        condition: service_healthy
+    cap_add:
+      - NET_BIND_SERVICE
+      - NET_RAW
+    networks:
+      dhcptest:
+        ipv4_address: 172.30.0.11
+
+  dhcp6:
+    build:
+      context: ../..
+      dockerfile: services/dhcp/Dockerfile
+    entrypoint: ["/usr/local/bin/mantis-dhcp6"]
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgresql://test:test@postgres:5432/test
+      - MANTIS_CTRL_URL=http://control:8000
+      - MANTIS_INTERNAL_TOKEN=test-internal-token
+      - MANTIS_DHCP6_SERVER_ID=fd00:6d61:6e74:6973::12
+      - MANTIS_DHCP6_METRICS_BIND_ADDR=0.0.0.0:9101
+    depends_on:
+      postgres:
+        condition: service_healthy
+      control:
+        condition: service_healthy
+    cap_add:
+      - NET_BIND_SERVICE
+    networks:
+      dhcptest:
+        ipv4_address: 172.30.0.12
+        ipv6_address: fd00:6d61:6e74:6973::12
+
+  # Sits on the low end of scope A's dynamic pool (172.30.0.100, its
+  # range_start) so conflict.rs's ICMP probe finds it "already in use by
+  # something this server never allocated it to" on the very first scan --
+  # a plain Linux container answers ICMP echo with no app needed. Used only
+  # by the conflict-detection test.
+  squatter:
+    image: alpine:3.20
+    command: ["sleep", "infinity"]
+    networks:
+      dhcptest:
+        ipv4_address: 172.30.0.100
+
+  # Test client + orchestration. `docker compose run --rm runner python
+  # run_all.py --phase <name>` — see scripts/dhcp_testbench.sh. Plain UDP
+  # sockets only (no raw/L2 sockets, no extra capabilities needed): every
+  # protocol path under test here replies over ordinary broadcast/unicast
+  # UDP (design.md §22.1's "why no raw sockets"), so a plain socket client
+  # is a faithful stand-in for a real one.
+  runner:
+    build:
+      context: runner
+    environment:
+      - CONTROL_URL=http://control:8000
+      - DHCP_IP=172.30.0.10
+      - DHCP_HA_IP=172.30.0.11
+      - DHCP6_IP=fd00:6d61:6e74:6973::12
+      - METRICS_URL=http://172.30.0.10:9100/metrics
+      - METRICS_HA_URL=http://172.30.0.11:9100/metrics
+      - METRICS6_URL=http://172.30.0.12:9101/metrics
+      - RUNNER_IPV4=172.30.0.20
+      - RUNNER_IPV6=fd00:6d61:6e74:6973::20
+    volumes:
+      - ./state:/state
+      - ./runner:/app
+    depends_on:
+      control:
+        condition: service_healthy
+    networks:
+      dhcptest:
+        ipv4_address: 172.30.0.20
+        ipv6_address: fd00:6d61:6e74:6973::20
+    # Keeps the container up for `docker compose run`/`exec`; the compose-up
+    # phase of scripts/dhcp_testbench.sh doesn't need this service running.
+    command: ["sleep", "infinity"]
+
+networks:
+  dhcptest:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+        - subnet: fd00:6d61:6e74:6973::/64

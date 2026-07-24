@@ -15,19 +15,17 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { ActionIcon, Autocomplete, Button, Group, NumberInput, Select, Stack, Switch, Text, TextInput, Title, Tooltip } from "@mantine/core";
+import { Button, Group, NumberInput, Select, Stack, Switch, Text, TextInput, Title } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { modals } from "@mantine/modals";
 import { notifications } from "@mantine/notifications";
-import { IconBolt, IconPlus, IconRefresh } from "@tabler/icons-react";
-import { useMemo, useState } from "react";
+import { IconPlus } from "@tabler/icons-react";
+import { useState } from "react";
 import {
   useCreateDhcpScope6,
   useDeleteDhcpScope6,
-  useDhcpPush6,
   useDhcpScopes6,
-  useKeaInterfaces6,
   useUpdateDhcpScope6,
   type DhcpScope6,
 } from "../../../api/hooks";
@@ -84,31 +82,6 @@ function Scope6Form({
     })
   );
 
-  const { data: ifaceData, isFetching: interfacesFetching, refetch: refetchInterfaces } = useKeaInterfaces6();
-  const interfaceOptions = useMemo(() => {
-    const opts = (ifaceData?.interfaces ?? []).map((i) => ({
-      value: i.name,
-      label: i.name === "*"
-        ? "All interfaces (*)"
-        : `${i.name}${i.addresses.length ? ` - ${i.addresses.join(", ")}` : ""} - ${i.up ? "up" : "down"}`,
-      disabled: !i.up && i.name !== initial?.interface,
-    }));
-    if (initial?.interface && !opts.some((o) => o.value === initial.interface)) {
-      opts.push({ value: initial.interface, label: `${initial.interface} (not currently detected)`, disabled: false });
-    }
-    return opts;
-  }, [ifaceData, initial?.interface]);
-  const interfaceDropdownData = interfaceOptions.length > 0
-    ? interfaceOptions
-    : [{
-        value: "__no_kea_interfaces__",
-        label: ifaceData?.ok ? "No interfaces detected" : "No Kea interfaces loaded",
-        disabled: true,
-      }];
-  const refreshInterfaces = () => {
-    void refetchInterfaces();
-  };
-
   return (
     <form onSubmit={submit}>
       <Stack gap="sm">
@@ -128,28 +101,11 @@ function Scope6Form({
         </Group>
         <TextInput label="DNS servers" placeholder="2001:4860:4860::8888" {...form.getInputProps("dns_servers")} />
         <TextInput label="Domain name" {...form.getInputProps("domain_name")} />
-        <Group align="flex-end" gap="xs" wrap="nowrap">
-          <Autocomplete
-            label="Interface (optional)"
-            placeholder={interfaceOptions.length > 0 ? "Select or type interface" : "Type interface or refresh"}
-            data={interfaceDropdownData}
-            clearable
-            inputWrapperOrder={["label", "input", "description", "error"]}
-            style={{ flex: 1 }}
-            {...form.getInputProps("interface")}
-          />
-          <Tooltip label="Refresh Kea interfaces">
-            <ActionIcon
-              aria-label="Refresh Kea interfaces"
-              variant="default"
-              size="lg"
-              loading={interfacesFetching}
-              onClick={refreshInterfaces}
-            >
-              <IconRefresh size={16} />
-            </ActionIcon>
-          </Tooltip>
-        </Group>
+        <TextInput
+          label="Interface (optional)"
+          placeholder="eth0 — empty serves all interfaces"
+          {...form.getInputProps("interface")}
+        />
         <Group grow>
           <NumberInput label="Preferred lifetime (s)" min={60} {...form.getInputProps("preferred_lifetime_s")} />
           <NumberInput label="Valid lifetime (s)" min={60} {...form.getInputProps("valid_lifetime_s")} />
@@ -170,7 +126,6 @@ export function Scope6sTab({ tenantOptions }: { tenantOptions: { value: string; 
   const create6 = useCreateDhcpScope6();
   const update6 = useUpdateDhcpScope6();
   const del6 = useDeleteDhcpScope6();
-  const push6 = useDhcpPush6();
 
   const [editing, setEditing] = useState<DhcpScope6 | null>(null);
   const [modalOpen, { open, close }] = useDisclosure(false);
@@ -183,12 +138,9 @@ export function Scope6sTab({ tenantOptions }: { tenantOptions: { value: string; 
       ? update6.mutateAsync({ id: editing.id, body })
       : create6.mutateAsync(body);
     mut
-      .then((res) => {
+      .then(() => {
         close();
-        if (res.kea_push_error)
-          notifications.show({ color: "orange", title: "Saved (push failed)", message: res.kea_push_error });
-        else
-          notifications.show({ color: "green", message: editing ? "Scope updated" : "Scope created" });
+        notifications.show({ color: "green", message: editing ? "Scope updated" : "Scope created" });
       })
       .catch((e: Error) => notifications.show({ color: "red", title: "Error", message: e.message }));
   };
@@ -228,21 +180,9 @@ export function Scope6sTab({ tenantOptions }: { tenantOptions: { value: string; 
     <>
       <Group justify="space-between" mb="md">
         <Title order={5}>IPv6 Scopes</Title>
-        <Group>
-          <Button size="xs" variant="default" leftSection={<IconBolt size={14} />}
-            loading={push6.isPending}
-            onClick={() => push6.mutateAsync()
-              .then((r) => r.ok
-                ? notifications.show({ color: "green", message: "DHCPv6 config pushed" })
-                : notifications.show({ color: "red", title: "Push failed", message: r.error ?? "" })
-              ).catch(() => {})}
-          >
-            Push to Kea
-          </Button>
-          <Button size="xs" leftSection={<IconPlus size={14} />} onClick={openCreate}>
-            Add scope
-          </Button>
-        </Group>
+        <Button size="xs" leftSection={<IconPlus size={14} />} onClick={openCreate}>
+          Add scope
+        </Button>
       </Group>
 
       <CrudTable

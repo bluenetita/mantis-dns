@@ -23,7 +23,7 @@ import { fmtExpire } from "../helpers";
 
 const columns: CrudColumn<DhcpLease6>[] = [
   { key: "ip", header: "IP address", render: (l) => <code>{l.ip_address}</code> },
-  { key: "duid", header: "DUID", render: (l) => <code style={{ fontSize: 11 }}>{l.duid ?? "—"}</code> },
+  { key: "duid", header: "DUID", render: (l) => <code style={{ fontSize: 11 }}>{l.duid}</code> },
   { key: "hostname", header: "Hostname", render: (l) => l.hostname || <Text size="xs" c="dimmed">—</Text> },
   {
     key: "type",
@@ -34,7 +34,7 @@ const columns: CrudColumn<DhcpLease6>[] = [
       </Badge>
     ),
   },
-  { key: "expires", header: "Expires in", render: (l) => <Text size="xs">{fmtExpire(l.expire)}</Text> },
+  { key: "expires", header: "Expires in", render: (l) => <Text size="xs">{fmtExpire(l.expires_at)}</Text> },
 ];
 
 export function Leases6Tab({

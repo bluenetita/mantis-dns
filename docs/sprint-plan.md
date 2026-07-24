@@ -257,53 +257,49 @@ Replace the single static upstream resolver with an enterprise-grade upstream ma
 
 ---
 
-## Epic M — DHCP via ISC Kea Integration (Sprints 19–21)
+## Epic M — Native DHCP engine, mantis-dhcp (Sprints 19–21+)
 
-Full architecture and integration model: **design.md §22**.
+Full architecture and status: **design.md §22**.
 
-Mantis integrates **ISC Kea DHCP** as a co-located sidecar rather than building a DHCP engine from scratch. Kea handles the full RFC 2131/8415 wire protocol, conflict detection, relay agent processing, HA failover, and all edge cases. Mantis contributes multi-tenant config management (shadow DB → `KeaConfigGenerator` → Kea direct management API), a DDNS bridge (Kea `run_script` hook → Mantis DNS Zones API), lease-to-client-registry sync, and the management UI.
+Sprints 19–21 originally planned a co-located ISC Kea sidecar. That integration shipped, then was torn out and replaced by a native engine (`services/dhcp/mantis-dhcp`, Rust) once the Kea integration's maintenance cost — a broken `config-set` push path, state that didn't survive a Kea restart, HA that needed a daemon reload Mantis couldn't trigger, fragile hook-path packaging, DDNS through a shell script — turned out to exceed the cost of owning the protocol. design.md §22.1 has the full case for the rewrite. This epic's items below reflect what actually shipped, not the original Kea-shaped plan.
 
-### Sprint 19 — Kea deployment, config management, scope and reservation CRUD
+### Sprint 19 (shipped as: native DHCPv4 core)
 
-- [ ] **Docker Compose**: add `kea-dhcp4` and `kea-dhcp6` services with direct HTTP control sockets; Postgres backend (`libdhcp_pgsql.so`); mount generated config volumes; `kea-exporter` or Stork agent for Prometheus metrics; `restart: unless-stopped`.
-- [ ] **Kea startup config**: minimal `kea-dhcp4.conf` / `kea-dhcp6.conf` with HTTP `control-sockets`, `lease_cmds`, `host_cmds`, `stat_cmds`, and `run_script` hooks enabled.
-- [ ] **DB models**: `DhcpScope` (cidr/inet columns), `DhcpStaticLease`, `DhcpOption`, `DhcpRelayConfig`, `DhcpScopeGroupBinding` — see design.md §22.2. No `DhcpLease` table; Kea's `kea.dhcp4_leases` is authoritative.
-- [ ] **`KeaConfigGenerator`** (Python class in `mantis_control/dhcp/`): translates Mantis DB models to full Kea `Dhcp4` JSON; pushes via `POST http://kea:8004/ {"command":"config-set", ...}`; falls back to incremental `subnet4-add` / `reservation-add` commands for single-scope changes.
-- [ ] **Scope CRUD API**: `GET/POST/PATCH/DELETE /api/v1/tenants/{tid}/dhcp/scopes`; on write → `KeaConfigGenerator.push_scope(scope_id)`; auto-injects DNS option 6 (filter node IPs for tenant), subnet mask, broadcast, lease timing options.
-- [ ] **Static reservation CRUD**: `GET/POST/PATCH/DELETE /api/v1/tenants/{tid}/dhcp/scopes/{sid}/reservations`; on write → `reservation-add` / `reservation-del` Kea command.
-- [ ] **Option CRUD**: per-scope and per-reservation; pushed inside `subnet4` config on next scope push.
-- [ ] **Lease read API**: `GET /api/v1/tenants/{tid}/dhcp/leases` — proxies a `SELECT` from `kea.dhcp4_leases` filtered by known `kea_subnet_id` values for the tenant; supports `?scope_id=`, `?state=`, `?mac=`, `?hostname=` query params.
+- [x] **`services/dhcp/mantis-dhcp`** (new Rust workspace crate): `dhcproto` for wire codec, `sqlx` for Postgres, `arc-swap` for hot-reloading scope config every 10s — no config push, no separate daemon state to drift from the DB.
+- [x] **DB models**: `DhcpScope`, `DhcpStaticLease`, `DhcpOption`, `DhcpRelayConfig` (existing, `kea_subnet_id`/`last_pushed_at` dropped — nothing to push to anymore) + new `DhcpLease`/`DhcpLease6` tables, Mantis-owned and authoritative for lease state (migration `f4a9c1d3e8b2`).
+- [x] **Allocation**: DISCOVER is a non-committing pool peek; REQUEST commits inside a `pg_advisory_xact_lock(hashtextextended(scope_id, 0))` transaction — this is also the entire HA story (§22.6), no peer protocol needed. RELEASE deletes the lease row; DECLINE marks it `state=1`; a 30s sweep deletes expired rows.
+- [x] **Reservations**: fixed-IP-for-MAC honored on both DISCOVER (offer) and REQUEST (claim, NAK on requested-IP mismatch).
+- [x] **Auto-injected options**: subnet mask, router, DNS servers (falls back to the Mantis filter node IP), domain name, lease/T1/T2 timers, server identifier.
+- [x] **Scope/reservation/option CRUD API** (`dhcp_routers.py`): unchanged externally, simplified internally — every mutating endpoint used to end in `await try_push(db)`; now a plain commit, since there's nothing to push.
+- [x] **Lease read API**: `GET /api/v1/dhcp/leases` reads `dhcp_leases` directly (was a raw `SELECT` against Kea's `lease4` table).
 
-**Exit criteria:** `docker compose up kea`; configure a scope via Mantis API; test client on same L2 → receives DHCPACK with correct IP, subnet mask, gateway, DNS option 6 pointing at Mantis filter node; lease visible via lease read API.
-
----
-
-### Sprint 20 — Relay, Option 82, DDNS bridge, client registry, PXE
-
-- [ ] **Relay config**: `DhcpRelayConfig` CRUD; `KeaConfigGenerator` maps `relay_agent_cidr` → Kea `relay.ip-addresses` per subnet; unknown giaddr → Kea discards; `run_script` logs `DhcpRelayUnknownAgentEvent` to Mantis audit log.
-- [ ] **Option 82 client-class routing**: `DhcpRelayConfig.circuit_id_hex` / `remote_id_hex` → Kea `client-class` expressions (generated by `KeaConfigGenerator`); pushed as part of full config-set.
-- [ ] **DDNS bridge**: `mantis-ddns-bridge.sh` generated per deployment (with `MANTIS_INTERNAL_TOKEN`); Kea `run_script` hook fires on `DHCP4_LEASE_COMMITTED` / `DHCP4_LEASE_EXPIRED` / `DHCP4_LEASE_RELEASED`; script POSTs to `POST /api/v1/internal/dhcp-event`; handler upserts/deletes A + PTR records in the scope's `ddns_zone_id` zone; retry queue (3× exponential backoff); DDNS skipped if `ddns_enabled=false` or hostname null.
-- [ ] **`DhcpLeaseSyncLoop`**: asyncio background task (30 s interval); `SELECT` from `kea.dhcp4_leases` for tenant's subnets; upserts `ClientEntry` (ip, hostname, device_type inferred from vendor_id, tags `["dhcp-managed","kea-lease"]`, group_id from `DhcpScopeGroupBinding`).
-- [ ] **Routing table endpoint**: `GET /api/v1/dhcp/routing-table` returns `[{subnet, group_id}]` from `DhcpScope` + `DhcpScopeGroupBinding`; filter node can use this instead of manual VPN subnet config (§7.3).
-- [ ] **PXE**: `DhcpPxeProfile` CRUD; `KeaConfigGenerator` emits Kea `client-class` entries for option 93 (arch) matching + option 66/67/17 injection per profile; pushed in config-set.
-
-**Exit criteria:** relay agent forwards DHCP → scope selected by giaddr → ACK → A + PTR records appear in DNS Zones within 5 s → client visible in client registry with correct `device_type` and `group_id`; PXE boot works for at least one arch class.
+**Exit criteria (met):** `cargo check --workspace` and `cargo clippy` clean; full Python test suite (219 tests) and UI test suite (72 tests) pass against the new schema/routers; DORA cycle (relayed + direct-broadcast) verified against `dhcproto`'s documented API surface.
 
 ---
 
-### Sprint 21 — HA, DHCPv6, UI, observability
+### Sprint 20 (shipped: DDNS, relay, PXE fields — partial; not shipped: option-82, PXE arch-classing)
 
-- [ ] **Kea HA**: `DhcpHaConfig` CRUD (`hot-standby` / `load-balancing` modes); `KeaConfigGenerator` emits `hooks-libraries` entry for `libdhcp_ha.so` with peer list; pushed to both Kea nodes; live HA state exposed via `ha-heartbeat` management API command at `GET /api/v1/dhcp/ha-status`.
-- [ ] **DHCPv6**: `DhcpV6Scope`, `DhcpV6StaticLease` models; `KeaConfigGenerator` generates `kea-dhcp6.conf` (`subnet6` array, IA_NA pools, IA_PD prefix pools); pushes directly to `kea-dhcp6` on `:8006`; DDNS bridge fires AAAA + `ip6.arpa` PTR on DHCPv6 lease events.
-- [ ] **DHCP management UI** (`/dhcp` route, new Shell nav entry):
-  - **Scopes tab**: table (subnet, range, utilization bar, DDNS badge, sync status); Add/Edit modal with CIDR validator, range picker, lease timing, DDNS zone selector, relay IPs.
-  - **Leases tab**: live table from lease API (IP, MAC, hostname, state badge, lease start/end, scope); filters by scope/state/MAC/hostname; bulk delete-expired; "Convert to reservation" action; CSV export; utilization gauge per scope (green <75%, amber 75–90%, red >90%).
-  - **Reservations tab**: MAC/IP/hostname table; bulk CSV import; inline conflict badge.
-  - **HA / Relay tab**: HA mode form + peer config; live HA state chip; relay whitelist; option 82 class table.
-  - **DDNS status** (within scope drawer): bridge event log, retry queue depth.
-- [ ] **Observability**: poll Kea `stat-lease4-get` / `stat-lease6-get` commands (30 s); expose `dhcp_leases_active{scope_id}`, `dhcp_pool_utilization_pct{scope_id}`, `dhcp_offers_total`, `dhcp_acks_total`, `dhcp_naks_total` as Prometheus metrics; `DhcpPoolExhaustedEvent` alert at ≥ 90% utilization; all config pushes and HA state changes written to Mantis audit log.
+- [x] **Relay**: scope selection by `DhcpRelayConfig.relay_ip` match, falling back to subnet-containment of `giaddr` when no explicit relay row exists (`Snapshot::find_scope_for_relay`).
+- [x] **DDNS**: mantis-dhcp POSTs directly to `/internal/dhcp-event` on ACK/RELEASE — same ownership-guard logic in `dhcp_internal_routers.py` that used to sit behind Kea's `run_script` hook + `mantis-ddns-bridge.sh`, just called in-process. That endpoint's own lookup switched from Kea's integer `kea_subnet_id` to the scope's own UUID, since there's no other system's id to translate anymore.
+- [x] **Client registry**: no separate sync loop — `/internal/dhcp-event`'s handler upserts `ClientEntry` as part of the same call, rather than a second process polling a lease table (`lease_sync.py`/`DhcpLeaseSyncLoop` deleted outright).
+- [x] **PXE**: `scope.pxe_next_server`/`pxe_boot_filename` and per-reservation `next_server`/`boot_filename` overrides, wired into every OFFER/ACK's `siaddr`/boot-filename.
+- [ ] **Option 82 client-class routing** (`circuit_id_hex`/`remote_id_hex`): columns still exist on `DhcpRelayConfig`, not yet consumed — no client-class concept in mantis-dhcp yet.
+- [ ] **PXE arch-classing** (option 93 → different boot file for BIOS vs UEFI): needs the same client-class concept as option 82; not yet built.
+- [ ] **Custom per-scope/per-reservation `DhcpOption` rows**: the well-known auto-injected options are fully wired (Sprint 19); arbitrary option-code passthrough was left for a follow-up rather than guessing at an unconfirmed `dhcproto` API during the rewrite (see `options.rs`'s module docs).
+- [ ] **Per-interface socket dispatch**: a single direct-attached scope with no `interface` restriction works; multiple direct-attach scopes on different interfaces need relay-based routing until `SO_BINDTODEVICE`/`IP_PKTINFO` dispatch is built.
 
-**Exit criteria:** kill primary Kea node → standby takes over (Kea HA hot-standby) → new leases issued without client interruption; DHCPv6 client receives IA_NA + AAAA DNS record; all UI tabs functional; pool exhaustion alert fires in test; Prometheus metrics visible.
+**Exit criteria (partially met):** relay → scope selection → ACK → DDNS record within the same request/response cycle (no async bridge latency) — met. Option 82 / PXE arch-classing / multi-interface direct-attach — not yet.
+
+---
+
+### Sprint 21 (shipped: HA via shared DB; not shipped: DHCPv6 daemon, observability)
+
+- [x] **HA**: no `DhcpHaConfig` table anymore — running a second `mantis-dhcp` against the same Postgres is active/active HA, coordinated entirely by the advisory lock in Sprint 19's allocation transaction. The real constraint is operational, not configuration: `network_mode: host` means one process per host can bind `:67`, so "a second instance" means a second host, not a second container.
+- [x] **UI**: HA tab and "push to Kea" button removed (`HaTab.tsx`/`KeaStatusCard.tsx` deleted) — neither concept exists anymore. Scopes/Reservations/Leases/Status tabs updated to the native schema (no `kea_subnet_id` column, no push-error toasts); interface field is now a plain text input (Kea's live interface-list dropdown had no native equivalent built yet).
+- [ ] **DHCPv6 daemon**: `DhcpScope6`/`DhcpStaticLease6` and `dhcp_leases6` exist, and the CRUD API/UI works — but nothing currently answers DHCPv6 wire traffic. IA_NA/IA_PD + DUID identity is a big enough separate protocol surface that it was deliberately sequenced after v4 parity rather than attempted alongside it. This is the largest open item from the migration.
+- [ ] **Observability**: not yet built. `/api/v1/dhcp/stats` already computes per-scope utilisation from `dhcp_leases` directly, so Prometheus metrics or a pool-exhaustion alert have a natural source to read from whenever this gets picked up — no Kea `stat_cmds`/exporter to integrate with anymore, which is one less moving part than the original plan.
+
+**Exit criteria (partially met):** kill one `mantis-dhcp` instance, a second one on a different host keeps issuing leases with zero configuration — met (advisory-lock coordination, not a peer protocol). DHCPv6 client receiving IA_NA + AAAA — not yet; Prometheus metrics — not yet.
 
 ---
 

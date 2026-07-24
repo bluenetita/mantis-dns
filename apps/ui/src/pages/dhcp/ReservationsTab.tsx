@@ -51,6 +51,7 @@ function ReservationForm({
       client_id: initial?.client_id ?? "",
       next_server: initial?.next_server ?? "",
       boot_filename: initial?.boot_filename ?? "",
+      uefi_boot_filename: initial?.uefi_boot_filename ?? "",
       enabled: initial?.enabled ?? true,
     },
     validate: {
@@ -72,6 +73,7 @@ function ReservationForm({
       client_id: v.client_id || null,
       next_server: v.next_server || null,
       boot_filename: v.boot_filename || null,
+      uefi_boot_filename: v.uefi_boot_filename || null,
     })
   );
 
@@ -87,7 +89,8 @@ function ReservationForm({
         <TextInput label="Client ID (hex)" {...form.getInputProps("client_id")} />
         <Group grow>
           <TextInput label="PXE next-server" {...form.getInputProps("next_server")} />
-          <TextInput label="PXE boot file" {...form.getInputProps("boot_filename")} />
+          <TextInput label="PXE boot file (BIOS)" {...form.getInputProps("boot_filename")} />
+          <TextInput label="PXE boot file (UEFI)" {...form.getInputProps("uefi_boot_filename")} />
         </Group>
         <Switch label="Enabled" {...form.getInputProps("enabled", { type: "checkbox" })} />
         <Group justify="flex-end" mt="sm">
@@ -117,12 +120,9 @@ export function ReservationsTab({ scopeOptions }: { scopeOptions: { value: strin
       ? update.mutateAsync({ id: editing.id, body })
       : create.mutateAsync(body);
     mut
-      .then((res) => {
+      .then(() => {
         close();
-        if (res.kea_push_error)
-          notifications.show({ color: "orange", title: "Saved (Kea push failed)", message: res.kea_push_error });
-        else
-          notifications.show({ color: "green", message: editing ? "Reservation updated" : "Reservation created" });
+        notifications.show({ color: "green", message: editing ? "Reservation updated" : "Reservation created" });
       })
       .catch((e: Error) => notifications.show({ color: "red", title: "Error", message: e.message }));
   };

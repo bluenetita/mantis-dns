@@ -4,12 +4,16 @@
 # (or .ps1) — don't paste this file as-is into a cloud provider's user-data
 # field, the placeholders below need substituting first.
 #
-# NOT included: Kea (DHCP) needs L2 broadcast/relay reachability that varies
-# per network, and mantis-filter is meant to run at the edge, often on a
-# separate host. Both are still deployed by docker-compose.prod.yml on this
-# same box for a genuinely all-in-one appliance, but if you're putting the
-# filter node elsewhere, edit /opt/mantis-dns/docker-compose.prod.yml after
-# boot to drop the `filter`/`kea`/`kea-secondary` services.
+# NOT included by default: mantis-dhcp needs host networking and L2
+# broadcast reachability to the DHCP client subnet — rarely meaningful on a
+# cloud VM's own network, and needs MANTIS_DHCP_SERVER_IP set to a real
+# DHCP-serving interface address this template can't guess. Enable it after
+# boot with `docker compose --profile dhcp up -d` once MANTIS_DHCP_SERVER_IP
+# is set in .env, if this box genuinely sits on the client LAN. mantis-filter
+# is deployed here for a genuinely all-in-one appliance; if you're putting
+# the filter node elsewhere instead, edit
+# /opt/mantis-dns/docker-compose.prod.yml after boot to drop the `filter`
+# service.
 
 package_update: true
 packages:

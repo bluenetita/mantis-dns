@@ -4,7 +4,7 @@
 - [ ] `services/filter` (Rust)
 - [ ] `services/control` (Python)
 - [ ] `apps/ui` (TypeScript)
-- [ ] `services/kea`
+- [ ] `services/dhcp` (Rust)
 - [ ] `proto/bundle.proto` (both Rust *and* Python side updated — required, see CONTRIBUTING.md)
 - [ ] `packaging/` / `charts/` / `infra/`
 

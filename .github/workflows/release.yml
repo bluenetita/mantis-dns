@@ -1,7 +1,7 @@
 name: Release images
 
 # Builds and publishes multi-arch (amd64+arm64) images to GHCR whenever a
-# `v*` tag is pushed. All four images are versioned together on purpose: the
+# `v*` tag is pushed. All images are versioned together on purpose: the
 # bloom-filter hashing scheme is duplicated between services/filter and
 # services/control and must stay in lockstep (see README "Cross-language
 # contract"), so mixing tags across services is unsupported.
@@ -29,9 +29,9 @@ jobs:
           - image: filter
             context: .
             dockerfile: services/filter/Dockerfile
-          - image: kea
-            context: services/kea
-            dockerfile: services/kea/Dockerfile
+          - image: dhcp
+            context: .
+            dockerfile: services/dhcp/Dockerfile
     steps:
       - uses: actions/checkout@v4
 

@@ -13,11 +13,11 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""DHCPv6 management API (Sprint 22).
+"""DHCPv6 management API. Mirrors dhcp_routers.py structure.
 
-Scopes and host reservations for kea-dhcp6.  Mirrors dhcp_routers.py structure.
-Every mutating operation calls try_push6() to keep kea-dhcp6 in sync.
-Lease reads query Kea's lease6 table directly (shared Postgres DB).
+Scopes and host reservations for mantis-dhcp's IPv6 side. mantis-dhcp reads
+this DB directly; there is no push/sync step. Lease reads query the native
+`dhcp_leases6` table.
 """
 from __future__ import annotations
 
@@ -27,15 +27,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from mantis_control.audit import write_audit_log
 from mantis_control.auth import check_tenant_access, require_role, user_tenant_filter
-from mantis_control.db.models import DhcpScope6, DhcpStaticLease6
+from mantis_control.db.models import DhcpLease6, DhcpScope6, DhcpStaticLease6
 from mantis_control.db.session import get_db
-from mantis_control.dhcp.kea_config import list_kea_interfaces
-from mantis_control.dhcp.kea_config6 import try_push6
 
 router = APIRouter(prefix="/dhcp6", tags=["dhcp6"])
 log = logging.getLogger(__name__)
@@ -105,12 +102,9 @@ class Scope6Out(BaseModel):
     ddns_enabled: bool
     ddns_zone_id: str | None
     ddns_ttl_s: int
-    kea_subnet_id: int | None
-    last_pushed_at: datetime | None
     enabled: bool
     created_at: datetime
     updated_at: datetime
-    kea_push_error: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -142,19 +136,20 @@ class Reservation6Out(BaseModel):
     enabled: bool
     created_at: datetime
     updated_at: datetime
-    kea_push_error: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class Lease6Out(BaseModel):
     ip_address: str
-    duid: str | None
-    hostname: str
-    subnet_id: int
-    expire: datetime | None
+    duid: str
+    hostname: str | None
+    scope_id: str
+    expires_at: datetime
     state: int
     lease_type: int  # 0=IA_NA, 2=IA_PD
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -191,21 +186,18 @@ def list_scopes6(
 
 
 @router.post("/scopes", response_model=Scope6Out, status_code=201)
-async def create_scope6(
+def create_scope6(
     body: Scope6Create,
     db: Session = Depends(get_db),
     user: Any = Depends(require_role("operator")),
-) -> Scope6Out:
+) -> DhcpScope6:
     check_tenant_access(user, body.tenant_id)
     scope = DhcpScope6(**body.model_dump())
     db.add(scope)
     db.commit()
     db.refresh(scope)
     write_audit_log(db, "dhcp6_scope.create", "dhcp_scope6", scope.id, actor=user.email, tenant_id=scope.tenant_id)
-    err = await try_push6(db)
-    out = Scope6Out.model_validate(scope)
-    out.kea_push_error = err
-    return out
+    return scope
 
 
 @router.get("/scopes/{scope_id}", response_model=Scope6Out)
@@ -220,12 +212,12 @@ def get_scope6(
 
 
 @router.patch("/scopes/{scope_id}", response_model=Scope6Out)
-async def update_scope6(
+def update_scope6(
     scope_id: str,
     body: Scope6Update,
     db: Session = Depends(get_db),
     user: Any = Depends(require_role("operator")),
-) -> Scope6Out:
+) -> DhcpScope6:
     scope = _get_scope6_or_404(db, scope_id)
     check_tenant_access(user, scope.tenant_id)
     for field, val in body.model_dump(exclude_unset=True).items():
@@ -233,14 +225,11 @@ async def update_scope6(
     db.commit()
     db.refresh(scope)
     write_audit_log(db, "dhcp6_scope.update", "dhcp_scope6", scope_id, actor=user.email, tenant_id=scope.tenant_id)
-    err = await try_push6(db)
-    out = Scope6Out.model_validate(scope)
-    out.kea_push_error = err
-    return out
+    return scope
 
 
 @router.delete("/scopes/{scope_id}", status_code=204)
-async def delete_scope6(
+def delete_scope6(
     scope_id: str,
     db: Session = Depends(get_db),
     user: Any = Depends(require_role("operator")),
@@ -250,7 +239,6 @@ async def delete_scope6(
     db.delete(scope)
     db.commit()
     write_audit_log(db, "dhcp6_scope.delete", "dhcp_scope6", scope_id, actor=user.email, tenant_id=scope.tenant_id)
-    await try_push6(db)
 
 
 # ── Reservation endpoints ──────────────────────────────────────────────────────
@@ -272,12 +260,12 @@ def list_reservations6(
 
 
 @router.post("/scopes/{scope_id}/reservations", response_model=Reservation6Out, status_code=201)
-async def create_reservation6(
+def create_reservation6(
     scope_id: str,
     body: Reservation6Create,
     db: Session = Depends(get_db),
     user: Any = Depends(require_role("operator")),
-) -> Reservation6Out:
+) -> DhcpStaticLease6:
     scope = _get_scope6_or_404(db, scope_id)
     check_tenant_access(user, scope.tenant_id)
     r = DhcpStaticLease6(scope_id=scope_id, tenant_id=scope.tenant_id, **body.model_dump())
@@ -285,20 +273,17 @@ async def create_reservation6(
     db.commit()
     db.refresh(r)
     write_audit_log(db, "dhcp6_reservation.create", "dhcp_static_lease6", r.id, actor=user.email, tenant_id=scope.tenant_id)
-    err = await try_push6(db)
-    out = Reservation6Out.model_validate(r)
-    out.kea_push_error = err
-    return out
+    return r
 
 
 @router.patch("/scopes/{scope_id}/reservations/{reservation_id}", response_model=Reservation6Out)
-async def update_reservation6(
+def update_reservation6(
     scope_id: str,
     reservation_id: str,
     body: Reservation6Update,
     db: Session = Depends(get_db),
     user: Any = Depends(require_role("operator")),
-) -> Reservation6Out:
+) -> DhcpStaticLease6:
     scope = _get_scope6_or_404(db, scope_id)
     check_tenant_access(user, scope.tenant_id)
     r = _get_reservation6_or_404(db, scope_id, reservation_id)
@@ -307,14 +292,11 @@ async def update_reservation6(
     db.commit()
     db.refresh(r)
     write_audit_log(db, "dhcp6_reservation.update", "dhcp_static_lease6", reservation_id, actor=user.email, tenant_id=scope.tenant_id)
-    err = await try_push6(db)
-    out = Reservation6Out.model_validate(r)
-    out.kea_push_error = err
-    return out
+    return r
 
 
 @router.delete("/scopes/{scope_id}/reservations/{reservation_id}", status_code=204)
-async def delete_reservation6(
+def delete_reservation6(
     scope_id: str,
     reservation_id: str,
     db: Session = Depends(get_db),
@@ -326,7 +308,6 @@ async def delete_reservation6(
     db.delete(r)
     db.commit()
     write_audit_log(db, "dhcp6_reservation.delete", "dhcp_static_lease6", reservation_id, actor=user.email, tenant_id=scope.tenant_id)
-    await try_push6(db)
 
 
 # ── Lease read ─────────────────────────────────────────────────────────────────
@@ -338,8 +319,8 @@ def list_leases6(
     state: int = 0,
     db: Session = Depends(get_db),
     user: Any = Depends(require_role("viewer")),
-) -> list[Lease6Out]:
-    """Read active IPv6 leases from Kea's lease6 table."""
+) -> list[DhcpLease6]:
+    """Read active IPv6 leases from the native dhcp_leases6 table."""
     if tenant_id:
         check_tenant_access(user, tenant_id)
     tid = tenant_id or user_tenant_filter(user)
@@ -353,59 +334,14 @@ def list_leases6(
     elif tid:
         q = q.filter(DhcpScope6.tenant_id == tid)
 
-    scopes = q.filter(DhcpScope6.kea_subnet_id.isnot(None)).all()
-    if not scopes:
+    scope_ids = [s.id for s in q.all()]
+    if not scope_ids:
         return []
 
-    subnet_ids = [s.kea_subnet_id for s in scopes]
-
-    try:
-        rows = db.execute(
-            text("""
-                SELECT
-                    address                           AS ip_address,
-                    encode(duid, 'hex')               AS duid,
-                    COALESCE(hostname, '')             AS hostname,
-                    subnet_id,
-                    expire,
-                    state,
-                    lease_type
-                FROM lease6
-                WHERE subnet_id = ANY(:sids)
-                  AND state = :state
-                ORDER BY subnet_id, address
-                LIMIT 1000
-            """),
-            {"sids": subnet_ids, "state": state},
-        ).mappings().all()
-    except Exception as exc:
-        log.warning("Could not query lease6: %s", exc)
-        return []
-
-    return [Lease6Out(**dict(r)) for r in rows]
-
-
-# ── Manual push ────────────────────────────────────────────────────────────────
-
-@router.post("/push", status_code=200)
-async def manual_push6(
-    db: Session = Depends(get_db),
-    user: Any = Depends(require_role("operator")),
-) -> dict[str, Any]:
-    """Re-push the full Kea DHCPv6 config from DB."""
-    err = await try_push6(db)
-    if err:
-        return {"ok": False, "error": err}
-    write_audit_log(db, "dhcp6.push", "kea6", "full-config", actor=user.email)
-    return {"ok": True}
-
-
-@router.get("/kea/interfaces")
-async def kea_interfaces6(user: Any = Depends(require_role("viewer"))) -> dict[str, Any]:
-    """List network interfaces kea-dhcp6 can see, for the scope Interface
-    field's dropdown. Degrades gracefully (ok: False) if Kea is unreachable —
-    scopes should stay editable during a Kea outage."""
-    try:
-        return {"ok": True, "interfaces": await list_kea_interfaces(["dhcp6"])}
-    except Exception as exc:
-        return {"ok": False, "interfaces": [], "error": str(exc)}
+    return (
+        db.query(DhcpLease6)
+        .filter(DhcpLease6.scope_id.in_(scope_ids), DhcpLease6.state == state)
+        .order_by(DhcpLease6.scope_id, DhcpLease6.ip_address)
+        .limit(1000)
+        .all()
+    )

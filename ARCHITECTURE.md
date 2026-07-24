@@ -33,8 +33,10 @@ depends synchronously on policy authoring, storage, or UI availability.
 - **Management UI** (`apps/ui`, TypeScript/React) — talks to the control
   plane's REST API. Tenant/group/policy administration, feed management,
   analytics.
-- **Kea** (`services/kea`) — DHCP, hands out the filter node as the resolver
-  to clients on the network it serves.
+- **mantis-dhcp** (`services/dhcp`, Rust) — native DHCPv4 server, hands out
+  the filter node as the resolver to clients on the network it serves. Reads
+  scope/reservation config directly from the control plane's Postgres
+  tables — no separate daemon or push step.
 
 ## Cross-language contract
 
@@ -46,7 +48,7 @@ lockstep; see the fixture tests in `services/control/tests/test_bloom.py`.
 
 ## Request path (cache miss)
 
-1. Client's resolver (set via DHCP/Kea or VPN push) sends a query to a filter node.
+1. Client's resolver (set via DHCP or VPN push) sends a query to a filter node.
 2. Filter node resolves the query against the current signed policy bundle
    (bloom filter → allow/deny override).
 3. Blocked → sinkhole response. Allowed → local cache → upstream resolver (DoT/DoH).

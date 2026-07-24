@@ -19,5 +19,3 @@ export { ScopesTab } from "./ScopesTab";
 export { ReservationsTab } from "./ReservationsTab";
 export { LeasesTab } from "./LeasesTab";
 export { StatusTab } from "./StatusTab";
-export { HaTab } from "./HaTab";
-export { KeaStatusCard } from "./KeaStatusCard";

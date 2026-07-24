@@ -9,15 +9,45 @@ permissions:
 
 jobs:
   rust:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
+    # mantis-dhcp's db.rs/db6.rs/metrics.rs/metrics6.rs tests need a real
+    # Postgres with the control plane's alembic schema applied (advisory
+    # locks / ON CONFLICT behavior is deliberately exercised for real, not
+    # mocked — see services/dhcp/mantis-dhcp/README-tests.md). GitHub-hosted
+    # Windows runners don't support service containers, hence ubuntu-latest
+    # here rather than matching services/control's runner below.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply alembic schema to the test Postgres
+        working-directory: services/control
+        run: |
+          pip install -e ".[dev]"
+          DATABASE_URL="postgresql+psycopg://test:test@localhost:15432/test" python -m alembic upgrade head
       - run: cargo build --workspace
       - run: cargo clippy --workspace -- -D warnings
       - run: cargo test --workspace
+        env:
+          TEST_DATABASE_URL: postgresql://test:test@localhost:15432/test
 
   python:
     runs-on: ubuntu-latest

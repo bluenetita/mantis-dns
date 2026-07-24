@@ -11,7 +11,7 @@ What are you trying to do, and what's missing/blocking today?
 **Proposed solution**
 What you'd like to see.
 
-**Component(s) affected** (filter node / control plane / UI / Kea / packaging):
+**Component(s) affected** (filter node / control plane / UI / mantis-dhcp / packaging):
 
 **Alternatives considered**
 Any workarounds or other approaches you've thought about.

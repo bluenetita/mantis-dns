@@ -18,7 +18,7 @@
 import { Group, Stack, Tabs, Title } from "@mantine/core";
 import { IconWifi } from "@tabler/icons-react";
 import { useDhcpScopes, useTenants, useZones } from "../api/hooks";
-import { HaTab, KeaStatusCard, LeasesTab, ReservationsTab, ScopesTab, StatusTab } from "./dhcp";
+import { LeasesTab, ReservationsTab, ScopesTab, StatusTab } from "./dhcp";
 import { Dhcpv6Tab } from "./dhcp/dhcpv6";
 
 export function DhcpPage() {
@@ -42,15 +42,12 @@ export function DhcpPage() {
         <Title order={2}>DHCP</Title>
       </Group>
 
-      <KeaStatusCard compact />
-
       <Tabs defaultValue="scopes" keepMounted={false}>
         <Tabs.List>
           <Tabs.Tab value="scopes">Scopes</Tabs.Tab>
           <Tabs.Tab value="reservations">Reservations</Tabs.Tab>
           <Tabs.Tab value="leases">Leases</Tabs.Tab>
           <Tabs.Tab value="status">Status</Tabs.Tab>
-          <Tabs.Tab value="ha">High Availability</Tabs.Tab>
           <Tabs.Tab value="ipv6">DHCPv6</Tabs.Tab>
         </Tabs.List>
 
@@ -65,9 +62,6 @@ export function DhcpPage() {
         </Tabs.Panel>
         <Tabs.Panel value="status" pt="md">
           <StatusTab />
-        </Tabs.Panel>
-        <Tabs.Panel value="ha" pt="md">
-          <HaTab tenantOptions={tenantOptions} />
         </Tabs.Panel>
         <Tabs.Panel value="ipv6" pt="md">
           <Dhcpv6Tab tenantOptions={tenantOptions} />

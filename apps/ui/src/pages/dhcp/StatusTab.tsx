@@ -28,7 +28,7 @@ export function StatusTab() {
         {statsLoading ? (
           <Loader size="xs" />
         ) : stats.length === 0 ? (
-          <Text c="dimmed" size="sm">No scopes or Kea not running.</Text>
+          <Text c="dimmed" size="sm">No scopes, or no leases allocated yet.</Text>
         ) : (
           <Table striped>
             <Table.Thead>

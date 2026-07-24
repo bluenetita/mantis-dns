@@ -31,7 +31,12 @@
 # Useful options:
 #   ENABLE_HTTPS=1          Generate/use a local self-signed cert and listen on 443
 #   INSTALL_FILTER=0        Skip mantis-filter
-#   INSTALL_KEA=1           Install and run ISC Kea DHCP4/DHCP6 locally
+#   INSTALL_DHCP=1          Build and run mantis-dhcp (native DHCPv4 server) locally
+#   MANTIS_DHCP_SERVER_IP   Required with INSTALL_DHCP=1 — this host's DHCP-serving
+#                           interface address (clients echo it back on renewal)
+#   INSTALL_DHCP6=1         Build and run mantis-dhcp6 (native DHCPv6 server, RFC 8415) locally
+#   MANTIS_DHCP6_SERVER_ID  Required with INSTALL_DHCP6=1 — a stable IPv6 address used only to
+#                           derive this server's DUID (never itself handed out to a client)
 #   MANTIS_SERVER_NAME=_    nginx server_name value
 #
 # Re-running this script (e.g. after `git pull` to a new tag) redeploys the
@@ -46,8 +51,9 @@
 # Set INSTALL_FILTER=0 to skip mantis-filter (control plane + UI only, e.g.
 # if this box is management-only and DNS edge nodes live elsewhere).
 #
-# Kea is opt-in because DHCP service inside LXC needs NET_ADMIN/NET_RAW and
-# L2 broadcast/relay reachability from the container's network namespace.
+# mantis-dhcp/mantis-dhcp6 are opt-in because DHCP service inside LXC needs L2
+# broadcast (v4) or multicast (v6) reachability from the container's network
+# namespace that a management-only LXC typically shouldn't have.
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # repo root
 # shellcheck source=infra/lxc/lib-update.sh
@@ -60,12 +66,15 @@ fi
 
 : "${CORS_ALLOW_ORIGINS:?set CORS_ALLOW_ORIGINS to the public UI origin for this host, e.g. https://dns.example.com}"
 REQUESTED_CORS_ALLOW_ORIGINS="$CORS_ALLOW_ORIGINS"
-REQUESTED_KEA_CTRL_URL=${KEA_CTRL_URL:-}
-REQUESTED_KEA4_CTRL_URL=${KEA4_CTRL_URL:-}
-REQUESTED_KEA6_CTRL_URL=${KEA6_CTRL_URL:-}
-REQUESTED_KEA_HOOKS_DIR=${KEA_HOOKS_DIR:-}
 INSTALL_FILTER=${INSTALL_FILTER:-1}
-INSTALL_KEA=${INSTALL_KEA:-0}
+INSTALL_DHCP=${INSTALL_DHCP:-0}
+if [ "$INSTALL_DHCP" = "1" ]; then
+  : "${MANTIS_DHCP_SERVER_IP:?set MANTIS_DHCP_SERVER_IP to this hosts DHCP-serving interface address (clients echo it back on every renewal)}"
+fi
+INSTALL_DHCP6=${INSTALL_DHCP6:-0}
+if [ "$INSTALL_DHCP6" = "1" ]; then
+  : "${MANTIS_DHCP6_SERVER_ID:?set MANTIS_DHCP6_SERVER_ID to a stable IPv6 address identifying this server (used only to derive its DUID -- never itself handed out to a client)}"
+fi
 MANTIS_SERVER_NAME=${MANTIS_SERVER_NAME:-_}
 TLS_CERT_FILE=${TLS_CERT_FILE:-/etc/pki/tls/certs/mantis-dns.crt}
 TLS_KEY_FILE=${TLS_KEY_FILE:-/etc/pki/tls/private/mantis-dns.key}
@@ -82,26 +91,6 @@ UI_ROOT=/var/www/mantis-dns
 ENV_DIR=/etc/mantis-control
 ENV_FILE="$ENV_DIR/mantis-control.env"
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-
-wait_for_tcp() {
-  host="$1"
-  port="$2"
-  for _ in $(seq 1 20); do
-    if python3 - "$host" "$port" <<'PY' >/dev/null 2>&1
-import socket
-import sys
-
-sock = socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=1)
-sock.close()
-PY
-    then
-      return 0
-    fi
-    sleep 1
-  done
-
-  return 1
-}
 
 load_control_env() {
   set -a
@@ -140,29 +129,12 @@ set_env_var() {
   rm -f "$tmp_env"
 }
 
-env_value() {
-  key="$1"
-  grep -E "^${key}=" "$ENV_FILE" | tail -1 | cut -d= -f2-
-}
-
 ensure_firewalld_service() {
   service="$1"
   if firewall-cmd --permanent --query-service="$service" >/dev/null 2>&1; then
     echo "    firewalld service already enabled: ${service}"
   else
     firewall-cmd --add-service="$service" --permanent
-  fi
-}
-
-refresh_kea_env_var() {
-  key="$1"
-  requested="$2"
-  default="$3"
-  current="$(env_value "$key")"
-  if [ -n "$requested" ]; then
-    set_env_var "$key" "$requested"
-  elif [ -z "$current" ] || [ "$current" = "http://kea:8080/" ] || [ "$current" = "http://kea:8004/" ] || [ "$current" = "http://kea:8006/" ] || [ "$current" = "http://127.0.0.1:8004/" ] || [ "$current" = "http://127.0.0.1:8006/" ]; then
-    set_env_var "$key" "$default"
   fi
 }
 
@@ -181,185 +153,91 @@ PY
   )"
 }
 
-render_kea_config() {
-  src="$1"
-  dest="$2"
-  hooks_json="$3"
+install_local_dhcp() {
+  echo "==> Building and installing mantis-dhcp (native DHCPv4 server)..."
 
-  sed \
-    -e "s#__PG_DB__#${POSTGRES_DB}#g" \
-    -e "s#__PG_HOST__#127.0.0.1#g" \
-    -e "s#__PG_PORT__#5432#g" \
-    -e "s#__PG_USER__#${POSTGRES_USER}#g" \
-    -e "s#__PG_PASS__#${POSTGRES_PASSWORD}#g" \
-    -e "s#__KEA_CTRL_BIND_ADDRESS__#${KEA_CTRL_BIND_ADDRESS:-127.0.0.1}#g" \
-    -e "s#__KEA4_CTRL_PORT__#${KEA4_CTRL_PORT:-8004}#g" \
-    -e "s#__KEA6_CTRL_PORT__#${KEA6_CTRL_PORT:-8006}#g" \
-    -e "s#__HOOKS_LIBRARIES__#${hooks_json}#g" \
-    "$src" > "$dest"
-}
+  cargo build --release -p mantis-dhcp
+  install -Dm755 target/release/mantis-dhcp /usr/bin/mantis-dhcp
+  # cap_net_raw is only for SO_BINDTODEVICE (per-interface dispatch when a
+  # scope sets `interface`) — a Linux quirk where that setsockopt needs
+  # CAP_NET_RAW even on a plain UDP socket, not AF_PACKET/raw-socket packet
+  # crafting (see services/dhcp/mantis-dhcp/src/server.rs's module docs).
+  setcap cap_net_bind_service,cap_net_raw=+ep /usr/bin/mantis-dhcp
 
-install_local_kea() {
-  echo "==> Installing local ISC Kea DHCP services..."
-
-  if ! command -v kea-dhcp4 >/dev/null || ! command -v kea-admin >/dev/null; then
-    # Cloudsmith's bootstrap script content is generated per-distro/version
-    # server-side, so there's no fixed release artifact to pin a checksum
-    # against — but piping curl straight into bash still means a failed or
-    # truncated download (or a MITM'd/downgraded connection) executes
-    # whatever bytes happen to arrive, silently, as root. Downloading to a
-    # file first lets us fail loudly on a bad/incomplete response instead,
-    # and --proto/--tlsv1.2 rule out a protocol downgrade.
-    kea_setup_script="$(mktemp)"
-    trap 'rm -f "$kea_setup_script"' RETURN
-    if ! curl -fsSL --proto '=https' --tlsv1.2 \
-        'https://dl.cloudsmith.io/public/isc/kea-3-0/setup.rpm.sh' \
-        -o "$kea_setup_script"; then
-      echo "Failed to download the Kea repo bootstrap script from Cloudsmith." >&2
-      exit 1
-    fi
-    if [ ! -s "$kea_setup_script" ] || ! head -c2 "$kea_setup_script" | grep -q '^#!'; then
-      echo "Kea repo bootstrap script is empty or doesn't look like a shell script; aborting." >&2
-      exit 1
-    fi
-    bash "$kea_setup_script"
-    dnf -y install isc-kea-dhcp4 isc-kea-dhcp6 isc-kea-admin isc-kea-hooks isc-kea-pgsql
-  fi
-
-  kea_dhcp4_bin="$(command -v kea-dhcp4)"
-  kea_dhcp6_bin="$(command -v kea-dhcp6)"
-  lease_cmds_lib="$(find /usr/lib64 /usr/lib -name libdhcp_lease_cmds.so -print -quit 2>/dev/null || true)"
-  run_script_lib="$(find /usr/lib64 /usr/lib -name libdhcp_run_script.so -print -quit 2>/dev/null || true)"
-  pgsql_lib="$(find /usr/lib64 /usr/lib -name libdhcp_pgsql.so -print -quit 2>/dev/null || true)"
-  subnet_cmds_lib="$(find /usr/lib64 /usr/lib -name libdhcp_subnet_cmds.so -print -quit 2>/dev/null || true)"
-  host_cmds_lib="$(find /usr/lib64 /usr/lib -name libdhcp_host_cmds.so -print -quit 2>/dev/null || true)"
-
-  if [ -z "$lease_cmds_lib" ]; then
-    echo "Kea lease_cmds hook not found after installing isc-kea-hooks." >&2
-    exit 1
-  fi
-  if [ -z "$pgsql_lib" ]; then
-    echo "Kea PostgreSQL lease-backend hook (libdhcp_pgsql.so) not found after installing isc-kea-pgsql." >&2
-    exit 1
-  fi
-  # The control plane pushes scope changes with subnet4-add/-update/-del and
-  # reservation-add/-del (see kea_config.py) rather than config-set, so
-  # these hooks are mandatory, not optional.
-  if [ -z "$subnet_cmds_lib" ]; then
-    echo "Kea subnet_cmds hook (libdhcp_subnet_cmds.so) not found after installing isc-kea-hooks." >&2
-    exit 1
-  fi
-  if [ -z "$host_cmds_lib" ]; then
-    echo "Kea host_cmds hook (libdhcp_host_cmds.so) not found after installing isc-kea-hooks." >&2
-    exit 1
-  fi
-
-  hooks_dir="$(dirname "$lease_cmds_lib")"
-  mkdir -p /usr/lib/kea /etc/kea
-  ln -sfn "$hooks_dir" /usr/lib/kea/hooks
-
-  # Kea 3.x's run_script hook only allows scripts under /usr/share/kea/scripts
-  # (a guarded-path check) — /usr/local/bin is rejected at load time.
-  ddns_bridge_dest="/usr/share/kea/scripts/mantis-ddns-bridge.sh"
-
-  hooks4_json='[{"library": "'"$pgsql_lib"'"}, {"library": "'"$lease_cmds_lib"'"}, {"library": "'"$subnet_cmds_lib"'"}, {"library": "'"$host_cmds_lib"'"}'
-  if [ -n "$run_script_lib" ] && [ -f services/kea/mantis-ddns-bridge.sh ]; then
-    install -Dm755 services/kea/mantis-ddns-bridge.sh "$ddns_bridge_dest"
-    hooks4_json="${hooks4_json}, {\"library\": \"${run_script_lib}\", \"parameters\": {\"name\": \"${ddns_bridge_dest}\", \"sync\": false}}"
-  fi
-  hooks4_json="${hooks4_json}]"
-  hooks6_json='[{"library": "'"$pgsql_lib"'"}, {"library": "'"$subnet_cmds_lib"'"}, {"library": "'"$host_cmds_lib"'"}]'
-
-  render_kea_config services/kea/kea-dhcp4.conf /etc/kea/kea-dhcp4.conf "$hooks4_json"
-  render_kea_config services/kea/kea-dhcp6.conf /etc/kea/kea-dhcp6.conf "$hooks6_json"
-  chmod 640 /etc/kea/kea-dhcp4.conf /etc/kea/kea-dhcp6.conf
-
-  schema_file="/usr/share/kea/scripts/pgsql/dhcpdb_create.pgsql"
-  if [ ! -f "$schema_file" ]; then
-    echo "Kea PostgreSQL schema not found at $schema_file." >&2
-    exit 1
-  fi
-
-  if ! PGPASSWORD="$POSTGRES_PASSWORD" psql \
-      -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-      -tAc "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='schema_version'" | grep -q 1; then
-    PGPASSWORD="$POSTGRES_PASSWORD" psql \
-      -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-      -v ON_ERROR_STOP=1 -f "$schema_file"
-  else
-    echo "Kea DB schema already present — running kea-admin db-upgrade to catch it up..."
-    kea-admin db-upgrade pgsql \
-      -h 127.0.0.1 -u "$POSTGRES_USER" -p "$POSTGRES_PASSWORD" -n "$POSTGRES_DB"
-  fi
-
-  cat > /etc/systemd/system/mantis-kea-dhcp4.service <<EOF
+  cat > /etc/systemd/system/mantis-dhcp.service <<EOF
 [Unit]
-Description=Mantis-DNS Kea DHCPv4 daemon
-After=network-online.target postgresql.service
+Description=Mantis-DNS native DHCPv4 server
+After=network-online.target postgresql.service mantis-control.service
 Wants=network-online.target
 Requires=postgresql.service
 
 [Service]
 Type=simple
-User=kea
-Group=kea
+User=mantis
+Group=mantis
 EnvironmentFile=${ENV_FILE}
 Environment=MANTIS_CTRL_URL=http://127.0.0.1:8000
-ExecStart=${kea_dhcp4_bin} -c /etc/kea/kea-dhcp4.conf
+Environment=MANTIS_DHCP_SERVER_IP=${MANTIS_DHCP_SERVER_IP}
+ExecStart=/usr/bin/mantis-dhcp
 Restart=on-failure
 RestartSec=2
-RuntimeDirectory=kea
-RuntimeDirectoryMode=0750
-AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target
 EOF
-
-  cat > /etc/systemd/system/mantis-kea-dhcp6.service <<EOF
-[Unit]
-Description=Mantis-DNS Kea DHCPv6 daemon
-After=network-online.target postgresql.service
-Wants=network-online.target
-Requires=postgresql.service
-
-[Service]
-Type=simple
-User=kea
-Group=kea
-EnvironmentFile=${ENV_FILE}
-Environment=MANTIS_CTRL_URL=http://127.0.0.1:8000
-ExecStart=${kea_dhcp6_bin} -c /etc/kea/kea-dhcp6.conf
-Restart=on-failure
-RestartSec=2
-RuntimeDirectory=kea
-RuntimeDirectoryMode=0750
-AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  set_env_var KEA_CTRL_URL "http://127.0.0.1:${KEA4_CTRL_PORT:-8004}/"
-  set_env_var KEA4_CTRL_URL "http://127.0.0.1:${KEA4_CTRL_PORT:-8004}/"
-  set_env_var KEA6_CTRL_URL "http://127.0.0.1:${KEA6_CTRL_PORT:-8006}/"
-  # Kea's hooks-libraries path check rejects the /usr/lib/kea/hooks symlink
-  # (it validates against the real compiled-in directory, not a symlink
-  # target), so the control plane must be given the real path, not the
-  # convenience symlink used by the static kea-dhcp{4,6}.conf files.
-  set_env_var KEA_HOOKS_DIR "$hooks_dir"
 
   systemctl daemon-reload
-  systemctl enable mantis-kea-dhcp4 mantis-kea-dhcp6
-  if ! systemctl restart mantis-kea-dhcp4 mantis-kea-dhcp6 \
-      || ! wait_for_tcp 127.0.0.1 "${KEA4_CTRL_PORT:-8004}" \
-      || ! wait_for_tcp 127.0.0.1 "${KEA6_CTRL_PORT:-8006}"; then
-    echo "Kea failed to start or did not open its local management sockets."
-    echo "If the journal shows permission/socket errors, the LXC likely lacks the network capabilities needed for DHCP."
-    systemctl status mantis-kea-dhcp4 mantis-kea-dhcp6 --no-pager || true
-    journalctl -u mantis-kea-dhcp4 -u mantis-kea-dhcp6 -n 120 --no-pager || true
+  systemctl enable mantis-dhcp
+  if ! systemctl restart mantis-dhcp; then
+    echo "mantis-dhcp failed to start. Service status and recent logs:"
+    systemctl status mantis-dhcp --no-pager || true
+    journalctl -u mantis-dhcp -n 120 --no-pager || true
+    exit 1
+  fi
+}
+
+install_local_dhcp6() {
+  echo "==> Building and installing mantis-dhcp6 (native DHCPv6 server, RFC 8415)..."
+
+  cargo build --release -p mantis-dhcp
+  install -Dm755 target/release/mantis-dhcp6 /usr/bin/mantis-dhcp6
+  # No cap_net_raw here — mantis-dhcp6 has no SO_BINDTODEVICE/per-interface
+  # dispatch path (see services/dhcp/mantis-dhcp/src/server6.rs), so it only
+  # needs CAP_NET_BIND_SERVICE to bind :547.
+  setcap cap_net_bind_service=+ep /usr/bin/mantis-dhcp6
+
+  cat > /etc/systemd/system/mantis-dhcp6.service <<EOF
+[Unit]
+Description=Mantis-DNS native DHCPv6 server (RFC 8415)
+After=network-online.target postgresql.service mantis-control.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=mantis
+Group=mantis
+EnvironmentFile=${ENV_FILE}
+Environment=MANTIS_CTRL_URL=http://127.0.0.1:8000
+Environment=MANTIS_DHCP6_SERVER_ID=${MANTIS_DHCP6_SERVER_ID}
+ExecStart=/usr/bin/mantis-dhcp6
+Restart=on-failure
+RestartSec=2
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable mantis-dhcp6
+  if ! systemctl restart mantis-dhcp6; then
+    echo "mantis-dhcp6 failed to start. Service status and recent logs:"
+    systemctl status mantis-dhcp6 --no-pager || true
+    journalctl -u mantis-dhcp6 -n 120 --no-pager || true
     exit 1
   fi
 }
@@ -412,10 +290,10 @@ echo "==> Enabling CRB + EPEL (needed for some AppStream/devel packages)..."
 dnf -y install dnf-plugins-core epel-release
 dnf config-manager --set-enabled crb 2>/dev/null || dnf config-manager --set-enabled powertools 2>/dev/null || true
 
-echo "==> Installing packages (postgresql, python3, nodejs, nginx$( [ "$INSTALL_FILTER" = "1" ] && echo ', cargo' ))..."
+echo "==> Installing packages (postgresql, python3, nodejs, nginx$( { [ "$INSTALL_FILTER" = "1" ] || [ "$INSTALL_DHCP" = "1" ] || [ "$INSTALL_DHCP6" = "1" ]; } && echo ', cargo' ))..."
 dnf -y module enable nodejs:20 2>/dev/null || true
-PKGS="postgresql-server postgresql-contrib python3 python3-pip nodejs nginx gettext openssl ca-certificates curl jq policycoreutils-python-utils firewalld"
-if [ "$INSTALL_FILTER" = "1" ]; then
+PKGS="postgresql-server postgresql-contrib python3 python3-pip nodejs nginx gettext openssl ca-certificates curl jq policycoreutils-python-utils firewalld libcap"
+if [ "$INSTALL_FILTER" = "1" ] || [ "$INSTALL_DHCP" = "1" ] || [ "$INSTALL_DHCP6" = "1" ]; then
   PKGS="$PKGS cargo"
 fi
 dnf -y install $PKGS
@@ -485,10 +363,6 @@ MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN}
 MANTIS_JWT_SECRET=${MANTIS_JWT_SECRET}
 MANTIS_WEBHOOK_SECRET_KEY=${MANTIS_WEBHOOK_SECRET_KEY}
 MANTIS_FILTER_NODE_IP=${MANTIS_FILTER_NODE_IP:-}
-KEA_CTRL_URL=${KEA_CTRL_URL:-}
-KEA4_CTRL_URL=${KEA4_CTRL_URL:-}
-KEA6_CTRL_URL=${KEA6_CTRL_URL:-}
-KEA_HOOKS_DIR=${KEA_HOOKS_DIR:-/usr/lib/kea/hooks}
 ADMIN_EMAIL=${ADMIN_EMAIL}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 MANTIS_SIGNING_KEY_PATH=${ENV_DIR}/signing_key.bin
@@ -498,9 +372,6 @@ EOF
   chmod 600 "$ENV_FILE"
   echo "Generated ADMIN_PASSWORD (shown once): ${ADMIN_PASSWORD}"
 fi
-ensure_env_var KEA_CTRL_URL "${KEA_CTRL_URL:-}"
-ensure_env_var KEA4_CTRL_URL "${KEA4_CTRL_URL:-}"
-ensure_env_var KEA6_CTRL_URL "${KEA6_CTRL_URL:-}"
 # Must live outside $INSTALL_DIR/app: that directory is wiped and
 # recreated from a fresh checkout on every re-run of this script (see
 # `rm -rf "$INSTALL_DIR/app"` below), so a signing key stored there would be
@@ -518,22 +389,10 @@ ensure_env_var MANTIS_SIGNING_KEY_PATH "${ENV_DIR}/signing_key.bin"
 # sibling of app/venv, never touched by the `rm -rf` below.
 ensure_env_var FEED_STORAGE_DIR "${INSTALL_DIR}/data/feed_domains"
 ensure_env_var BUNDLE_STORAGE_DIR "${INSTALL_DIR}/data/bundles"
-ensure_env_var KEA_HOOKS_DIR "${KEA_HOOKS_DIR:-/usr/lib/kea/hooks}"
-refresh_kea_env_var KEA_CTRL_URL "$REQUESTED_KEA_CTRL_URL" ""
-refresh_kea_env_var KEA4_CTRL_URL "$REQUESTED_KEA4_CTRL_URL" ""
-refresh_kea_env_var KEA6_CTRL_URL "$REQUESTED_KEA6_CTRL_URL" ""
-refresh_kea_env_var KEA_HOOKS_DIR "$REQUESTED_KEA_HOOKS_DIR" "/usr/lib/kea/hooks"
 chmod 600 "$ENV_FILE"
 
 load_control_env
 parse_database_url
-
-if [ "$INSTALL_KEA" = "1" ]; then
-  install_local_kea
-  load_control_env
-else
-  echo "==> INSTALL_KEA=0 — skipping local Kea DHCP services."
-fi
 
 id -u mantis >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --shell /sbin/nologin mantis
 
@@ -544,6 +403,21 @@ id -u mantis >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --shell /
 # the `mantis` user.
 chown mantis:mantis "$ENV_DIR"
 chmod 750 "$ENV_DIR"
+
+# mantis-dhcp (User=mantis in its unit) needs that user to exist first —
+# unlike Kea's RPM, which created its own system user, there's no package
+# doing that for us here.
+if [ "$INSTALL_DHCP" = "1" ]; then
+  install_local_dhcp
+else
+  echo "==> INSTALL_DHCP=0 — skipping mantis-dhcp."
+fi
+
+if [ "$INSTALL_DHCP6" = "1" ]; then
+  install_local_dhcp6
+else
+  echo "==> INSTALL_DHCP6=0 — skipping mantis-dhcp6."
+fi
 
 if [ "$IS_UPDATE" = "1" ]; then
   backup_database "${DATABASE_URL:-}"
@@ -665,8 +539,10 @@ if command -v firewall-cmd >/dev/null; then
   if [ "$ENABLE_HTTPS" = "1" ]; then
     ensure_firewalld_service https
   fi
-  if [ "$INSTALL_KEA" = "1" ]; then
+  if [ "$INSTALL_DHCP" = "1" ]; then
     ensure_firewalld_service dhcp || true
+  fi
+  if [ "$INSTALL_DHCP6" = "1" ]; then
     ensure_firewalld_service dhcpv6 || true
   fi
   firewall-cmd --reload
@@ -716,12 +592,14 @@ fi
 if [ "$INSTALL_FILTER" = "1" ]; then
   echo "DNS filter listening on :53 (mantis-filter) — point clients/DHCP at this host's IP."
 fi
-if [ "$INSTALL_KEA" = "1" ]; then
-  echo "Kea DHCP services: mantis-kea-dhcp4 and mantis-kea-dhcp6"
-  echo "Kea management sockets listen on 127.0.0.1:${KEA4_CTRL_PORT:-8004} and 127.0.0.1:${KEA6_CTRL_PORT:-8006}."
+if [ "$INSTALL_DHCP" = "1" ]; then
+  echo "mantis-dhcp listening on :67 (DHCPv4), serving MANTIS_DHCP_SERVER_IP=${MANTIS_DHCP_SERVER_IP}."
+else
+  echo "mantis-dhcp not installed here — run it via docker-compose.prod.yml or its own host, pointed at this Postgres directly."
 fi
-echo "Kea DHCPv4 management URL: $(env_value KEA4_CTRL_URL)"
-if [ "$INSTALL_KEA" != "1" ]; then
-  echo "Set KEA4_CTRL_URL/KEA6_CTRL_URL to the Kea host IP when Kea runs outside this LXC."
+if [ "$INSTALL_DHCP6" = "1" ]; then
+  echo "mantis-dhcp6 listening on :547 (DHCPv6), serving MANTIS_DHCP6_SERVER_ID=${MANTIS_DHCP6_SERVER_ID}."
+else
+  echo "mantis-dhcp6 not installed here — run it via docker-compose.prod.yml or its own host, pointed at this Postgres directly."
 fi
 echo "Log in with ADMIN_EMAIL/ADMIN_PASSWORD from ${ENV_FILE}, then rotate the password."

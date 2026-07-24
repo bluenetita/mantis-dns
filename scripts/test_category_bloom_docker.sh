@@ -33,7 +33,7 @@
 #      completed ingest) -> test domain is NXDOMAIN (fixed).
 #
 # Requires: docker, docker compose. Uses this repo's docker-compose.yml
-# (postgres/kea/control/filter), building images from source if needed — the
+# (postgres/control/filter), building images from source if needed — the
 # first run takes a few minutes. Does NOT touch any pre-existing tenant,
 # group, policy, or feed — everything it creates is deleted again on exit.
 #
@@ -86,7 +86,7 @@ except Exception:
 "
 }
 
-echo "==> Bringing up postgres/kea/control (building from source if needed)..."
+echo "==> Bringing up postgres/control (building from source if needed)..."
 docker compose up -d --build control
 
 echo "==> Waiting for control plane to become healthy..."

@@ -927,12 +927,10 @@ export interface DhcpScope {
   ddns_ttl_s: number;
   pxe_next_server: string | null;
   pxe_boot_filename: string | null;
-  kea_subnet_id: number | null;
-  last_pushed_at: string | null;
+  pxe_uefi_boot_filename: string | null;
   enabled: boolean;
   created_at: string;
   updated_at: string;
-  kea_push_error: string | null;
 }
 
 export interface DhcpReservation {
@@ -946,18 +944,18 @@ export interface DhcpReservation {
   client_id: string | null;
   next_server: string | null;
   boot_filename: string | null;
+  uefi_boot_filename: string | null;
   enabled: boolean;
   created_at: string;
   updated_at: string;
-  kea_push_error: string | null;
 }
 
 export interface DhcpLease {
   ip_address: string;
-  mac_address: string | null;
-  hostname: string;
-  subnet_id: number;
-  expire: string | null;
+  mac_address: string;
+  hostname: string | null;
+  scope_id: string;
+  expires_at: string;
   state: number;
 }
 
@@ -965,7 +963,6 @@ export interface DhcpSubnetStat {
   scope_id: string;
   scope_name: string;
   subnet: string;
-  kea_subnet_id: number;
   total_addresses: number;
   assigned_addresses: number;
   declined_addresses: number;
@@ -1054,105 +1051,6 @@ export function useDhcpStats() {
   });
 }
 
-export function useKeasStatus() {
-  return useQuery({
-    queryKey: ["kea-status"],
-    queryFn: () =>
-      rawGet<{
-        ok: boolean;
-        url: string;
-        version: string | null;
-        result: number | null;
-        error?: string;
-      }>("/api/v1/dhcp/kea/status"),
-    refetchInterval: 30_000,
-  });
-}
-
-export interface KeaInterface {
-  name: string;
-  addresses: string[];
-  up: boolean;
-}
-
-export function useKeaInterfaces() {
-  return useQuery({
-    queryKey: ["kea-interfaces"],
-    queryFn: () =>
-      rawGet<{ ok: boolean; interfaces: KeaInterface[]; error?: string }>(
-        "/api/v1/dhcp/kea/interfaces"
-      ),
-    staleTime: 30_000,
-  });
-}
-
-export function useKeaInterfaces6() {
-  return useQuery({
-    queryKey: ["kea-interfaces6"],
-    queryFn: () =>
-      rawGet<{ ok: boolean; interfaces: KeaInterface[]; error?: string }>(
-        "/api/v1/dhcp6/kea/interfaces"
-      ),
-    staleTime: 30_000,
-  });
-}
-
-export function useDhcpPush() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => rawPost<{ ok: boolean; error?: string }>("/api/v1/dhcp/push", {}),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["dhcp-scopes"] });
-      qc.invalidateQueries({ queryKey: ["dhcp-stats"] });
-    },
-  });
-}
-
-export interface DhcpHaConfig {
-  id: string;
-  tenant_id: string;
-  enabled: boolean;
-  mode: "hot-standby" | "load-balancing";
-  this_server_name: string;
-  this_server_url: string;
-  peer_name: string;
-  peer_url: string;
-  peer_role: string;
-  max_unacked_clients: number | null;
-  max_ack_delay_ms: number | null;
-  heartbeat_delay_ms: number | null;
-  retry_wait_time_ms: number | null;
-  created_at: string;
-  updated_at: string;
-  kea_push_error?: string | null;
-}
-
-export function useDhcpHaConfig(tenantId: string | undefined) {
-  return useQuery({
-    queryKey: ["dhcp-ha", tenantId],
-    queryFn: () => rawGet<DhcpHaConfig>(`/api/v1/dhcp/ha/${tenantId}`),
-    enabled: !!tenantId,
-    retry: false,
-  });
-}
-
-export function useUpsertDhcpHaConfig(tenantId: string | undefined) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: Partial<DhcpHaConfig>) =>
-      rawPut<DhcpHaConfig>(`/api/v1/dhcp/ha/${tenantId}`, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["dhcp-ha", tenantId] }),
-  });
-}
-
-export function useDeleteDhcpHaConfig(tenantId: string | undefined) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => rawDelete(`/api/v1/dhcp/ha/${tenantId}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["dhcp-ha", tenantId] }),
-  });
-}
-
 // ── DHCPv6 ────────────────────────────────────────────────────────────────────
 
 export interface DhcpScope6 {
@@ -1175,12 +1073,9 @@ export interface DhcpScope6 {
   ddns_enabled: boolean;
   ddns_zone_id: string | null;
   ddns_ttl_s: number;
-  kea_subnet_id: number | null;
-  last_pushed_at: string | null;
   enabled: boolean;
   created_at: string;
   updated_at: string;
-  kea_push_error?: string | null;
 }
 
 export interface DhcpReservation6 {
@@ -1194,15 +1089,14 @@ export interface DhcpReservation6 {
   enabled: boolean;
   created_at: string;
   updated_at: string;
-  kea_push_error?: string | null;
 }
 
 export interface DhcpLease6 {
   ip_address: string;
-  duid: string | null;
-  hostname: string;
-  subnet_id: number;
-  expire: string | null;
+  duid: string;
+  hostname: string | null;
+  scope_id: string;
+  expires_at: string;
   state: number;
   lease_type: number;
 }
@@ -1282,10 +1176,3 @@ export function useDhcpLeases6(scopeId: string | undefined) {
   });
 }
 
-export function useDhcpPush6() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => rawPost<{ ok: boolean; error?: string }>("/api/v1/dhcp6/push", {}),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["dhcp6-scopes"] }),
-  });
-}

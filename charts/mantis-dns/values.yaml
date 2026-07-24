@@ -1,6 +1,6 @@
 # Default values for mantis-dns.
-# Kea (DHCP) and mantis-filter (edge DNS) are NOT part of this chart — Kea
-# needs L2 broadcast/relay reachability and filter nodes belong at the
+# mantis-dhcp and mantis-filter (edge DNS) are NOT part of this chart —
+# mantis-dhcp needs L2 broadcast reachability and filter nodes belong at the
 # network edge, both a poor fit for typical pod-network isolation. Deploy
 # them via docker-compose.prod.yml or the standalone .deb (packaging/filter/)
 # instead, pointed at this chart's control Service.

@@ -35,12 +35,14 @@
 # boots before switching traffic to it. If the health check fails, the script
 # exits with the exact commands to roll back — see lib-update.sh.
 #
-# NOT installed here: mantis-filter and Kea. Filter nodes belong at the
-# network edge (often a separate LXC/site) — install the standalone .deb from
-# a GitHub release instead (see packaging/filter/ and docs/deploy-lxc.md).
-# Kea needs NET_ADMIN + L2 broadcast/relay reachability that a management-
-# plane LXC shouldn't have — run it via docker-compose.prod.yml or its own
-# host, pointed at this host's control API.
+# NOT installed here: mantis-filter and mantis-dhcp/mantis-dhcp6. Filter
+# nodes belong at the network edge (often a separate LXC/site) — install the
+# standalone .deb from a GitHub release instead (see packaging/filter/ and
+# docs/deploy-lxc.md). mantis-dhcp needs L2 broadcast (v4) or multicast (v6)
+# reachability that a management-plane LXC shouldn't have — run either via
+# docker-compose.prod.yml or its own host, pointed at this host's Postgres
+# directly (neither has a control-API dependency at runtime — see
+# design.md §22).
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # repo root
 # shellcheck source=infra/lxc/lib-update.sh
@@ -52,10 +54,6 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 : "${CORS_ALLOW_ORIGINS:?set CORS_ALLOW_ORIGINS to the public UI origin for this host, e.g. https://dns.example.com}"
-REQUESTED_KEA_CTRL_URL=${KEA_CTRL_URL:-}
-REQUESTED_KEA4_CTRL_URL=${KEA4_CTRL_URL:-}
-REQUESTED_KEA6_CTRL_URL=${KEA6_CTRL_URL:-}
-REQUESTED_KEA_HOOKS_DIR=${KEA_HOOKS_DIR:-}
 
 INSTALL_DIR=/opt/mantis-dns
 UI_ROOT=/var/www/mantis-dns
@@ -90,23 +88,6 @@ set_env_var() {
   ' "$ENV_FILE" > "$tmp_env"
   cat "$tmp_env" > "$ENV_FILE"
   rm -f "$tmp_env"
-}
-
-env_value() {
-  key="$1"
-  grep -E "^${key}=" "$ENV_FILE" | tail -1 | cut -d= -f2-
-}
-
-refresh_kea_env_var() {
-  key="$1"
-  requested="$2"
-  default="$3"
-  current="$(env_value "$key")"
-  if [ -n "$requested" ]; then
-    set_env_var "$key" "$requested"
-  elif [ -z "$current" ] || [ "$current" = "http://kea:8080/" ] || [ "$current" = "http://kea:8004/" ] || [ "$current" = "http://kea:8006/" ] || [ "$current" = "http://127.0.0.1:8004/" ] || [ "$current" = "http://127.0.0.1:8006/" ]; then
-    set_env_var "$key" "$default"
-  fi
 }
 
 echo "==> Installing packages (postgresql, python3-venv, nodejs, nginx)..."
@@ -149,10 +130,6 @@ MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN}
 MANTIS_JWT_SECRET=${MANTIS_JWT_SECRET}
 MANTIS_WEBHOOK_SECRET_KEY=${MANTIS_WEBHOOK_SECRET_KEY}
 MANTIS_FILTER_NODE_IP=${MANTIS_FILTER_NODE_IP:-}
-KEA_CTRL_URL=${KEA_CTRL_URL:-}
-KEA4_CTRL_URL=${KEA4_CTRL_URL:-}
-KEA6_CTRL_URL=${KEA6_CTRL_URL:-}
-KEA_HOOKS_DIR=${KEA_HOOKS_DIR:-/usr/lib/kea/hooks}
 ADMIN_EMAIL=${ADMIN_EMAIL}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 MANTIS_SIGNING_KEY_PATH=${ENV_DIR}/signing_key.bin
@@ -162,10 +139,6 @@ EOF
   chmod 600 "$ENV_FILE"
   echo "Generated ADMIN_PASSWORD (shown once): ${ADMIN_PASSWORD}"
 fi
-ensure_env_var KEA_CTRL_URL "${KEA_CTRL_URL:-}"
-ensure_env_var KEA4_CTRL_URL "${KEA4_CTRL_URL:-}"
-ensure_env_var KEA6_CTRL_URL "${KEA6_CTRL_URL:-}"
-ensure_env_var KEA_HOOKS_DIR "${KEA_HOOKS_DIR:-/usr/lib/kea/hooks}"
 # Must live outside $INSTALL_DIR/app: that directory is wiped and recreated
 # from a fresh checkout on every re-run of this script (see
 # `rm -rf "$INSTALL_DIR/app"` below), so a signing key stored there would be
@@ -179,10 +152,6 @@ ensure_env_var MANTIS_SIGNING_KEY_PATH "${ENV_DIR}/signing_key.bin"
 # prevents the DB from claiming feeds/bundles exist after their files vanished.
 ensure_env_var FEED_STORAGE_DIR "${INSTALL_DIR}/data/feed_domains"
 ensure_env_var BUNDLE_STORAGE_DIR "${INSTALL_DIR}/data/bundles"
-refresh_kea_env_var KEA_CTRL_URL "$REQUESTED_KEA_CTRL_URL" ""
-refresh_kea_env_var KEA4_CTRL_URL "$REQUESTED_KEA4_CTRL_URL" ""
-refresh_kea_env_var KEA6_CTRL_URL "$REQUESTED_KEA6_CTRL_URL" ""
-refresh_kea_env_var KEA_HOOKS_DIR "$REQUESTED_KEA_HOOKS_DIR" "/usr/lib/kea/hooks"
 chmod 600 "$ENV_FILE"
 
 id -u mantis >/dev/null 2>&1 || useradd --system --home "$INSTALL_DIR" --shell /usr/sbin/nologin mantis
@@ -259,6 +228,4 @@ systemctl reload nginx || systemctl restart nginx
 
 echo
 echo "Done. UI: http://$(hostname -I | awk '{print $1}')/  API: http://127.0.0.1:8000"
-echo "Kea DHCPv4 management URL: $(env_value KEA4_CTRL_URL)"
-echo "Set KEA4_CTRL_URL/KEA6_CTRL_URL to the Kea host IP when Kea runs outside this LXC."
 echo "Log in with ADMIN_EMAIL/ADMIN_PASSWORD from ${ENV_FILE}, then rotate the password."
