@@ -599,23 +599,24 @@ pub async fn scope_utilization6(pool: &PgPool) -> anyhow::Result<Vec<ScopeUtiliz
         .collect()
 }
 
-/// See db.rs's `HEARTBEAT_PRUNE_AFTER_MINUTES`/`upsert_heartbeat` — same
-/// idiom, family `'6'` instead of `'4'`.
-const HEARTBEAT_PRUNE_AFTER_MINUTES: i64 = 5;
-
-pub async fn upsert_heartbeat(pool: &PgPool, instance_id: &str, hostname: Option<&str>) -> anyhow::Result<()> {
+/// See db.rs's `register_instance`/`touch_heartbeat` — same idiom, family
+/// `'6'` instead of `'4'`.
+pub async fn register_instance(pool: &PgPool, instance_id: &str, hostname: Option<&str>) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO dhcp_daemon_heartbeats (instance_id, family, hostname, started_at, last_seen_at)
          VALUES ($1, '6', $2, now(), now())
-         ON CONFLICT (instance_id) DO UPDATE SET last_seen_at = now(), hostname = excluded.hostname",
+         ON CONFLICT (hostname, family) DO UPDATE SET instance_id = excluded.instance_id, started_at = now(), last_seen_at = now()",
     )
     .bind(instance_id)
     .bind(hostname)
     .execute(pool)
     .await?;
-    let prune_cutoff = Utc::now() - chrono::Duration::minutes(HEARTBEAT_PRUNE_AFTER_MINUTES);
-    sqlx::query("DELETE FROM dhcp_daemon_heartbeats WHERE family = '6' AND last_seen_at < $1")
-        .bind(prune_cutoff)
+    Ok(())
+}
+
+pub async fn touch_heartbeat(pool: &PgPool, instance_id: &str) -> anyhow::Result<()> {
+    sqlx::query("UPDATE dhcp_daemon_heartbeats SET last_seen_at = now() WHERE instance_id = $1")
+        .bind(instance_id)
         .execute(pool)
         .await?;
     Ok(())
@@ -1006,74 +1007,88 @@ mod tests {
         assert_eq!(row.declined, 1);
     }
 
-    #[tokio::test]
-    async fn upsert_heartbeat_inserts_then_refreshes_last_seen_on_the_same_instance() {
-        let pool = test_pool().await;
-        let instance_id = uuid::Uuid::new_v4().to_string();
-
-        upsert_heartbeat(&pool, &instance_id, Some("host-a")).await.unwrap();
-        sqlx::query("UPDATE dhcp_daemon_heartbeats SET last_seen_at = last_seen_at - interval '1 minute' WHERE instance_id = $1")
-            .bind(&instance_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        let first_seen: chrono::NaiveDateTime =
-            sqlx::query_scalar("SELECT last_seen_at FROM dhcp_daemon_heartbeats WHERE instance_id = $1")
-                .bind(&instance_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-
-        upsert_heartbeat(&pool, &instance_id, Some("host-a")).await.unwrap();
-        let second_seen: chrono::NaiveDateTime =
-            sqlx::query_scalar("SELECT last_seen_at FROM dhcp_daemon_heartbeats WHERE instance_id = $1")
-                .bind(&instance_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-
-        assert!(second_seen > first_seen, "a second upsert for the same instance must refresh last_seen_at");
-        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM dhcp_daemon_heartbeats WHERE instance_id = $1")
-            .bind(&instance_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(count, 1, "must update in place, not insert a second row");
+    /// Random per-test hostname so parallel tests never collide on the
+    /// unique (hostname, family) constraint.
+    fn fresh_hostname() -> String {
+        format!("host-{}", uuid::Uuid::new_v4())
     }
 
     #[tokio::test]
-    async fn upsert_heartbeat_prunes_a_stale_row_of_the_same_family_only() {
+    async fn touch_heartbeat_refreshes_last_seen_without_touching_started_at() {
         let pool = test_pool().await;
-        let stale_v6 = uuid::Uuid::new_v4().to_string();
-        let stale_v4 = uuid::Uuid::new_v4().to_string();
-        let fresh_v6 = uuid::Uuid::new_v4().to_string();
+        let instance_id = uuid::Uuid::new_v4().to_string();
+        register_instance(&pool, &instance_id, Some(&fresh_hostname())).await.unwrap();
 
-        for (id, family) in [(&stale_v6, "6"), (&stale_v4, "4")] {
-            sqlx::query(
-                "INSERT INTO dhcp_daemon_heartbeats (instance_id, family, started_at, last_seen_at)
-                 VALUES ($1, $2, now() - interval '1 hour', now() - interval '1 hour')",
-            )
-            .bind(id)
-            .bind(family)
+        sqlx::query("UPDATE dhcp_daemon_heartbeats SET started_at = started_at - interval '1 minute', last_seen_at = last_seen_at - interval '1 minute' WHERE instance_id = $1")
+            .bind(&instance_id)
             .execute(&pool)
             .await
             .unwrap();
-        }
-
-        upsert_heartbeat(&pool, &fresh_v6, None).await.unwrap();
-
-        let remaining_ids: Vec<String> = sqlx::query_scalar(
-            "SELECT instance_id FROM dhcp_daemon_heartbeats WHERE instance_id IN ($1, $2, $3)",
+        let (started_before, seen_before): (chrono::NaiveDateTime, chrono::NaiveDateTime) = sqlx::query_as(
+            "SELECT started_at, last_seen_at FROM dhcp_daemon_heartbeats WHERE instance_id = $1",
         )
-        .bind(&stale_v6)
-        .bind(&stale_v4)
-        .bind(&fresh_v6)
-        .fetch_all(&pool)
+        .bind(&instance_id)
+        .fetch_one(&pool)
         .await
         .unwrap();
 
-        assert!(!remaining_ids.contains(&stale_v6), "a stale v6 row must be pruned");
-        assert!(remaining_ids.contains(&stale_v4), "a stale v4 row must survive v6's own prune pass");
-        assert!(remaining_ids.contains(&fresh_v6), "the instance's own just-written row must survive");
+        touch_heartbeat(&pool, &instance_id).await.unwrap();
+        let (started_after, seen_after): (chrono::NaiveDateTime, chrono::NaiveDateTime) = sqlx::query_as(
+            "SELECT started_at, last_seen_at FROM dhcp_daemon_heartbeats WHERE instance_id = $1",
+        )
+        .bind(&instance_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert!(seen_after > seen_before, "touch_heartbeat must refresh last_seen_at");
+        assert_eq!(started_after, started_before, "touch_heartbeat must never change started_at");
+    }
+
+    #[tokio::test]
+    async fn register_instance_on_the_same_host_takes_over_the_row_instead_of_duplicating_it() {
+        let pool = test_pool().await;
+        let hostname = fresh_hostname();
+        let first_instance = uuid::Uuid::new_v4().to_string();
+        register_instance(&pool, &first_instance, Some(&hostname)).await.unwrap();
+        sqlx::query("UPDATE dhcp_daemon_heartbeats SET started_at = started_at - interval '1 hour' WHERE instance_id = $1")
+            .bind(&first_instance)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let second_instance = uuid::Uuid::new_v4().to_string();
+        register_instance(&pool, &second_instance, Some(&hostname)).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM dhcp_daemon_heartbeats WHERE hostname = $1 AND family = '6'")
+            .bind(&hostname)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1, "a restart on the same host must take over the existing row, not add a second one");
+
+        let row_instance_id: String = sqlx::query_scalar("SELECT instance_id FROM dhcp_daemon_heartbeats WHERE hostname = $1 AND family = '6'")
+            .bind(&hostname)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row_instance_id, second_instance, "the row must reflect the new process's instance_id");
+    }
+
+    #[tokio::test]
+    async fn register_instance_with_no_hostname_creates_a_separate_row_each_time() {
+        let pool = test_pool().await;
+        let first = uuid::Uuid::new_v4().to_string();
+        let second = uuid::Uuid::new_v4().to_string();
+        register_instance(&pool, &first, None).await.unwrap();
+        register_instance(&pool, &second, None).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM dhcp_daemon_heartbeats WHERE instance_id IN ($1, $2)")
+            .bind(&first)
+            .bind(&second)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 2, "with no hostname to key on, each registration is its own row (a documented, rare edge case)");
     }
 }

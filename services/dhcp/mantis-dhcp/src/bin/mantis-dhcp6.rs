@@ -108,18 +108,23 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Liveness signal for the control-plane UI — see main.rs's matching
-    // v4 loop for why this exists at all.
+    // v4 loop for why this exists at all (registered once by (hostname,
+    // family) identity, then just refreshed by instance_id on every tick).
     {
-        let pool = pool.clone();
         let instance_id = uuid::Uuid::new_v4().to_string();
         let hostname = mantis_dhcp::hostname();
+        if let Err(e) = db6::register_instance(&pool, &instance_id, hostname.as_deref()).await {
+            tracing::warn!("v6 heartbeat registration failed: {e}");
+        }
+
+        let pool = pool.clone();
         let interval_s = cfg.scope_refresh_interval_s;
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_s));
             loop {
                 ticker.tick().await;
-                if let Err(e) = db6::upsert_heartbeat(&pool, &instance_id, hostname.as_deref()).await {
-                    tracing::warn!("v6 heartbeat upsert failed: {e}");
+                if let Err(e) = db6::touch_heartbeat(&pool, &instance_id).await {
+                    tracing::warn!("v6 heartbeat touch failed: {e}");
                 }
             }
         });

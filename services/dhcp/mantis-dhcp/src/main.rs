@@ -119,20 +119,25 @@ async fn main() -> anyhow::Result<()> {
     // Liveness signal for the control-plane UI (design.md §22.11) — without
     // this, a crashed or bootlooping daemon has no way to show up anywhere
     // except journalctl; the lease/utilisation numbers the UI already shows
-    // just stop updating silently. `instance_id` is generated fresh here,
-    // not persisted anywhere else, so a restart is a new row, not a stale
-    // update of the old one.
+    // just stop updating silently. Registered once here (by (hostname,
+    // family) identity, taking over any previous instance's row rather than
+    // leaving it stale next to a new one — see `db::register_instance`),
+    // then just refreshed by `instance_id` on every tick.
     {
-        let pool = pool.clone();
         let instance_id = uuid::Uuid::new_v4().to_string();
         let hostname = mantis_dhcp::hostname();
+        if let Err(e) = db::register_instance(&pool, &instance_id, hostname.as_deref()).await {
+            tracing::warn!("heartbeat registration failed: {e}");
+        }
+
+        let pool = pool.clone();
         let interval_s = cfg.scope_refresh_interval_s;
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_s));
             loop {
                 ticker.tick().await;
-                if let Err(e) = db::upsert_heartbeat(&pool, &instance_id, hostname.as_deref()).await {
-                    tracing::warn!("heartbeat upsert failed: {e}");
+                if let Err(e) = db::touch_heartbeat(&pool, &instance_id).await {
+                    tracing::warn!("heartbeat touch failed: {e}");
                 }
             }
         });

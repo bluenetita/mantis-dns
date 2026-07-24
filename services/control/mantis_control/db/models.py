@@ -736,13 +736,19 @@ class DhcpDaemonHeartbeat(Base):
     """Liveness signal for a running mantis-dhcp/mantis-dhcp6 instance
     (design.md §22.11) — otherwise a crashed or bootlooping daemon has no
     way to show up anywhere in the control plane; the lease/utilisation
-    numbers just stop updating silently. `instance_id` is a fresh UUID the
-    daemon generates at its own startup (not persisted anywhere else), so a
-    restarted process is a new row; the daemon prunes its own stale rows
-    (same family, past a staleness threshold) on every heartbeat tick, so
-    this table doesn't need a separate sweep job."""
+    numbers just stop updating silently. Identity is `(hostname, family)`,
+    not a per-process-boot random id: only one instance per host can ever
+    run a given family (host networking, one process per bound port —
+    §22.6), so a restart should refresh the *same* row (new `started_at`,
+    fresh `instance_id`), not leave the old, now-dead instance's row sitting
+    there stale forever next to a new one. A host whose hostname couldn't be
+    determined falls back to one row per restart (NULL never conflicts with
+    NULL in a unique index) — an accepted, rare edge case. Rows are never
+    auto-pruned: a stale row *is* the signal an operator wants to keep
+    seeing, not something that should quietly disappear after a timeout."""
 
     __tablename__ = "dhcp_daemon_heartbeats"
+    __table_args__ = (UniqueConstraint("hostname", "family", name="uq_dhcp_daemon_heartbeat_host_family"),)
 
     instance_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     family: Mapped[str] = mapped_column(String(1), index=True)  # "4" | "6"
