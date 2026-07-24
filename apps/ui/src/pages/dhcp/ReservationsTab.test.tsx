@@ -62,6 +62,7 @@ function makeReservation(overrides: Partial<DhcpReservation> = {}): DhcpReservat
     client_id: null,
     next_server: null,
     boot_filename: null,
+    uefi_boot_filename: null,
     enabled: true,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
