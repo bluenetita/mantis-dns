@@ -26,6 +26,13 @@
 #   git clone <repo> /opt/mantis-dns-src && cd /opt/mantis-dns-src
 #   CORS_ALLOW_ORIGINS=https://dns.example.com ./infra/lxc/install.sh
 #
+# Set MANTIS_ENV=dev on first install to skip the secure-secrets gate (see
+# services/control/mantis_control/config.py's _DEV_ENV_VALUES) and boot with
+# the dev JWT/webhook/internal-token defaults instead of generated secrets.
+# Only takes effect on first install — mantis-control.env exists after that
+# and is reused as-is; edit MANTIS_ENV there by hand and restart the service
+# to change it later.
+#
 # Re-running this script (e.g. after `git pull` to a new tag) redeploys the
 # code and restarts services but reuses the existing Postgres role/secrets in
 # /etc/mantis-control/mantis-control.env — delete that file to regenerate.
@@ -122,7 +129,7 @@ else
     || sudo -u postgres psql -c "CREATE DATABASE ${POSTGRES_DB} OWNER ${POSTGRES_USER};"
 
   cat > "$ENV_FILE" <<EOF
-MANTIS_ENV=production
+MANTIS_ENV=${MANTIS_ENV:-production}
 DATABASE_URL=postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}
 CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS}
 MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN}

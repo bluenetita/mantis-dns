@@ -29,6 +29,13 @@
 #   CORS_ALLOW_ORIGINS=https://dns.example.com ./infra/lxc/install-rocky.sh
 #
 # Useful options:
+#   MANTIS_ENV=dev          First install only: skip the secure-secrets gate (see
+#                           services/control/mantis_control/config.py's
+#                           _DEV_ENV_VALUES) and boot with dev JWT/webhook/
+#                           internal-token defaults instead of generated secrets.
+#                           mantis-control.env is reused as-is on re-runs — edit
+#                           MANTIS_ENV there by hand and restart the service to
+#                           change it later.
 #   ENABLE_HTTPS=1          Generate/use a local self-signed cert and listen on 443
 #   INSTALL_FILTER=0        Skip mantis-filter
 #   INSTALL_DHCP=1          Build and run mantis-dhcp (native DHCPv4 server) locally
@@ -364,7 +371,7 @@ else
   configure_postgres_password_auth
 
   cat > "$ENV_FILE" <<EOF
-MANTIS_ENV=production
+MANTIS_ENV=${MANTIS_ENV:-production}
 DATABASE_URL=postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}
 CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS}
 MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN}
