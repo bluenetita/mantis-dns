@@ -64,13 +64,16 @@ lockstep; see the fixture tests in `services/control/tests/test_bloom.py`.
 ## Deployment topologies
 
 See the [README's Production deploy section](README.md#production-deploy) for
-how these components map onto Docker Compose, a standalone `.deb`, Kubernetes
-(Helm), or a cloud-init VM appliance.
+how these components map onto Docker Compose, a standalone `.deb`, or a
+cloud-init VM appliance — the real deployment target is a Proxmox host or
+small cluster (design.md §17). An early, unverified Helm chart
+(`charts/mantis-dns`) exists but Kubernetes is not a pursued target
+(design.md §26.9).
 
 ## Full design document
 
 This file is the as-built summary. The complete design — multi-tenancy model,
-HA/scaling strategy, OpenVPN AS integration, category-feed auto-update
-pipeline, SIEM export, upstream resolver pools — lives in
+HA/scaling strategy, category-feed auto-update pipeline, SIEM export, upstream
+resolver pools, and a 2026-07-25 architecture review of open risks — lives in
 [`docs/design.md`](docs/design.md). Sprint-by-sprint delivery status is in
 [`docs/sprint-plan.md`](docs/sprint-plan.md).

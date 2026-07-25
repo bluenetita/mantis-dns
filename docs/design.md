@@ -5,29 +5,32 @@
 **Date:** 2026-07-25 (status markers re-validated against the codebase on this date)
 **Audience:** Platform engineering, network security, SRE
 
-> **Deployment profiles.** The platform targets two profiles from one codebase:
-> - **Cloud/cluster** — Kubernetes + OpenVPN AS cluster, anycast, full HA (§4–§12).
-> - **Proxmox VE single-host / small-cluster** — OpenVPN server co-located on the same hypervisor, collapsed control plane, no Kubernetes (§17).
->
-> Category-based content filtering with auto-updating feeds (porn, gambling, firearms, etc.) is a first-class feature in both profiles (§18).
+> **Deployment profile.** The platform runs as the **Proxmox VE single-host /
+> small-cluster profile** (§17): systemd or Docker Compose, one PostgreSQL
+> instance, filesystem-based bundle distribution — see
+> [`ARCHITECTURE.md`](../ARCHITECTURE.md) for the as-built summary.
+> Category-based content filtering with auto-updating feeds (porn, gambling,
+> firearms, etc.) is a first-class feature (§18).
 
-> **⚠️ Build status.** §4–§9, §11–§12, §14, and roadmap phases 3/5 (§16) describe
-> the **target cloud/K8s design** — they are not implemented. Nothing in this repo
-> today runs Kubernetes, Kafka/NATS, Redis Cluster, ClickHouse, etcd/Consul, Vault,
-> Patroni, or SPIFFE/SPIRE. Items pulled from these sections are marked `🚧 not
-> built` inline below. What's actually running is the **Proxmox VE profile (§17)**:
-> a single-process Rust filter node, one PostgreSQL instance, filesystem-based
-> bundle distribution, in-memory rate limiting — see [`ARCHITECTURE.md`](../ARCHITECTURE.md)
-> for the as-built summary. §17.2 already flags object store/Kafka/ClickHouse as
-> optional-and-unused at this scale; §18–§25 carry their own "current state" notes
-> where relevant.
+> **⚠️ Build status.** §4–§6, §8, §11–§12, and §15 describe a larger
+> cloud/K8s design that predates this deployment profile. Most of it — a
+> Kubernetes-orchestrated cluster, Kafka/NATS, Redis Cluster, ClickHouse,
+> etcd/Consul, Vault, Patroni — is **formally cut, not deferred**, per the
+> 2026-07-25 architecture review; the record of what was cut and why is
+> **§26.9**, not scattered `🚧` markers through those sections. The one item
+> kept as a live target from that list is mTLS between the control plane and
+> the fleet (§26 R3) — everything else stays only where an as-built path
+> already covers the same need (Postgres for query logs, filesystem pull for
+> bundle distribution, an in-process LRU cache).
 >
-> Sections describing subsystems that are **fully built** and match this document:
-> §18 (category filtering), §20 (SIEM export), §22 (DHCP), §24 (DNS zones),
-> §25 (block page). §21 (upstream) is built except for the telemetry/dashboard
-> items flagged inline. §19 (UI) and §23 (fleet observability) carry per-item
-> status. Per-sprint delivery detail lives in
-> [`sprint-plan.md`](sprint-plan.md).
+> Sections describing subsystems that are **fully built** and match this
+> document: §18 (category filtering), §20 (SIEM export), §22 (DHCP), §24 (DNS
+> zones), §25 (block page). §21 (upstream) is built except for the
+> telemetry/dashboard items flagged inline. §19 (UI) and §23 (fleet
+> observability) carry per-item status. **§26 is the current architecture
+> review** — read it before treating §16's roadmap or the sprint plan's
+> ordering as current: the delivery sequence was re-planned around it.
+> Per-sprint delivery detail lives in [`sprint-plan.md`](sprint-plan.md).
 
 ---
 
@@ -53,7 +56,7 @@ This separation — rather than one process and one SQLite file — is the core 
 |---|------|
 | G1 | Horizontal scalability of DNS query handling (stateless filter nodes). |
 | G2 | High availability: no single point of failure; survive node and AZ loss. |
-| G3 | Co-residency / tight integration with an OpenVPN AS cluster. |
+| G3 | ~~Co-residency / tight integration with an OpenVPN AS cluster~~ — withdrawn (§7, §26.9); superseded by G3': filtered DNS delivered to any client regardless of gateway, via DHCP or a manually configured VPN DNS push. |
 | G4 | Multi-tenancy with per-tenant policy, blocklists, and isolated query logs. |
 | G5 | Centralized, versioned, auditable policy & blocklist distribution. |
 | G6 | Observability: metrics, structured query logs, tracing, alerting. |
@@ -90,14 +93,13 @@ This separation — rather than one process and one SQLite file — is the core 
 ```
                          ┌──────────────────────────────────────────────┐
                          │              MANAGEMENT PLANE                  │
-                         │  Admin API · Web UI (SPA) · SSO/OIDC · RBAC    │
+                         │  Admin API · Web UI (SPA) · SSO/OIDC 🚧 · RBAC │
                          │  Audit log · Tenant mgmt · Policy authoring    │
                          └───────────────┬──────────────────────────────┘
-                                         │ (gRPC/REST, mTLS)
+                                         │ REST (FastAPI), mTLS 🚧
                          ┌───────────────▼──────────────────────────────┐
                          │               CONTROL PLANE                    │
                          │  Policy compiler · Blocklist ingester          │
-                         │  Config store (etcd/Consul) 🚧 · Dist. bus 🚧   │
                          │  PostgreSQL (source of truth) + object store 🚧│
                          └───────────────┬──────────────────────────────┘
                                          │ push: signed policy bundles
@@ -111,29 +113,24 @@ This separation — rather than one process and one SQLite file — is the core 
    │  Recursor/fwd   │         │  Recursor/fwd    │         │  Recursor/fwd    │
    └────────┬────────┘         └────────┬─────────┘         └────────┬────────┘
             │                            │                            │
-            └────────────► shared cache (Redis cluster) 🚧 ◄────────────┘
-            │
+            │  (no shared cache — each node's LRU is independent)     │
             │ query events (async, fire-and-forget)
             ▼
    ┌─────────────────────────────────────────────────────────────────┐
-   │  TELEMETRY PIPELINE 🚧: Kafka/NATS → stream processor → ClickHouse │
-   │  OpenTelemetry traces · Loki/ELK logs                             │
+   │  QUERY EVENTS → PostgreSQL (§20) → pull API / webhook / syslog    │
+   │  SIEM export. OpenTelemetry traces 🚧 · Loki/ELK operational logs 🚧│
    └─────────────────────────────────────────────────────────────────┘
 
-   OpenVPN AS cluster 🚧 pushes DHCP-option DNS = Anycast VIP 🚧 of filter fleet
+   DNS delivered to clients via mantis-dhcp option 6 or manual VPN DNS push
 ```
 
 ### 4.1 Request path (cache miss)
 
-1. VPN client resolves `ads.example.com`. OpenVPN AS pushed DNS = anycast VIP.
-2. L4 LB / anycast routes UDP/TCP/853 to nearest healthy **filter node**.
-3. Node identifies tenant + client group from source context (see §7).
-4. Policy engine evaluates compiled rule set (blocklist bloom filter → exact match → allowlist override).
-5. If blocked → return sinkhole answer (NXDOMAIN / 0.0.0.0 / custom) per policy.
-6. If allowed → check local cache → shared Redis cache → upstream recursor (DoT/DoH).
-7. Answer returned; query event emitted async to telemetry bus.
-
-Target: cache hit served entirely in-node, no control-plane dependency on the hot path.
+See [`ARCHITECTURE.md`](../ARCHITECTURE.md#request-path-cache-miss) for the
+as-built request path — it's kept there rather than duplicated here so the
+two documents can't drift against each other. Target property that hasn't
+changed: a cache hit is served entirely in-node, with no control-plane
+dependency on the hot path.
 
 ---
 
@@ -145,7 +142,7 @@ Target: cache hit served entirely in-node, no control-plane dependency on the ho
 - **DNS frontend.** CoreDNS or a custom Go/Rust server. CoreDNS chosen for plugin model; custom plugin chain: `tenant-resolve → policy → cache → forward`. *As built: a custom Rust server (`services/filter`), not CoreDNS — see ARCHITECTURE.md.*
 - **Policy engine.** Evaluates against compiled bundle. Blocklists stored as **bloom filter + sorted hash set** for O(1) negative checks and bounded memory (millions of domains in tens of MB).
 - **Resolver.** Forwards allowed misses to internal recursive resolver pool (Unbound/Knot) 🚧 over DoT, or directly to vetted upstreams.
-- **Local cache.** In-process LRU with TTL honoring; optional read-through to shared Redis 🚧 for cross-node warm cache.
+- **Local cache.** In-process LRU with TTL honoring. No shared/cross-node cache — a shared Redis layer was evaluated and cut (§26.9); nothing observed at this deployment scale justified the added moving part.
 
 Scaling: add nodes behind anycast/LB. No coordination needed — pure function of (query, policy bundle).
 
@@ -154,7 +151,7 @@ Scaling: add nodes behind anycast/LB. No coordination needed — pure function o
 - **Source of truth:** PostgreSQL (HA: Patroni/RDS Multi-AZ 🚧 — as built: single PostgreSQL instance, no HA). Stores tenants, policies, group definitions, blocklist subscriptions, allow/deny overrides.
 - **Blocklist ingester:** scheduled jobs fetch external lists (StevenBlack, URLhaus, threat feeds), normalize, dedupe, diff. Produces canonical domain sets.
 - **Policy compiler:** takes DB policy + ingested lists → emits a **signed, versioned policy bundle** per tenant/group (bloom filter blob + override tables + metadata). Bundles are immutable and content-addressed.
-- **Distribution:** bundles published to object store (S3-compatible) 🚧; pointer/version published to **etcd/Consul** 🚧. Filter nodes watch the config store and pull new bundles. Push-on-change + periodic reconcile. *As built: filesystem/HTTP pull, see §17.2.*
+- **Distribution:** bundles published to object store (S3-compatible) 🚧, pointer/version published alongside. A distributed config store (etcd/Consul) was evaluated and cut (§26.9) — filesystem/HTTP pull (§17.2) already gives every node the current bundle on its next poll, and there's no fleet large enough for watch-based propagation to matter yet. Filter nodes pull on a fixed interval; no push-on-change.
 - **Signing:** bundles signed (e.g. cosign/ed25519). Nodes verify before applying. Prevents poisoned policy.
 
 ### 5.3 Management plane
@@ -165,74 +162,49 @@ Scaling: add nodes behind anycast/LB. No coordination needed — pure function o
 - **AuthZ:** RBAC + tenant scoping. Roles: super-admin, tenant-admin, policy-author, read-only/auditor.
 - **Audit:** every mutation appended to immutable audit log (separate store, WORM/retention 🚧).
 
-### 5.4 Telemetry pipeline 🚧 (target design — see §20 for what's actually shipped: DB-stored query events + pull/webhook SIEM export, no message bus)
+### 5.4 Telemetry pipeline
+
+✅ Built, and simpler than originally planned — a message bus (Kafka/NATS) and
+a dedicated analytical store (ClickHouse) were both evaluated and cut
+(§26.9); PostgreSQL carries the volume this product actually sees.
 
 - Query events are **enriched at the filter node** before leaving the data plane: client IP, query type, response code, matched category, matched feed ID, and resolution latency are attached at source — not inferred later from partial data.
-- Enriched events → message bus (Kafka or NATS JetStream) 🚧, partitioned by tenant.
-- Stream processor → **ClickHouse** 🚧 for high-cardinality, fast analytical query logs with TTL-based retention.
-- **OpenTelemetry** 🚧 traces on the resolve path; **Loki/ELK** 🚧 for operational logs.
+- Enriched events flush directly to the control plane's PostgreSQL `query_events` table (§20.2) — no intermediate bus.
 - Dashboards (in-app, off the telemetry/metrics APIs): QPS, block ratio, cache hit ratio, p50/p99 latency, upstream health, per-tenant volume.
-- **SIEM export layer** (§20): query event stream exposed via pull API (cursor-based REST) and push webhook, in JSON or CEF format, so any SIEM can consume without a custom connector.
+- **SIEM export layer** (§20): the same query-event stream exposed via pull API (cursor-based REST), push webhook, and RFC 5424 syslog, in JSON or CEF format, so any SIEM can consume without a custom connector.
+- **Not built, and not cut** — genuinely open: **OpenTelemetry** 🚧 traces on the resolve path; **Loki/ELK** 🚧 for operational logs. Neither is blocked on anything above.
 
 ---
 
 ## 6. Data Stores
 
+A distributed config store (etcd/Consul) and a shared cross-node cache
+(Redis Cluster) were both evaluated and cut (§26.9) — neither row is listed
+below because neither exists as a layer in this product, not just as an
+unbuilt technology choice.
+
 | Store | Tech | Role | HA strategy | Status |
 |-------|------|------|-------------|--------|
-| Source of truth | PostgreSQL | Tenants, policy, config | Patroni / Multi-AZ, sync replica | 🚧 single instance, no HA |
-| Config/version | etcd or Consul | Bundle pointers, node registry | Raft quorum, ≥3 nodes | 🚧 not built |
+| Source of truth | PostgreSQL | Tenants, policy, config | Patroni / Multi-AZ, sync replica | 🚧 single instance, no HA — see §26 R2, this is now a named risk, not just a someday item |
 | Bundle storage | S3-compatible object store | Immutable signed bundles | Multi-AZ, versioned | 🚧 filesystem instead (§17.2) |
-| Shared cache | Redis Cluster | Cross-node DNS cache | Sharded + replicas | 🚧 not built |
-| Query logs | ClickHouse | Analytics, search, retention | Sharded + replicated | 🚧 Postgres instead |
-| Audit | Append-only (Postgres/ClickHouse + object archive) | Compliance | WORM archive | 🚧 not built |
+| Query logs | PostgreSQL | Analytics, search, retention | Single instance | ✅ built — the permanent answer, not a stepping stone to ClickHouse (§26.9) |
+| Audit | Append-only (PostgreSQL) | Compliance | Single instance | 🚧 append-only by convention only, not DB-enforced — see §26.11 |
 | SIEM config | PostgreSQL | Webhook + syslog sink endpoints, delivery state, cursor | Same as source of truth | ✅ built (§20) |
-| Secrets | Vault / cloud KMS | Keys, upstream creds | HA Vault | 🚧 env vars instead |
+| Secrets | env vars / systemd `EnvironmentFile` (0600) | Keys, upstream creds | — | 🚧 no rotation, no KMS — kept as a real gap (§26.11), Vault itself not pursued at this scale |
 
 **Key principle:** the hot DNS path depends on *none* of these synchronously. It reads only the in-memory policy bundle and local cache. Control/management stores being down degrades management, not resolution.
 
 ---
 
-## 7. OpenVPN AS Cluster Integration
+## 7. *(withdrawn)*
 
-This is the deployment context, so it gets dedicated treatment.
-
-### 7.1 Topology
-
-- OpenVPN AS runs as a cluster (multiple nodes behind a UDP/TCP LB or DNS round-robin; shared user/config DB).
-- Filter fleet deployed **alongside** each AS node (sidecar pattern) **or** as a shared anycast fleet — see options below.
-
-### 7.2 DNS hand-off
-
-- AS pushes DNS server to clients via `--dhcp-option DNS <addr>` in the client config / group config.
-- Set this to the **anycast VIP** (or per-node loopback if sidecar) of the filter fleet — never a single node IP.
-- Push `--dhcp-option DOMAIN` and block client-side DNS leakage (`block-outside-dns` on Windows; `redirect-gateway` / route DNS through tunnel).
-
-### 7.3 Tenant & client identification
-
-The hard problem: a query arriving at a filter node must map to a tenant + client group for correct policy. Options, in order of preference:
-
-1. **Per-VPN-group anycast/listener.** Each AS user-group (e.g. `contractors`, `engineering`, `tenant-acme`) pushes a distinct DNS VIP or a distinct loopback. Filter node maps listener → tenant/group. Clean, no per-query lookup.
-2. **Source-IP → identity map.** AS assigns VPN IP pools per group; filter node maps client subnet → group. Requires AS to publish the IP-pool→identity table to the control plane (small, slow-changing).
-3. **EDNS Client Subnet / custom EDNS tag.** AS or a shim tags queries. More invasive; use only if 1–2 insufficient.
-
-Recommendation: **(1)** for tenant separation, **(2)** for finer per-group policy within a tenant.
-
-### 7.4 Deployment options
-
-| Option | Description | Pros | Cons |
-|--------|-------------|------|------|
-| **A. Sidecar** | Filter node on each AS host, client DNS = 127.0.0.1 / link-local | Lowest latency, no extra LB, fate-shared with AS node | Filter scaling tied to AS node count |
-| **B. Shared anycast fleet** | Separate filter fleet, AS pushes anycast VIP | Independent scaling, fewer nodes | Extra network hop, needs anycast/LB |
-| **C. Hybrid** | Sidecar cache + shared control plane + central recursors | Best latency + independent recursor scaling | Most moving parts |
-
-Recommended default: **C (Hybrid)** — sidecar filter+cache for latency and AS fate-sharing, shared control plane and recursor pool for scale and consistency.
-
-### 7.5 Failure behavior
-
-- If sidecar filter dies, AS node health check pulls it from rotation (client reconnects to healthy AS node → healthy sidecar).
-- If control plane unreachable, filter keeps serving last good signed bundle (bounded staleness, alert fires).
-- Fail-open vs fail-closed is a **per-tenant policy**: security tenants fail-closed (block on policy-load failure), general tenants fail-open (resolve normally, log degraded).
+This section previously specified OpenVPN Access Server cluster integration
+(topology, DNS hand-off, tenant identification via per-group VIP, sidecar
+deployment options). Cut in the 2026-07-25 architecture review — see §26.9
+for why — and removed rather than left as an unbuilt design nobody intends to
+execute. mantis-dhcp option 6 and a manually configured VPN DNS push against
+community OpenVPN already deliver this section's actual goal. Number kept as
+a tombstone, same convention as §13.
 
 ---
 
@@ -240,7 +212,7 @@ Recommended default: **C (Hybrid)** — sidecar filter+cache for latency and AS 
 
 - **Stateless filter nodes** → linear horizontal scale; autoscale on QPS/CPU 🚧 (currently: manual scale-out, one node per host/CT — §17.3).
 - **Bloom-filter blocklists** → millions of domains, tens of MB RAM, O(1) negative lookups, no DB on hot path.
-- **Two-tier cache** (in-process LRU + Redis cluster 🚧) → high hit ratio, cross-node warm cache 🚧 (currently: in-process LRU only, no cross-node sharing).
+- **Cache** — in-process LRU only. A second tier (shared Redis cluster for cross-node warm cache) was evaluated and cut (§26.9); no deployment running today has shown a cold-cache penalty large enough to justify it.
 - **Recursor pool** scaled independently; only cache misses for allowed domains reach it.
 - **Anycast** 🚧 spreads load to nearest node; LB health checks eject bad nodes in seconds.
 
@@ -259,11 +231,11 @@ Performance targets:
 ## 9. Security
 
 - **Upstream privacy:** all recursion via DoT/DoH to vetted resolvers or self-hosted recursors with QNAME minimization.
-- **Internal:** mTLS between all planes 🚧; SPIFFE/SPIRE for workload identity 🚧.
+- **Internal:** mTLS between all planes 🚧 — kept as a live target (§26 R3): the whole fleet currently shares one static `MANTIS_SERVICE_TOKEN`, so this closes a real credential-compromise blast radius, not aspirational polish. Full SPIFFE/SPIRE workload-identity federation was evaluated and cut (§26.9) — per-node client certs or per-node tokens close R3 without it.
 - **Bundle integrity:** signed, content-addressed bundles; nodes reject unsigned/invalid. *Built (ed25519 signing, `crypto.py`).*
 - **DNS hardening:** rate limiting per source (built: login endpoint only, in-memory — `rate_limit.py`), response-rate-limiting (RRL) 🚧 to resist amplification, DNSSEC validation at recursor 🚧.
-- **AuthN/Z:** SSO 🚧 + RBAC + per-tenant isolation; least-privilege service accounts.
-- **Secrets:** Vault/KMS 🚧, no secrets on disk in plaintext (as built: env vars / systemd `EnvironmentFile`, 0600).
+- **AuthN/Z:** SSO 🚧 (Epic Q) + RBAC + per-tenant isolation; least-privilege service accounts.
+- **Secrets:** env vars / systemd `EnvironmentFile` (0600) — not plaintext-on-disk in the sense of an unprotected file, but no rotation and no KMS (§6, §26.11). Vault was evaluated and not pursued at this deployment scale.
 - **Audit:** immutable, exportable for compliance (built: `audit.py`/`audit_routers.py` + UI; SOC2/ISO27001 certification scope itself 🚧).
 - **Tenant isolation:** policy bundles, query logs, and UI scoped per tenant; no cross-tenant data leakage.
 
@@ -283,8 +255,8 @@ Organization (tenant)
 ```
 
 - Hierarchical: org default policy, overridable per group.
-- Each group maps to an OpenVPN AS user-group (see §7.3).
-- Query logs partitioned and access-controlled per tenant.
+- Each group maps to a subnet/source-IP identity resolved by the filter node (`router.rs`, `/routing-table`) — the mapping mechanism originally specified as an OpenVPN AS per-group VIP (§7, withdrawn); source-IP resolution is what's actually built.
+- Query logs partitioned and access-controlled per tenant — enforced in application code today (`user_tenant_filter`/`check_tenant_access`, `auth.py`); §26 R4 flags this as a real risk and Postgres RLS as the fix.
 
 ---
 
@@ -292,9 +264,9 @@ Organization (tenant)
 
 - **Metrics:** QPS, block ratio, cache hit ratio, latency histograms — surfaced via the control plane telemetry API and the in-app Analytics dashboard, aggregated across the fleet. **Per-node** metrics (bundle version per node, per-node QPS/rcode mix, upstream errors) are 🚧 — nothing in `query_events` or the telemetry API identifies the emitting node today; that is exactly what §23 exists to fix. mantis-dhcp is the exception: it already exposes per-daemon liveness and Prometheus counters (§22.11).
 - **Logs (Loki/ELK) 🚧:** operational; structured JSON.
-- **Query analytics (ClickHouse 🚧):** per-tenant top domains, blocked categories, client breakdown, retention by policy. *As built: PostgreSQL.*
+- **Query analytics:** ✅ built on PostgreSQL — per-tenant top domains, blocked categories, client breakdown, retention by policy. This is the permanent store, not a placeholder for ClickHouse (§26.9).
 - **Traces (OpenTelemetry) 🚧:** resolve path spans for latency debugging.
-- **Alerting 🚧:** stale bundle, node down, upstream failure, block-ratio anomaly (possible misconfig or attack), Redis/PG health.
+- **Alerting 🚧:** stale bundle, node down, upstream failure, block-ratio anomaly (possible misconfig or attack), PG health.
 - **SLOs 🚧:** availability of resolution (e.g. 99.99%), p99 latency, bundle freshness.
 
 ---
@@ -302,10 +274,10 @@ Organization (tenant)
 ## 12. Deployment & Operations
 
 - **Packaging:** containers (OCI) — built (Docker Compose images). Filter node also ships as a native `.deb`. Control-plane/UI each independently deployable.
-- **Orchestration:** Kubernetes 🚧 for control/management plane and shared filter fleet; sidecar filters deployed with AS nodes (systemd or co-located pods). *As built: systemd units (native install) or Docker Compose — see `charts/mantis-dns` for an early, unverified Helm chart.*
-- **IaC:** Terraform 🚧 for infra, Helm 🚧 for k8s workloads, GitOps (Argo/Flux) 🚧 for config. *As built: shell installers (`infra/lxc/*.sh`) + Ansible-shaped provisioning notes in §17.5, not yet an Ansible playbook.*
-- **Rollout:** canary policy bundles to a subset of nodes 🚧; automatic rollback on error-rate spike 🚧. Blue/green for control-plane services 🚧. *As built: the update scripts (`scripts/update.sh`, `infra/lxc/install*.sh`) do backup → deploy → health-check → keep-previous-generation → manual rollback instructions on failure — no automatic traffic-based rollback.*
-- **Backup/DR:** PostgreSQL PITR 🚧 (as built: `pg_dump` before upgrades), object-store versioning 🚧, etcd snapshots 🚧, ClickHouse backups 🚧. Multi-AZ 🚧; documented RTO/RPO 🚧.
+- **Orchestration:** ✅ built — systemd units (native install) or Docker Compose. Kubernetes was evaluated as the target orchestrator and cut (§26.9); `charts/mantis-dns` (an early, unverified Helm chart) is kept only in case a customer's platform team requires it, not as a direction being built toward.
+- **IaC:** Terraform 🚧 for infra — kept as a real gap, independent of the Kubernetes decision. Helm and GitOps (Argo/Flux) are K8s-native tooling and are cut along with it. *As built: shell installers (`infra/lxc/*.sh`) + Ansible-shaped provisioning notes in §17.5, not yet an Ansible playbook.*
+- **Rollout:** canary policy bundles to a subset of nodes 🚧; automatic rollback on error-rate spike 🚧. This is now **Epic Q** (§26.10, §26.11) — the highest blast-radius gap in the product, not a someday item. Blue/green for control-plane services 🚧. *As built: the update scripts (`scripts/update.sh`, `infra/lxc/install*.sh`) do backup → deploy → health-check → keep-previous-generation → manual rollback instructions on failure — no automatic traffic-based rollback.*
+- **Backup/DR:** PostgreSQL PITR 🚧 (as built: `pg_dump` before upgrades), object-store versioning 🚧. Multi-AZ 🚧; documented RTO/RPO 🚧 — §26.11 flags this as untested, not just unbuilt.
 - **Upgrades:** filter nodes are cattle — rolling replace 🚧 (as built: in-place restart per node, no rolling fleet orchestration). Schema migrations gated and reversible — built (Alembic, `services/control/migrations/`).
 
 ---
@@ -323,18 +295,26 @@ the code stays valid.
 
 ## 14. Technology Choices (reference, not mandatory)
 
+> **❌ 2026-07-25:** every row below marked cut is removed from the roadmap, not
+> deferred — see §26.9. PostgreSQL-without-HA is the one exception: it stays
+> 🚧 because it is now a named risk (§26 R2 — DHCP lease allocation has no
+> fallback when Postgres is down) rather than a someday-nice-to-have, and it is
+> sequenced explicitly in Epic P.
+
 | Layer | Primary | Alternative | Status |
 |-------|---------|-------------|--------|
 | DNS frontend | CoreDNS (custom plugins) | Knot Resolver, custom Rust | ✅ built, but as *custom Rust* — CoreDNS was never adopted |
 | Recursor | Unbound | Knot Resolver | 🚧 filter forwards to configured upstream pools directly (§21), no local recursor |
-| Source DB | PostgreSQL + Patroni | CockroachDB | 🚧 PostgreSQL only, no Patroni/HA |
-| Config store | etcd | Consul | 🚧 not built |
-| Shared cache | Redis Cluster | KeyDB / Dragonfly | 🚧 not built |
-| Bus | Kafka | NATS JetStream | 🚧 not built |
-| Query analytics | ClickHouse | Druid | 🚧 PostgreSQL instead |
-| Metrics | In-app Analytics dashboard (telemetry API) | External APM (optional) | ✅ built (fleet-aggregate only). The filter node's Prometheus exporter was removed (`metrics_init.rs` is now a one-line tombstone) — note `infra/prometheus.yml` still lists a `filter:9090` target that nothing serves. mantis-dhcp does expose `/metrics` (§22.11); restoring the filter's is §23.8. |
-| Secrets | Vault | Cloud KMS | 🚧 env vars / systemd `EnvironmentFile` instead |
-| Orchestration | Kubernetes | Nomad | 🚧 systemd / Docker Compose; early Helm chart exists (`charts/mantis-dns`), unverified |
+| Source DB | PostgreSQL + Patroni | CockroachDB | 🚧 PostgreSQL only, no Patroni/HA — kept as a live target, see §26 R2 |
+| Query analytics | PostgreSQL | ClickHouse, Druid | ✅ built on PostgreSQL — the permanent answer, not a stepping stone (§26.9) |
+| Metrics | In-app Analytics dashboard (telemetry API) | External APM (optional) | ✅ built (fleet-aggregate only). The filter node's Prometheus exporter was removed (`metrics_init.rs` deleted, was an unreferenced tombstone) and its `infra/prometheus.yml` job dropped with it. mantis-dhcp and mantis-dhcp6 do expose opt-in `/metrics` (§22.11) and are what `infra/prometheus.yml` scrapes now; restoring the filter's is §23.8. |
+| Secrets | env vars / systemd `EnvironmentFile` | Vault, Cloud KMS | 🚧 no rotation, no KMS — kept as a real gap: secret rotation is part of the mTLS fix in §26 R3. Vault itself not pursued at this scale |
+| Orchestration | systemd / Docker Compose | Kubernetes, Nomad | ✅ built. Kubernetes evaluated and cut (§26.9); `charts/mantis-dns` (early, unverified Helm chart) kept only in case a customer's platform team requires it |
+
+Config store (etcd/Consul), shared cache (Redis Cluster/KeyDB), and a
+message bus (Kafka/NATS) don't appear above — all three were evaluated and
+cut as target layers, not just as unbuilt technology choices within a layer
+that still exists. §26.9 has the reasoning.
 
 ---
 
@@ -343,8 +323,8 @@ the code stays valid.
 - **DNS leak enforcement** on heterogeneous VPN clients (Windows `block-outside-dns`, macOS/Linux split-DNS behavior) — needs per-OS validation.
 - **Anycast vs LB** in the specific cloud/on-prem network — depends on routing capability.
 - **Bloom-filter false positives** — bounded by sizing; pair with exact-match confirmation tier for the (rare) FP on block-critical lists.
-- **Per-query tenant resolution cost** if option §7.3(1) is not feasible.
-- **Compliance scope** (data residency of query logs per tenant) — may force regional ClickHouse shards.
+- **Per-query tenant resolution cost** — the current source-IP subnet mapping (§10, `/routing-table`) resolves tenant/group without a per-query lookup against an external system; revisit only if a deployment's subnet layout stops fitting that model.
+- **Compliance scope** (data residency of query logs per tenant) — may force regional PostgreSQL instances. §26.11 covers the broader retention/erasure gap this sits inside of.
 
 ---
 
@@ -356,10 +336,11 @@ the code stays valid.
 | 0b | Category taxonomy + feed registry + auto-update pipeline with sanity gates (§18) | ✅ built |
 | 0c | Proxmox VE appliance: CT templates + Ansible, collapsed control plane (§17) | 🚧 partial — shell installers exist (`infra/lxc/*.sh`), no Ansible/CT-template packaging yet |
 | 1 | Stateless filter node (CoreDNS plugin chain), bundle pull + verify, local cache | ✅ built (custom Rust, not CoreDNS) |
-| 2 | OpenVPN AS integration (sidecar + VIP), tenant/group mapping | 🚧 works with community OpenVPN via DHCP-option/manual DNS push; no AS/sidecar/VIP automation |
-| 3 | Telemetry pipeline (Kafka → ClickHouse), in-app analytics dashboards | 🚧 dashboards ✅ built on PostgreSQL; Kafka/ClickHouse not built |
+| 3 | Telemetry pipeline, in-app analytics dashboards | ✅ built on PostgreSQL — the originally planned Kafka → ClickHouse pipeline was cut (§26.9), not left pending |
 | 4 | Management API + UI, SSO/RBAC, audit | 🚧 API/UI/audit ✅ built; SSO not built |
 | 5 | HA hardening, multi-AZ, DR drills, canary rollout, autoscaling | 🚧 not built |
+
+*Phase 2 (OpenVPN AS integration) is withdrawn — see §7, §26.9 — and removed from this table rather than left as a numbered gap with a strikethrough; the number is simply not reused.*
 
 Phases 6–10 were not in the original roadmap — they record work that shipped after it was written, so the table accounts for the whole product rather than stopping at phase 5:
 
@@ -370,13 +351,30 @@ Phases 6–10 were not in the original roadmap — they record work that shipped
 | 8 | DNS upstream configuration: resolver profiles, HA pools with health monitoring and failover, split-horizon routes, DNSSEC policy (§21) | ✅ built — upstream telemetry metrics and the health dashboard still open (§21.4) |
 | 9 | Native DHCP engine: DHCPv4 + DHCPv6, DB-coordinated HA, DDNS, relay, PXE, conflict detection, Prometheus metrics (§22) | ✅ built — replaced the ISC Kea integration entirely (§22.1) |
 | 10 | DNS zones (§24) and block page (§25) | ✅ built |
-| 11 | Fleet observability: per-node identity, stats, and a Nodes page (§23) | 🚧 not started — the largest remaining gap; also blocks §21.4's health dashboard |
+
+**Phases 11–13 supersede the original "phase 11 = Epic O next" plan** — the
+2026-07-25 architecture review (§26) found three foundation risks serious
+enough to sequence ahead of fleet observability. Epic O still ships; it ships
+third, with better justification (§26.10).
+
+| Phase | Deliverable | Status |
+|-------|-------------|--------|
+| 11 | Foundation hardening: perf bench + baseline, bloom exact-match tier, per-node credentials, bundle schema compat gate, tenant-isolation coverage + RLS (§26, Epic P) | 🚧 not started — **next** |
+| 12 | Enterprise entry ticket: OIDC/SAML + SCIM, canary bundle rollout + automatic rollback, per-tenant retention/erasure/residency (§26, Epic Q) | 🚧 not started |
+| 13 | Fleet observability: per-node identity, stats, and a Nodes page (§23, Epic O) — reframed as the canary-rollout control surface and §21.4's health-dashboard data source, not a page for its own sake | 🚧 not started — blocked on phases 11–12, not just unstarted (§26.10) |
 
 ---
 
 ## 17. Deployment Profile: Proxmox VE Hypervisor
 
-Many deployments are not a cloud Kubernetes fleet but a **single Proxmox VE host (or small PVE cluster)** that already runs an **OpenVPN server** (community `openvpn`, not necessarily AS). This profile collapses the architecture without changing the code — same containers, fewer of them, control plane co-resident.
+This is the only deployment profile actually pursued — the cloud/Kubernetes
+profile referenced below and in §4–§6, §8, §11–§12 was withdrawn in the
+2026-07-25 architecture review (§26.9); this section is written as a
+"collapse" of it for historical continuity, not because a cloud profile is
+still on the roadmap. A **single Proxmox VE host (or small PVE cluster)**
+that already runs an **OpenVPN server** (community `openvpn`, not AS — see
+§7) is the real target: same containers described elsewhere in this
+document, fewer of them, control plane co-resident.
 
 ### 17.1 Topology (single PVE host)
 
@@ -404,7 +402,7 @@ Many deployments are not a cloud Kubernetes fleet but a **single Proxmox VE host
 
 - Postgres runs as a small instance in the `mantis-control` CT. PostgreSQL 17 is the only supported database; it provides the ARRAY type, JSONB audit columns, and the pg_isready healthcheck used by all deployment configurations.
 - Bundle distribution degenerates to a **shared volume / bind-mount** (or local HTTP) between control and filter CTs. The signed-bundle + version-pointer mechanism is unchanged; the "bus" is just the filesystem. Filter still verifies signature before applying.
-- Object store, Kafka, ClickHouse are **optional** at this scale: query logs can land in Postgres or a local ClickHouse CT only if analytics are wanted.
+- Object store remains a genuinely optional add-on at this scale — bundle distribution already works over a bind-mount. Kafka and ClickHouse are not optional-and-available, they're cut (§26.9); query logs land in Postgres, full stop.
 
 ### 17.3 HA on a PVE cluster (optional)
 
@@ -417,26 +415,28 @@ Many deployments are not a cloud Kubernetes fleet but a **single Proxmox VE host
 | CT | vCPU | RAM | Disk | Notes |
 |----|------|-----|------|-------|
 | mantis-filter | 2 | 1–2 GB | 4 GB | bloom filters + cache in RAM |
-| mantis-control | 2 | 2–4 GB | 20 GB+ | Postgres + feeds + UI |
-| (optional) clickhouse | 2 | 4 GB | size to retention | only if analytics wanted |
+| mantis-control | 2 | 2–4 GB | 20 GB+ | Postgres (incl. query logs/analytics) + feeds + UI |
 
 ### 17.5 Provisioning
 
 - Ship as a **Proxmox CT template / appliance** (or `pveam`-style image) plus an Ansible playbook that: creates the CTs, wires the bridge, configures OpenVPN's `dhcp-option DNS`, seeds the control DB, enables category feeds.
 - Updates: `git`/registry-pulled container images; control CT self-updates feeds (§18). One-command upgrade script.
 
-### 17.6 What carries over vs the cloud profile
+### 17.6 What this profile collapsed from
 
-| Concern | Cloud profile | Proxmox profile |
-|---------|---------------|-----------------|
+The withdrawn cloud profile (§26.9), for historical reference only — nothing
+in the right column below is a live target:
+
+| Concern | Withdrawn cloud profile | This profile (Proxmox, as built) |
+|---------|--------------------------|-----------------------------------|
 | Filter nodes | Autoscaled fleet, anycast | 1 CT/host, optional VIP |
 | Control plane | k8s services, etcd, S3 | 1 CT, shared volume |
 | Bundle distribution | object store + etcd watch | bind-mount + version file |
-| Telemetry | Kafka → ClickHouse | Postgres or optional CT |
+| Telemetry | Kafka → ClickHouse | Postgres |
 | VPN | OpenVPN AS cluster | community OpenVPN on host |
 | HA | Multi-AZ | PVE HA + VRRP VIP |
 
-Same policy/category/bundle logic, signed bundles, RBAC, and UI in both — only the scale-out plumbing differs.
+Same policy/category/bundle logic, signed bundles, RBAC, and UI regardless — only the scale-out plumbing was ever meant to differ, and the left column is not being built.
 
 ---
 
@@ -454,7 +454,7 @@ Category (system-defined)
  └── per-tenant/group toggle: block | allow | log-only
 ```
 
-- Categories are **system-defined taxonomy**; tenants/groups toggle them on/off (maps to the multi-tenancy model in §10 and OpenVPN groups in §7.3).
+- Categories are **system-defined taxonomy**; tenants/groups toggle them on/off (maps to the multi-tenancy model in §10).
 - A policy = a set of enabled categories + custom allow/deny overrides. Compiles to the same signed bundle the filter node already consumes (§5.2).
 
 ### 18.2 Feed sources
@@ -635,7 +635,7 @@ apps/ui/
 
 1. **Policy editor** ✅ — category toggles with live domain counts and per-category action (block / log-only / allow), override management with validated domain input, a **domain test box** (the §18.5 explainability feature — built: `POST /api/v1/groups/{group_id}/policy/test` → `PolicyTestResult`, surfaced in `PolicyPage.tsx`), bundle compile + propagation status indicator. Policy can also be duplicated from another group (`DuplicatePolicyModal.tsx`).
 2. **Feed manager** — catalog browser with search/filter, per-feed ingest status + last-run/next-run, sanity-gate rejection surfacing, license display, add/edit/delete with real forms.
-3. **Query-log explorer** — server-side paginated, filterable by tenant/group/decision/time-range, backed by ClickHouse once §6 lands (Postgres for now).
+3. **Query-log explorer** — server-side paginated, filterable by tenant/group/decision/time-range, backed by PostgreSQL — the permanent store, not a placeholder (§6, §26.9).
 4. **Analytics dashboard** — block ratio, QPS, cache-hit ratio, top blocked domains, per-category volume; native charts backed by the telemetry/metrics APIs (already implemented).
 5. **Audit log viewer** — immutable, filterable, exportable.
 6. **Settings** — SSO config, RBAC role assignment, API keys, white-label branding.
@@ -1497,7 +1497,15 @@ Before an OFFER, mantis-dhcp can ICMP-echo the candidate address to catch a devi
 
 ## 23. Fleet Observability — Per-Node Statistics
 
-Every other subsystem in this document has an operator-facing surface in the UI. The filter fleet — the only component actually on the DNS hot path — has none. A filter node today is anonymous: `telemetry.rs`'s event payload carries `group_id`, `client_ip`, `qname` and decision context but nothing identifying **which node** produced it, so every row in `query_events` looks like it came from the same nowhere. `metrics_init.rs` is a single comment saying the Prometheus exporter was removed and "observability handled via the control plane telemetry API" — but that API only ever grew query analytics, never node analytics. The result is that the three questions an operator actually asks during an incident have no answer anywhere in the product:
+> **🪓 Sequencing changed 2026-07-25 (§26.10).** This epic is correct and still
+> ships, but not next. Two things must land first: a performance bench (§26 R7
+> — this section adds per-query instrumentation to the hottest path in the
+> product, and no benchmark exists to prove FO6 "zero measurable cost"), and
+> per-node credentials (§26 R3 — the heartbeat this section defines is one more
+> thing forgeable with the fleet's single shared token). See §16 phases 11–13
+> and sprint-plan.md's Epic P/Q/O ordering.
+
+Every other subsystem in this document has an operator-facing surface in the UI. The filter fleet — the only component actually on the DNS hot path — has none. A filter node today is anonymous: `telemetry.rs`'s event payload carries `group_id`, `client_ip`, `qname` and decision context but nothing identifying **which node** produced it, so every row in `query_events` looks like it came from the same nowhere. The Prometheus exporter that once lived in `metrics_init.rs` was removed outright (the file no longer exists — see §14's Metrics row) — "observability handled via the control plane telemetry API" was the stated reason, but that API only ever grew query analytics, never node analytics. The result is that the three questions an operator actually asks during an incident have no answer anywhere in the product:
 
 - *Is every node enforcing the same policy?* A node stuck on an old bundle keeps answering queries, correctly signed and verified, using yesterday's block lists. Nothing anywhere reports a bundle version per node (§11 lists stale-bundle alerting as 🚧).
 - *Is one node behaving differently from the rest?* Version skew after a partial rolling upgrade, a SERVFAIL spike confined to one host, a 90/10 traffic split from anycast/VIP misrouting — all invisible.
@@ -1518,8 +1526,8 @@ mantis-dhcp already solved the *identity* half of this problem (§22.11, `dhcp_d
 | FO3 | Query pressure per node: QPS, latency distribution, cache effectiveness, rcode mix, block ratio. |
 | FO4 | Telemetry drop count is a first-class, visible number — never only a log line. |
 | FO5 | Per-node upstream health, so a divergence between nodes (A says a resolver is dead, B says it's fine) is diagnosable without SSH. |
-| FO6 | Zero measurable cost on the DNS hot path. |
-| FO7 | No new authentication surface on the node, and no requirement that the control plane be able to reach the node. |
+| FO6 | Zero measurable cost on the DNS hot path. Currently **unverifiable**, not just unmet — see §26 R7. Existing hot-path code already has an uncaught regression (`ZoneStore::lookup` allocates a `String` per configured zone on every single query, §24.3/§26 R7) that a bench would have caught; §23 must not add more instrumentation to that path before one exists. |
+| FO7 | No new authentication surface on the node, and no requirement that the control plane be able to reach the node. Note this doesn't fix §26 R3 (the shared fleet-wide token) — it just means this section isn't the place that fixes it either; Epic P is. |
 | FO8 | Fleet topology is operator data, not tenant data — tenant-scoped users must not see it at all. |
 | FO9 | One counter set feeding both the UI and any Prometheus scrape; no second, driftable copy. |
 
@@ -1594,7 +1602,7 @@ The node POSTs to `POST /api/v1/nodes/heartbeat` every 10 s, authenticated by `M
 Push rather than scrape, despite §22.11 having gone the other way for DHCP, because the constraints differ:
 
 - The UI tab needs the data **in Postgres**. A Prometheus endpoint on the node cannot feed a control-plane API; adopting scrape-only would mean the fleet tab is available only to deployments that also run Prometheus *and* wire it back, which is not a product feature.
-- Filter nodes are the component most likely to sit behind NAT or in a sidecar next to an OpenVPN AS host (§7.4 option A), where control-plane-initiated connections are the awkward direction. The node already dials out every 10 s for bundles.
+- Filter nodes are routinely deployed behind NAT (small-site Proxmox CTs, §17), where control-plane-initiated connections are the awkward direction. The node already dials out every 10 s for bundles.
 
 The heartbeat body is the full counter snapshot (absolute values, not deltas) plus the sampled gauges. Absolute values mean a lost heartbeat costs resolution, not correctness — the next one still diffs correctly against the last stored sample, which a delta-based protocol could not do.
 
@@ -1721,9 +1729,9 @@ Shipped ahead of the sprint sequence (see sprint-plan.md, "Shipped outside the s
 class DnsZone(Base):                     # dns_zones, UNIQUE (tenant_id, name)
     id, tenant_id (FK tenants, nullable) # NULL = admin-only global zone
     name          str(255)               # "lan", "corp.example.com" — lowercased, no trailing dot
-    zone_type     str(20)                # "local" | "forward" | "passthrough"
+    zone_type     str(20)                # "local" — only value enforced; "forward"/"passthrough"
+                                          # still exist in code pending removal, see below
     description, enabled, ttl_default    # ttl_default 300s, inherited by records with ttl=NULL
-    forwarder     str(255) | null        # required when zone_type == "forward"
 
 class DnsRecord(Base):                   # dns_records, FK → dns_zones (cascade delete)
     name          str(255)               # "@" (apex), "www", "*", "mail"
@@ -1736,7 +1744,7 @@ class DnsRecord(Base):                   # dns_records, FK → dns_zones (cascad
     ddns_owner_duid  str(128) | null     # set only by the v6 DDNS bridge
 ```
 
-**Zone types — honest status.** Only `local` is enforced. `GET /api/v1/local-zones` filters on `zone_type == "local"`, so `forward` and `passthrough` zones are stored, validated (a `forward` zone is rejected without a parseable `forwarder` IP) and editable in the UI, but **never reach the filter node** — 🚧 nothing consumes `forwarder`. A `forward` zone today behaves exactly like no zone at all: the query falls through to normal §21 pool routing. Per-zone forwarding overlaps heavily with §21.2's `domain_suffix` routes, which *are* enforced; whether to implement `forward` zones or drop the type in favour of routes is an open decision, not a scheduled item.
+**`forward`/`passthrough` zone types are cut (§26.9)** — they fully overlap §21.2's already-enforced `domain_suffix` upstream routes. `zone_type` and `forwarder` still exist in the schema/API/UI pending a follow-up code change to remove them; treat both as dead going forward, not as a feature to build against.
 
 **`ddns_owner_*` is the security-relevant field.** A record created through the zone-editing API has both owner columns `NULL`, and the DDNS bridge must never overwrite such a record. A record created by DDNS carries the MAC (v4) or DUID (v6) of the client that owns the name, and an event from a *different* client is rejected. Without this, any DHCP client could set its hostname option to `printer` and hijack that name's A record — the DHCP hostname option being fully attacker-controlled (§22.12). Enforcement lives in `dhcp_internal_routers._upsert_a_record`.
 
@@ -1799,7 +1807,7 @@ The zone-file export is the sharp edge, and both defences exist in code:
 
 ### 24.6 Not built
 
-- 🚧 **`forward` and `passthrough` zone types** — stored and validated, never enforced (§24.1).
+- ❌ **`forward` and `passthrough` zone types** — cut, see §24.1. Not a gap to fill; a type set to remove.
 - 🚧 **Zone file import.** Export exists; there is no `$ORIGIN`-parsing import path, which is the harder and more dangerous direction.
 - 🚧 **DNSSEC signing of local zones.** Answers are unsigned; §21.5 concerns validation of *upstream* answers, not signing of ours.
 - 🚧 **Secondary / AXFR.** No zone transfer in either direction — the control plane is the only source and filter nodes poll it.
@@ -1822,5 +1830,268 @@ What is built:
 - **UI:** `BlockPageCard.tsx` with a live preview; `GET/PUT /api/v1/groups/{group_id}/block-page-template`.
 
 Like §24, this shipped outside the sprint sequence and carries no epic number.
+
+---
+
+## 26. Architecture Review — Foundation Risks (2026-07-25)
+
+A chief-architect pass over the codebase against an enterprise deployment
+bar, done after §1–§25 were brought current with what's actually built. The
+core engineering holds up: plane separation, ed25519 bundle signing,
+DB-coordinated DHCP HA. What doesn't hold up is the enterprise story sitting
+on top of it — and Epic O (§23) was about to make that worse by adding a page
+to a console that can't yet be safely operated at scale, on a hot path that's
+never been benchmarked.
+
+Each risk below is stated with what's actually in the code, why it matters in
+an enterprise deployment specifically (not in general), and a fix direction.
+§26.9–§26.11 turn this into a re-sequenced delivery path — see
+sprint-plan.md's Epic P / Epic Q / Epic O for the sprint-level breakdown.
+
+---
+
+### 26.1 R1 — Bloom false positives block real domains, with no confirmation tier
+
+§15 already named this risk ("pair with exact-match confirmation tier for the
+(rare) FP on block-critical lists") — it was never built. `mantis-policy`'s
+own doc comment says a bloom check can yield "false negatives, possible false
+positives", and a positive goes straight to a block with no second check.
+
+**Why it matters here specifically:** an FP is non-deterministic across
+tenants (different bundle, different bits) and unreproducible by support —
+"the payment processor is unreachable, but only for us, and only sometimes"
+is not a debuggable ticket. §4e873b3's fixed FP-rate bug shows this isn't
+hypothetical.
+
+**Fix:** on a bloom hit, check a sorted/`fst` exact-match set before
+blocking. Bloom becomes the fast *negative* filter it should always have
+been; the exact check only costs anything on the (minority) block path.
+
+---
+
+### 26.2 R2 — Postgres is a hard dependency for DHCP lease allocation
+
+DNS survives control-plane loss by design (last-good bundle, §21.3). **DHCP
+does not.** Every REQUEST takes a `pg_advisory_xact_lock` inside a
+transaction (§22.3) — Postgres down means no lease, means a device cannot
+join the network at all, full stop.
+
+**Why it matters here specifically:** this is a regression against the Kea
+integration it replaced, which served leases from a local file. §22.6 sells
+DB-coordinated allocation as "the entire HA story" — it is also the entire
+single-point-of-failure story, and there's a single Postgres instance with no
+Patroni behind it (§6, §14).
+
+**Fix:** local lease cache serving renewals when the DB is unreachable, or
+make Postgres HA non-optional in the reference deployment. As shipped, the
+product's availability floor for DHCP is one `postgres` process.
+
+---
+
+### 26.3 R3 — One shared service token for the entire fleet
+
+`MANTIS_SERVICE_TOKEN` is a single static string
+(`auth.py::require_service_token`, `hmac.compare_digest` against one
+configured value) used by every filter node and every DHCP daemon in the
+fleet. No per-node identity, no scoping, no rotation, no revocation.
+
+**Why it matters here specifically:** compromise one filter node in one
+branch office and the attacker holds fleet-wide credentials — every tenant's
+bundle, forged query events, poisoned analytics and SIEM export. §23's
+heartbeat (once built) adds heartbeat forgery to that list, which is exactly
+why §23 is sequenced after this fix, not before it (§26.10).
+
+**Fix:** per-node credential — mTLS client cert or, at minimum, a per-node
+token — with rotation and revocation. §9 already lists mTLS as 🚧; this is
+the concrete reason it's worth building rather than aspirational polish
+(§14's Security row updated accordingly).
+
+---
+
+### 26.4 R4 — Tenant isolation is application-code-only
+
+No Postgres row-level security anywhere in the schema. Every tenant-scoped
+query relies on a developer remembering to call `user_tenant_filter` /
+`check_tenant_access` (`auth.py`) — across 16 router modules.
+
+**Why it matters here specifically:** this is a multi-tenant MSP product. One
+missed filter on one endpoint is a silent cross-tenant data leak, and nothing
+in the codebase or CI would catch it before a customer does.
+
+**Fix, cheapest first:** a test that enumerates every tenant-scoped route and
+fails if it doesn't apply the filter. Then Postgres RLS as defense in depth,
+so the DB itself is the backstop rather than only application discipline.
+
+---
+
+### 26.5 R5 — Signing is inconsistent, so it's partly theater
+
+The policy bundle is ed25519-signed (`crypto.py`, §21.3). `/routing-table`
+and `/local-zones` (§24.2) are fetched over the same authenticated channel
+but are **not** signed.
+
+**Why it matters here specifically:** the routing table decides which
+tenant's policy a client receives in the first place — poisoning it is at
+least as damaging as poisoning the bundle it routes to. If the threat model
+that justifies bundle signatures is real, it applies here too; if it isn't,
+the bundle signature is ceremony rather than defense.
+
+**Fix:** sign `/routing-table` and `/local-zones` the same way, or explicitly
+document why they're excluded from the threat model the bundle signature
+defends against. Either answer is fine; the current silent inconsistency
+isn't.
+
+---
+
+### 26.6 R6 — Query logs are PII and there's no compliance story
+
+The client registry (`ClientEntry`, §20.6) maps IP → hostname →
+**`owner`** (a person's name) → device type and tags, and that gets embedded
+in every SIEM export. That's per-person browsing history with an identity
+attached, for every DNS query.
+
+Retention is a single global setting (`QUERY_EVENT_RETENTION_DAYS`,
+`retention.py::prune_query_events`) — not per-tenant, so a tenant in a
+stricter jurisdiction gets the same retention window as one with none.
+There's no right-to-erasure endpoint, no field-level encryption on the
+registry's PII columns, and no data-residency control (§15 already flags
+residency as an open risk; the client registry made the exposure concrete
+rather than resolving it).
+
+**Why it matters here specifically:** for any EU customer this is not a
+🚧-someday item — it's a sales blocker and, if mishandled, a legal one.
+
+**Fix:** per-tenant retention override, a right-to-erasure path (delete/
+anonymize a `ClientEntry` and its associated `query_events`), and
+documentation of the residency story per deployment profile.
+
+---
+
+### 26.7 R7 — No control-plane ↔ filter-node version contract, and no perf benchmark to protect it
+
+`gen:api:check` (UI CI) catches drift between the OpenAPI schema and the
+generated TypeScript client. **Nothing equivalent exists between the control
+plane and the filter/DHCP binaries** — no protobuf breaking-change gate in
+CI, no schema version carried in the bundle, no compatibility matrix. Upgrade
+the control plane while twelve nodes are still on the old binary and the
+result is undefined, not degraded.
+
+Separately, and just as structural: **there is no performance benchmark
+anywhere in this repository.** No `benches/` directory, no perf job in CI,
+and the "Sprint 4 baseline" the sprint plan's Cross-cutting section and
+Epic O's exit criteria both cite as the regression gate was never recorded.
+Every "10% p99 gate" reference in this document has nothing to compare
+against.
+
+That gap is not theoretical — it already let a real regression through
+unnoticed. `zone_store.rs::ZoneStore::lookup` runs on **every** query before
+cache or policy, and its `is_local` check does this:
+
+```rust
+data.zones.iter().any(|z|
+    qname == *z || qname.ends_with(&format!(".{z}")))
+```
+
+`normalize(qname)` allocates a `String` up front, and `format!(".{z}")`
+allocates a second `String` **per configured zone, per query** — evaluated
+in full for every query that *isn't* local, i.e. close to 100% of real
+traffic. Fifty zones means fifty-one allocations before any actual filtering
+work starts. The fix is small (`qname.strip_suffix(z)` guarded by a leading
+`.`, or a precomputed suffix set) — the point is that a regression this
+obvious sits in the hot path of a DNS resolver and nothing in CI could have
+caught it.
+
+**Fix:** stand up a bench harness and a recorded baseline first (this is
+Epic P's first sprint, precisely so §23's per-query instrumentation has
+something to be checked against before it ships), fix the zone-lookup
+allocation as part of standing it up, then add a protobuf compat gate and a
+schema version field to the bundle format.
+
+---
+
+### 26.8 R8 — Owning DHCPv4 + DHCPv6 is a bigger bet than §22.1's rewrite case admits
+
+§22.1's case for replacing Kea is about *integration* cost — a broken
+`config-set` push path, state that didn't survive a Kea restart, fragile hook
+packaging. That case is sound. But the real cost of owning a DHCP
+implementation is the ten-year tail: RFC edge cases, interop with every
+embedded client that's ever shipped, CVE surface on a daemon that's
+unauthenticated by protocol design on a pre-auth network segment.
+
+The codebase's own docs already show that tail starting: `server6.rs` unwraps
+`RelayForw` nesting by hand at the byte level because dhcproto's typed API
+gets the common case wrong (§22.9); only the first IA_NA/IA_PD per message is
+served; there's no v6 relay allow-list yet; v6 has no per-interface dispatch;
+v6 pool exhaustion is only ever inferred probabilistically. That's a lot of
+protocol surface for a small team to own indefinitely, on a daemon that hands
+out network configuration to every device that asks.
+
+**Not a call to revert** — a call to budget for it explicitly: fuzzing on
+both wire parsers (v4 and v6), an interop test matrix against real client
+implementations, and a named owner for the CVE process. Otherwise the bill
+arrives unplanned.
+
+---
+
+### 26.9 Cut from the roadmap
+
+Formally removed, not deferred — each cross-references where the decision is
+recorded in full:
+
+| Cut | Where recorded | Why |
+|---|---|---|
+| OpenVPN AS cluster integration | §7 | Never built; DHCP option 6 / manual VPN DNS push already deliver the actual goal (filtered DNS regardless of gateway) at a fraction of the engineering and licensing cost |
+| Kubernetes, Kafka/NATS, Redis Cluster, ClickHouse, etcd/Consul, Vault, Patroni, SPIFFE/SPIRE as *stated targets* | Banner, §9, §14 | Eight unbuilt distributed-systems dependencies in the design doc invite doubt about everything else in it, for a realistic deployment (Proxmox host / small cluster) that Postgres and an in-process cache already serve. Revisit only when an actual customer's scale forces it — not before |
+| `forward` / `passthrough` DNS zone types | §24.1, §24.6 | Fully overlap §21.2's already-enforced `domain_suffix` upstream routes; a second, unenforced mechanism for the same outcome is a config surface that silently does nothing |
+
+**Kept, explicitly, despite being in the cut list above:** mTLS between the
+control plane and the fleet (§9, §14) — it's not aspirational polish, it's
+the fix for R3, a real credential-compromise blast-radius problem.
+
+---
+
+### 26.10 Re-sequenced delivery path
+
+Epic O (§23) does not start next. It isn't wrong, it's premature: it adds
+observability to a fleet whose credentials, isolation guarantees, and
+hot-path performance haven't been validated yet, and it adds per-query
+instrumentation with no benchmark to check it against.
+
+1. **Epic P — Foundation hardening** (no new features): bench harness + p99
+   baseline in CI, fix the zone-lookup allocation (§26 R7); bloom exact-match
+   confirmation tier (R1); per-node credentials with rotation/revocation
+   (R3); protobuf compat gate + bundle schema version (R7); tenant-isolation
+   coverage test, then Postgres RLS (R4).
+2. **Epic Q — Enterprise entry ticket:** OIDC/SAML + SCIM (retires the local
+   password store); canary bundle rollout + automatic rollback (pairs
+   naturally with Epic P's per-node identity — this is *why* per-node
+   identity is worth having, beyond a table in a UI); per-tenant retention +
+   right-to-erasure + residency documentation (R6).
+3. **Epic O — Fleet observability**, reframed: not "a Nodes page" for its own
+   sake, but the control surface canary rollout needs and the data source
+   that unblocks §21.4's `HealthTab.tsx` placeholder. Same code as originally
+   designed in §23 — a materially better reason to build it.
+
+Sprint-level breakdown: sprint-plan.md, Epic P / Epic Q / Epic O (renumbered).
+
+---
+
+### 26.11 Missing for enterprise, on no roadmap at all
+
+Not risks in already-shipped code — gaps in what's planned. Listed so they
+don't get silently assumed away by "Epic O ships eventually."
+
+| Gap | Why it blocks an enterprise deployment |
+|---|---|
+| SSO (OIDC/SAML) + SCIM + MFA | Not a feature, a procurement gate — no RFP clears without it. Also the reason a password database exists at all right now (§19.1 U1). Epic Q. |
+| Policy change management (staging/preview/approval/scheduled rollout) | A policy edit goes live on the next poll with no review step, for a system that can black-hole a company's DNS. |
+| Canary rollout + automatic rollback | A bad bundle propagates to 100% of the fleet at once today (§12 lists canary as 🚧). Highest blast-radius gap in the product. Epic Q. |
+| Policy as code (Terraform provider / GitOps) | Enterprises want policy in version control with PR review, not clicked into a UI. Also solves change management above. |
+| Encrypted client→resolver DNS (DoT/DoH/DoQ listener) | Outbound is enforced (DoT/DoH to upstreams, §21); **inbound is plain `:1053` UDP/TCP** (`main.rs`, confirmed — no encrypted listener exists). In an enterprise deployment the untrusted hop is the client's, not the resolver's. |
+| Alerting delivery | Open since Sprint 1 (§11); Epic O defers to it again. A dashboard nobody's watching at 3am isn't operability. |
+| Secrets management (rotation, KMS, access audit) | Plaintext env files at 0600 with no rotation and no access log. |
+| Tested backup/restore with a documented RTO/RPO | `pg_dump` before upgrades is a backup step, not a DR plan, and it's never been drilled (§12). |
+| Audit-log immutability | "Append-only" today is a convention, not a guarantee — any DB admin can `UPDATE` the table. SOC2 scope will ask (§9). |
+| Response-rate limiting (RRL) | The filter node is effectively an open resolver on `:53`/`:1053` with no RRL — a participant in reflection/amplification without it (§9). |
 
 ---

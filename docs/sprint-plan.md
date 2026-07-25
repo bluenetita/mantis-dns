@@ -2,14 +2,19 @@
 
 **Stack:** filter node = Rust · control plane = Python · UI = TypeScript
 **Sprint length:** 2 weeks
-**Source:** roadmap in [`design.md`](design.md) §16–§25
+**Source:** roadmap in [`design.md`](design.md) §16–§26
 
 > **Checkbox status verified against the codebase on 2026-07-25.**
 > `[x]` = built and in the repo · `[ ]` = not built · `[~]` = partially built,
-> with the gap named on the line. Sprints 1–18 were originally left unchecked
-> long after they shipped; this pass corrects them in both directions — several
-> items marked open in Sprints 20–21 had in fact shipped, and several assumed
-> complete in Sprints 4–18 were never built.
+> with the gap named on the line · ❌ = formally **cut**, removed from the plan
+> rather than left as an unbuilt item. Sprints 1–18 were originally left
+> unchecked long after they shipped; this pass corrects them in both
+> directions — several items marked open in Sprints 20–21 had in fact shipped,
+> and several assumed complete in Sprints 4–18 were never built. A same-day
+> chief-architect review (design.md §26) then cut several items outright
+> (OpenVPN AS integration, Kubernetes/Kafka/ClickHouse/Redis Cluster/etcd as
+> targets) and inserted **Epic P** and **Epic Q** ahead of **Epic O**, which
+> was re-sequenced as a result — see the Epic map below.
 
 ---
 
@@ -31,7 +36,7 @@ Epic A: Bundle format & policy compiler        (Sprints 1-2)
 Epic B: Filter node core (Rust)                (Sprints 2-4)
 Epic C: Control plane API + DB (Python)        (Sprints 1-3)
 Epic D: Category feed ingestion + auto-update  (Sprints 4-6)
-Epic E: OpenVPN integration (AS + Proxmox)     (Sprints 5-7)
+Epic E: VPN DNS delivery + Proxmox profile     (Sprints 5-7) — OpenVPN AS scope cut, see design.md §7, §26.9
 Epic F: Telemetry & observability              (Sprints 6-8)
 Epic G: Management UI — prototype (TS)         (Sprints 3-6, parallel)
 Epic H: HA / multi-node / Proxmox profile      (Sprints 8-9)
@@ -40,8 +45,19 @@ Epic K: SIEM integration                       (Sprints 14-16) — see design.md
 Epic L: DNS upstream configuration             (Sprints 17-18) — see design.md §21
 Epic M: Native DHCP engine (mantis-dhcp)       (Sprints 19-21+) — see design.md §22
 Epic N: SIEM syslog export                     (Sprint 22) — see design.md §20.8
-Epic O: Fleet observability / per-node stats   (Sprint 23) — see design.md §23  ← not started
+Epic P: Foundation hardening                   (Sprints 23-25) — see design.md §26, next
+Epic Q: Enterprise entry ticket                (Sprints 26-28) — see design.md §26.10-26.11
+Epic O: Fleet observability / per-node stats   (Sprint 29) — see design.md §23  ← blocked on P, Q
 ```
+
+**2026-07-25 architecture review re-sequenced everything below this line.**
+Epic O was going to be Sprint 23; it no longer is. A chief-architect review
+(design.md §26) found three foundation risks — an unbenchmarked hot path that
+Epic O was about to add more instrumentation to, a single fleet-wide shared
+credential, and application-code-only tenant isolation — serious enough to
+sequence ahead of it. Epic P and Epic Q are new; Epic O is unchanged in scope,
+just moved to Sprint 29 and reframed as the control surface Epic Q's canary
+rollout needs, not a page built for its own sake. See design.md §26.10.
 
 ### Shipped outside the sprint sequence
 
@@ -111,22 +127,22 @@ Epics B and C start in parallel sprint 1 once the bundle schema (Epic A) is froz
 
 ---
 
-## Sprint 5 — Category ingestion pipeline + OpenVPN AS integration v1
+## Sprint 5 — Category ingestion pipeline + VPN DNS delivery v1
 
 - [x] Python: full ingestion pipeline — fetch → validate → normalize → dedupe/diff → sanity gates (`feeds/`, `test_feed_ingest.py`).
 - [x] Python: APScheduler running feeds on configured intervals (`scheduler.py`).
 - [x] Python: category → bundle compilation wired, multiple categories per tenant (`compiler/`).
-- [ ] **OpenVPN AS client config push + per-group VIP** — **not built.** No AS integration, no VIP automation, no OpenVPN artifacts anywhere in `infra/`, `scripts/` or `packaging/`. As built, clients get the filter node's address via mantis-dhcp option 6 or a manually configured VPN DNS push. Matches design.md §16 phase 2 (🚧).
-- [x] Rust: tenant/group resolution from source-IP subnet (`router.rs`, `/routing-table`) — §7.3 option 2, not the per-group VIP of option 1.
+- ❌ ~~OpenVPN AS client config push + per-group VIP~~ — **cut** (design.md §7, §26.9), not just unbuilt. Clients get the filter node's address via mantis-dhcp option 6 or a manually configured VPN DNS push instead, which delivers the same outcome without the AS dependency.
+- [x] Rust: tenant/group resolution from source-IP subnet (`router.rs`, `/routing-table`).
 
-**Exit criteria:** a client in a test group gets filtered DNS driven by an auto-updating category feed — met. Driven by *OpenVPN AS* — not met; the delivery mechanism is DHCP/manual, not AS.
+**Exit criteria:** a client in a test group gets filtered DNS driven by an auto-updating category feed — met, via DHCP/manual DNS delivery.
 
 ---
 
 ## Sprint 6 — Telemetry pipeline v1 + UI policy editor
 
-- [x] Rust: async fire-and-forget query event emission to the control plane's ingestion endpoint (`telemetry.rs`; Kafka deferred indefinitely — design.md §5.4 🚧).
-- [x] Python: query event consumer → Postgres (`telemetry_routers.py`; ClickHouse not adopted — §14).
+- [x] Rust: async fire-and-forget query event emission to the control plane's ingestion endpoint (`telemetry.rs`; a Kafka message bus was cut, not deferred — design.md §5.4, §26.9).
+- [x] Python: query event consumer → Postgres (`telemetry_routers.py`) — the permanent store; ClickHouse was cut, not a stepping stone (§14, §26.9).
 - [x] TypeScript: policy editor UI — category toggles, live domain counts, domain test box (`PolicyPage.tsx` + `POST /groups/{id}/policy/test`).
 
 **Exit criteria:** ops can see live metrics; tenant-admin can toggle categories from UI and see it land in a new bundle within the propagation SLA.
@@ -162,16 +178,16 @@ Epics B and C start in parallel sprint 1 once the bundle schema (Epic A) is froz
 
 - [~] Rust: the node serves the last-good bundle when the control plane is unreachable, and falls back to `UPSTREAM_FALLBACK_ADDRESS` when no bundle is present (design.md §21.3) — **but there is no staleness threshold and no alert.** A node serving a month-old bundle is indistinguishable from a healthy one. This is the exact gap design.md §23 exists to close, and it is still open.
 - [ ] Python: Postgres HA (Patroni or managed) — **not built.** Single instance (design.md §6 🚧).
-- [ ] Cloud: filter node autoscaling (k8s HPA) — **not built.** No Kubernetes in use; `charts/mantis-dns` is an early unverified chart (§14).
+- ❌ ~~Cloud: filter node autoscaling (k8s HPA)~~ — **cut**, not unbuilt: Kubernetes itself is cut as a target (§14, §26.9). `charts/mantis-dns` is kept only in case a customer's platform team requires it, not pursued further.
 - [ ] DR drill — **not run/documented.**
 
-**Exit criteria:** **not met.** The §7.5 / §17.3 failure modes are described in the design doc but not tested, and the staleness-alerting half of the first item is unbuilt.
+**Exit criteria:** **not met.** The §17.3 failure modes are described in the design doc but not tested, and the staleness-alerting half of the first item is unbuilt.
 
 ---
 
 ## Epic J — Enterprise UI redesign (Sprints 11–13)
 
-The prototype UI (Epic G) proved the API contract but is not enterprise-grade. This epic rebuilds it on a real foundation. Full plan and stack rationale: **design.md §19**. Backend dependencies (OIDC/RBAC, audit API, ClickHouse query logs) land in Sprints 8–9, so this epic follows them.
+The prototype UI (Epic G) proved the API contract but is not enterprise-grade. This epic rebuilds it on a real foundation. Full plan and stack rationale: **design.md §19**. Backend dependencies (OIDC/RBAC, audit API, PostgreSQL-backed query logs) land in Sprints 8–9, so this epic follows them.
 
 ### Sprint 11 — UI foundation (UI-0)
 
@@ -332,15 +348,88 @@ A third export path alongside the pull API (Sprint 14) and webhook push (Sprint 
 
 ---
 
-## Epic O — Fleet observability, per-node statistics (Sprint 23)
+## Epic P — Foundation hardening (Sprints 23–25)
 
-Full architecture and data model: **design.md §23**.
+Full reasoning for every item below: **design.md §26** (R1–R7). Not a feature
+epic — nothing here is user-visible. It exists because the 2026-07-25
+architecture review found risks that any feature built on top of them would
+inherit, foremost among them: no benchmark exists for the DNS hot path, so
+Epic O's own exit criteria (below) had nothing to check against.
+
+### Sprint 23 — Perf floor (**not started**)
+
+- [ ] **Bench harness + recorded p99 baseline**, on the actual query path (cache hit, cache miss + upstream, blocked). No `benches/` directory exists today and the "Sprint 4 baseline" every regression-gate reference in this document points to was never recorded (design.md §26 R7) — this sprint is what makes every prior "10% p99 gate" claim in this document real instead of aspirational.
+- [ ] **Fix `ZoneStore::lookup`'s hot-path allocation** (`zone_store.rs`): `normalize()` and `format!(".{z}")` each allocate a `String` on *every* query, the latter once per configured zone — found during the review, unnoticed until now because nothing was measuring the hot path. Replace with `qname.strip_suffix(z)` guarded by a leading `.`, or a precomputed suffix set. This is the concrete proof the bench above needed to exist before Epic O adds more instrumentation to this exact function.
+- [ ] CI wired to fail on regression beyond the now-real 10% p99 gate.
+
+**Exit criteria:** a committed baseline exists; the zone-lookup fix lands and the bench shows the improvement; CI fails a deliberately-introduced regression.
+
+### Sprint 24 — Credential and correctness hardening (**not started**)
+
+- [ ] **Bloom exact-match confirmation tier** (design.md §26 R1): on a bloom hit, check a sorted/`fst` exact-match set before blocking. Closes the false-positive-blocks-a-real-domain gap §15 already named and never built.
+- [ ] **Per-node credentials**: replace the single fleet-wide `MANTIS_SERVICE_TOKEN` with per-node identity (mTLS client cert, or at minimum a per-node token) with rotation and revocation (design.md §9, §26 R3). One compromised node currently yields fleet-wide credentials; this is the fix.
+
+**Exit criteria:** a bloom-hit domain confirmed absent from the exact set resolves normally, not blocked; revoking one node's credential doesn't affect any other node; a leaked node credential can no longer forge another node's heartbeat, bundle pull, or query events.
+
+### Sprint 25 — Contract and isolation hardening (**not started**)
+
+- [ ] **Bundle schema version + protobuf compat gate**: a version field in the bundle format, and a CI check that fails on a breaking protobuf change without a version bump (design.md §26 R7) — closes the one contract in this system (`gen:api:check` covers UI↔API) that currently has no check at all.
+- [ ] **Tenant-isolation coverage test**: enumerate every tenant-scoped route and fail CI if any lacks `user_tenant_filter`/`check_tenant_access` (design.md §26 R4).
+- [ ] **Postgres RLS** on tenant-scoped tables, as defense in depth behind the application-code filter above.
+
+**Exit criteria:** a route added without a tenant filter fails CI, not just code review; a query issued with the wrong tenant's session cannot read another tenant's rows even if the application-layer filter is bypassed.
+
+---
+
+## Epic Q — Enterprise entry ticket (Sprints 26–28)
+
+Full reasoning: **design.md §26.10–§26.11**. These three items gate real
+enterprise procurement and were on no roadmap before this review — not because
+they were forgotten, but because nothing before Epic P made them safe to build
+(canary rollout needs the per-node identity Epic P Sprint 24 establishes;
+retention/erasure needs the tenant-isolation guarantees Epic P Sprint 25
+establishes).
+
+### Sprint 26 — SSO + SCIM (**not started**)
+
+- [ ] **OIDC/SAML SSO** against the roles that already exist (viewer/operator/admin) — retires the local username/password store `auth.py` currently maintains (design.md §19.1 U1, §26.11).
+- [ ] **SCIM provisioning** so an IdP can manage user lifecycle instead of the Users page doing it by hand.
+- [ ] MFA, if the chosen IdP doesn't already enforce it upstream.
+
+**Exit criteria:** a user provisioned in the IdP can log in and land in the correct role with no manual account creation in Mantis; local password login is gated off (or removed) once SSO is configured.
+
+### Sprint 27 — Canary bundle rollout + automatic rollback (**not started**)
+
+- [ ] **Staged bundle rollout**: push a new policy bundle to a configurable subset of nodes first, using the per-node identity Epic P Sprint 24 established.
+- [ ] **Automatic rollback** on an error-rate/SERVFAIL spike among the canary set, before the bundle reaches the full fleet.
+- [ ] UI surface for both — this is also the first real consumer of Epic O's per-node identity, which is why Epic O is sequenced after this, not before it.
+
+**Exit criteria:** a deliberately bad bundle (e.g. a policy that blocks everything) pushed to a canary subset triggers automatic rollback before reaching the rest of the fleet; a good bundle promotes to 100% within the configured window.
+
+### Sprint 28 — Retention, erasure, residency (**not started**)
+
+- [ ] **Per-tenant retention override** on top of today's single global `QUERY_EVENT_RETENTION_DAYS` (design.md §26 R6).
+- [ ] **Right-to-erasure path**: delete/anonymize a `ClientEntry` and its associated `query_events` on request.
+- [ ] **Data-residency documentation** per deployment profile (design.md §15, §26.11) — not a code deliverable, but a gate some customers require before signing.
+
+**Exit criteria:** a tenant's retention window can be set independently of the global default; an erasure request against one client's IP removes/anonymizes its `ClientEntry` and associated query events without touching any other tenant's data.
+
+---
+
+## Epic O — Fleet observability, per-node statistics (Sprint 29)
+
+Full architecture and data model: **design.md §23**. Sequencing: design.md
+§26.10 — this epic is unchanged in scope from its original design, only moved
+later and reframed. It was going to be Sprint 23; Epic P and Epic Q now come
+first, for two concrete reasons: this epic adds per-query instrumentation to
+a hot path Epic P Sprint 23 is what first benchmarks, and its heartbeat is one
+more thing forgeable with the shared fleet token Epic P Sprint 24 replaces.
 
 The filter fleet is the only component on the DNS hot path and the only one with no operator-facing surface: a filter node has no identity anywhere in the control plane, so bundle skew, version skew, per-node SERVFAIL spikes and dropped telemetry are all invisible. mantis-dhcp already established both halves of the pattern in Sprint 21 (`dhcp_daemon_heartbeats` for identity, in-process relaxed atomics for counters, §22.11); this epic applies them to mantis-filter and adds the fleet view neither has.
 
-This epic also unblocks the one item Epic L could not finish: `HealthTab.tsx` (Sprint 18) is empty because per-node upstream health has no route to the control plane, and the heartbeat defined here is that route.
+This epic also unblocks the one item Epic L could not finish: `HealthTab.tsx` (Sprint 18) is empty because per-node upstream health has no route to the control plane, and the heartbeat defined here is that route. It additionally becomes the control surface Epic Q Sprint 27's canary rollout needs to target a subset of the fleet by identity — the reason this epic is worth building now, beyond a table in a UI.
 
-### Sprint 23 — Node stats + Nodes page (**not started** — no `node.rs`, no `FilterNodeHeartbeat`, no `node_routers.py`, no `NodesPage.tsx` in the repo)
+### Sprint 29 — Node stats + Nodes page (**not started** — no `node.rs`, no `FilterNodeHeartbeat`, no `node_routers.py`, no `NodesPage.tsx` in the repo)
 
 - [ ] **`NodeStats`** (`services/filter/mantis-filter/src/node.rs`): relaxed `AtomicU64` counters (queries/blocked/allowed/stub-zone, cache hit-miss-evict, rcode mix, telemetry drops, no-bundle ServFail) + a dep-free 16-bucket log2 latency histogram. Instrumented at *one* point — the top of `TelemetryEmitter::emit`, before `try_send`, so the whole of `lib.rs`'s hot path is untouched and counters stay accurate while the telemetry channel is dropping. Two explicit one-line bumps for the paths that never reach `emit`: the `bootstrap_fail_open()` ServFail early return, and `DnsCache::insert`'s eviction branch.
 - [ ] **Node identity**: `MANTIS_NODE_NAME` → `/proc/sys/kernel/hostname` fallback. The env var is a hard deployment requirement for any non-host-networked install — a container hostname changes per restart and would turn the fleet table into a graveyard of dead one-shot rows.
@@ -350,7 +439,7 @@ This epic also unblocks the one item Epic L could not finish: `HealthTab.tsx` (S
 - [ ] **`NodesPage.tsx`** + nav entry (`minRole: "operator"`): one table, filter and DHCP rows together — splitting them into tabs would hide the correlation that matters (both processes on one host went stale at the same second). Skew and telemetry-drop conditions are banners, not columns; per-row expansion carries the rcode breakdown, latency histogram and upstream health matrix.
 - [ ] **Opt-in `/metrics`** on the filter node (`MANTIS_FILTER_METRICS_BIND_ADDR`), same axum text-exposition shape and default-disabled posture as mantis-dhcp's. A second *reader* of the one `Arc<NodeStats>`, not a second counter set — restores what `metrics_init.rs` removed without the split-brain that motivated removing it.
 
-**Exit criteria:** kill one filter node → its row goes stale in the Nodes page within 30 s and stays (never auto-pruned); pin a node to an old bundle → skew banner names it and its version lag; saturate the telemetry channel → drop count is visible in the UI, not just in `journalctl`; a node whose egress to one upstream is blackholed shows that resolver unhealthy *for that node alone*; hot-path benchmark shows no p99 regression beyond 10%. **Note:** that last criterion currently has nothing to run against — the Sprint 4 bench and baseline were never built (see Cross-cutting). Either this epic stands up the bench first, or the criterion should be struck rather than left as an unverifiable exit gate.
+**Exit criteria:** kill one filter node → its row goes stale in the Nodes page within 30 s and stays (never auto-pruned); pin a node to an old bundle → skew banner names it and its version lag; saturate the telemetry channel → drop count is visible in the UI, not just in `journalctl`; a node whose egress to one upstream is blackholed shows that resolver unhealthy *for that node alone*; hot-path benchmark (Epic P Sprint 23, now a real, running check rather than an aspirational reference) shows no p99 regression beyond 10%.
 
 **Deliberately out of scope:** in-flight query gauge (the one metric that can't be derived at the `emit` choke point — needs guards in all four server loops, and QPS + p99 covers saturation for now); alerting delivery (every input a rule wants is now exposed, but the channel decision belongs to §11's open alerting work); per-tenant counter labels on node stats (cardinality the hot path would pay for, already free from `query_events`); node control actions — drain, restart, force refresh — which are a write path to the fleet and a separate security surface; a control-plane fleet-aggregate Prometheus endpoint.
 
@@ -359,7 +448,7 @@ This epic also unblocks the one item Epic L could not finish: `HealthTab.tsx` (S
 ## Cross-cutting (every sprint)
 
 - [x] Cross-language fixture tests (Python-built bundle → Rust-verified) run in CI (`cross_lang_fixture.rs`, `test_bloom.py`).
-- [ ] **Perf regression gate — never built.** There is no hot-path bench, no `benches/` directory, and no perf job in `.github/workflows/ci.yml`; the Sprint 4 baseline it would compare against was never recorded either. Treat every "10% p99 gate" reference in this document as a stated intent, not an enforced check.
+- [ ] **Perf regression gate — never built, now scheduled.** There is no hot-path bench, no `benches/` directory, and no perf job in `.github/workflows/ci.yml`; the Sprint 4 baseline it would compare against was never recorded either. Until Epic P Sprint 23 lands, treat every "10% p99 gate" reference in this document as a stated intent, not an enforced check.
 - [x] `cargo clippy -D warnings`, `ruff` + `mypy`, `oxlint` + `tsc -b` gate merges. Also enforced: `size-limit` bundle budget and `gen:api:check` (UI schema drift vs FastAPI's OpenAPI spec). Linter note: `mypy` runs in its default mode, not `--strict`.
 
 ---

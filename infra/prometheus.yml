@@ -1,7 +1,18 @@
 global:
   scrape_interval: 5s
 
+# mantis-filter's own /metrics exporter was removed (design.md §22.11 table);
+# restoring one is tracked as design.md §23.8, not done yet — don't add a
+# filter job back until that lands, or it'll just be a permanently-down target.
+#
+# mantis-dhcp and mantis-dhcp6 expose real Prometheus text exposition, but
+# it's opt-in (blank = disabled) via MANTIS_DHCP_METRICS_BIND_ADDR /
+# MANTIS_DHCP6_METRICS_BIND_ADDR — set those env vars on the daemons before
+# pointing a scraper at these targets.
 scrape_configs:
-  - job_name: mantis-filter
+  - job_name: mantis-dhcp
     static_configs:
-      - targets: ["filter:9090"]
+      - targets: ["dhcp:9101"]
+  - job_name: mantis-dhcp6
+    static_configs:
+      - targets: ["dhcp6:9101"]
