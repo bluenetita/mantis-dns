@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { Badge, Button, Group, NumberInput, Select, Stack, Switch, Text, TextInput, Title } from "@mantine/core";
+import { Accordion, Badge, Button, Group, NumberInput, Select, Stack, Switch, Text, TextInput, Title } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { modals } from "@mantine/modals";
@@ -31,6 +31,7 @@ import {
   type DhcpScope,
 } from "../../api/hooks";
 import { CrudTable, EntityModal, type CrudColumn } from "../../components/crud";
+import { fmtDuration } from "./helpers";
 
 function ScopeForm({
   initial,
@@ -138,38 +139,47 @@ function ScopeForm({
           <NumberInput label="Lease time (s)" min={60} {...form.getInputProps("lease_time_s")} />
           <NumberInput label="Max lease time (s)" min={60} {...form.getInputProps("max_lease_time_s")} />
         </Group>
-        <Switch label="DDNS — push A records to DNS zone" {...form.getInputProps("ddns_enabled", { type: "checkbox" })} />
-        {form.values.ddns_enabled && (
-          <Group grow>
-            <Select
-              label="DDNS zone"
-              data={zoneOptions}
-              clearable
-              {...form.getInputProps("ddns_zone_id")}
-            />
-            <NumberInput label="DDNS TTL (s)" min={30} {...form.getInputProps("ddns_ttl_s")} />
-          </Group>
-        )}
-        <Group grow>
-          <TextInput label="PXE next-server (siaddr)" placeholder="192.168.1.10" {...form.getInputProps("pxe_next_server")} />
-          <TextInput label="PXE boot filename (BIOS)" placeholder="pxelinux.0" {...form.getInputProps("pxe_boot_filename")} />
-          <TextInput
-            label="PXE boot filename (UEFI)"
-            placeholder="shimx64.efi"
-            description="Used when the client's arch option (93) is UEFI"
-            {...form.getInputProps("pxe_uefi_boot_filename")}
-          />
-        </Group>
-        <Select
-          label="Interface (optional)"
-          placeholder="All interfaces"
-          description="Binds a dedicated socket to this interface at startup — a daemon restart is needed after changing it"
-          data={interfaceOptions}
-          searchable
-          clearable
-          {...form.getInputProps("interface")}
-          onChange={(value) => form.setFieldValue("interface", value ?? "")}
-        />
+        <Accordion variant="contained">
+          <Accordion.Item value="advanced">
+            <Accordion.Control>Advanced (DDNS, PXE, interface)</Accordion.Control>
+            <Accordion.Panel>
+              <Stack gap="sm">
+                <Switch label="DDNS — push A records to DNS zone" {...form.getInputProps("ddns_enabled", { type: "checkbox" })} />
+                {form.values.ddns_enabled && (
+                  <Group grow>
+                    <Select
+                      label="DDNS zone"
+                      data={zoneOptions}
+                      clearable
+                      {...form.getInputProps("ddns_zone_id")}
+                    />
+                    <NumberInput label="DDNS TTL (s)" min={30} {...form.getInputProps("ddns_ttl_s")} />
+                  </Group>
+                )}
+                <Group grow>
+                  <TextInput label="PXE next-server (siaddr)" placeholder="192.168.1.10" {...form.getInputProps("pxe_next_server")} />
+                  <TextInput label="PXE boot filename (BIOS)" placeholder="pxelinux.0" {...form.getInputProps("pxe_boot_filename")} />
+                  <TextInput
+                    label="PXE boot filename (UEFI)"
+                    placeholder="shimx64.efi"
+                    description="Used when the client's arch option (93) is UEFI"
+                    {...form.getInputProps("pxe_uefi_boot_filename")}
+                  />
+                </Group>
+                <Select
+                  label="Interface (optional)"
+                  placeholder="All interfaces"
+                  description="Binds a dedicated socket to this interface at startup — a daemon restart is needed after changing it"
+                  data={interfaceOptions}
+                  searchable
+                  clearable
+                  {...form.getInputProps("interface")}
+                  onChange={(value) => form.setFieldValue("interface", value ?? "")}
+                />
+              </Stack>
+            </Accordion.Panel>
+          </Accordion.Item>
+        </Accordion>
         <Switch label="Enabled" {...form.getInputProps("enabled", { type: "checkbox" })} />
         <Group justify="flex-end" mt="sm">
           <Button variant="default" onClick={onCancel}>Cancel</Button>
@@ -232,7 +242,7 @@ export function ScopesTab({
       header: "Pool",
       render: (s) => <Text size="xs" c="dimmed">{s.range_start} – {s.range_end}</Text>,
     },
-    { key: "lease", header: "Lease (s)", render: (s) => s.lease_time_s.toLocaleString() },
+    { key: "lease", header: "Lease", render: (s) => fmtDuration(s.lease_time_s) },
     {
       key: "ddns",
       header: "DDNS",
@@ -245,7 +255,10 @@ export function ScopesTab({
         <Switch
           size="xs"
           checked={s.enabled}
-          onChange={() => update.mutateAsync({ id: s.id, body: { enabled: !s.enabled } }).catch(() => {})}
+          onChange={() =>
+            update.mutateAsync({ id: s.id, body: { enabled: !s.enabled } })
+              .catch((e: Error) => notifications.show({ color: "red", title: "Error", message: e.message }))
+          }
         />
       ),
     },

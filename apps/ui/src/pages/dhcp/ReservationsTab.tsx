@@ -15,13 +15,13 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { Badge, Button, Group, Select, Stack, Switch, Text, TextInput, Title } from "@mantine/core";
+import { Badge, Button, Group, Select, Stack, Switch, Text, TextInput, Title, Tooltip } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { modals } from "@mantine/modals";
 import { notifications } from "@mantine/notifications";
-import { IconPlus } from "@tabler/icons-react";
-import { useState } from "react";
+import { IconPlus, IconSearch } from "@tabler/icons-react";
+import { useEffect, useMemo, useState } from "react";
 import {
   useCreateDhcpReservation,
   useDeleteDhcpReservation,
@@ -30,6 +30,7 @@ import {
   type DhcpReservation,
 } from "../../api/hooks";
 import { CrudTable, EntityModal, type CrudColumn } from "../../components/crud";
+import { normalizeMac, type ReservePrefill } from "./helpers";
 
 function ReservationForm({
   initial,
@@ -55,12 +56,7 @@ function ReservationForm({
       enabled: initial?.enabled ?? true,
     },
     validate: {
-      mac_address: (v) =>
-        !v.trim()
-          ? "Required"
-          : !/^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/.test(v.trim())
-          ? "Format: aa:bb:cc:dd:ee:ff"
-          : null,
+      mac_address: (v) => (normalizeMac(v) ? null : "Format: aa:bb:cc:dd:ee:ff"),
       ip_address: (v) => (!v.trim() ? "Required" : null),
     },
   });
@@ -68,6 +64,7 @@ function ReservationForm({
   const submit = form.onSubmit((v) =>
     onSave({
       ...v,
+      mac_address: normalizeMac(v.mac_address) ?? v.mac_address,
       hostname: v.hostname || null,
       description: v.description || null,
       client_id: v.client_id || null,
@@ -102,27 +99,50 @@ function ReservationForm({
   );
 }
 
-export function ReservationsTab({ scopeOptions }: { scopeOptions: { value: string; label: string }[] }) {
-  const [scopeId, setScopeId] = useState<string | null>(null);
+export function ReservationsTab({
+  scopeOptions,
+  scopeId,
+  onScopeChange,
+  prefill,
+  onPrefillConsumed,
+}: {
+  scopeOptions: { value: string; label: string }[];
+  scopeId: string | null;
+  onScopeChange: (scopeId: string | null) => void;
+  prefill?: ReservePrefill | null;
+  onPrefillConsumed?: () => void;
+}) {
   const { data: reservations = [], isLoading } = useDhcpReservations(scopeId ?? undefined);
   const create = useCreateDhcpReservation(scopeId ?? undefined);
   const update = useUpdateDhcpReservation(scopeId ?? undefined);
   const del = useDeleteDhcpReservation(scopeId ?? undefined);
 
-  const [editing, setEditing] = useState<DhcpReservation | null>(null);
+  const [editing, setEditing] = useState<Partial<DhcpReservation> | null>(null);
   const [modalOpen, { open, close }] = useDisclosure(false);
+  const [search, setSearch] = useState("");
 
   const openCreate = () => { setEditing(null); open(); };
   const openEdit = (r: DhcpReservation) => { setEditing(r); open(); };
 
+  // A lease's "Reserve" action lands here with the scope already selected —
+  // open the create form prefilled with its MAC/IP.
+  useEffect(() => {
+    if (prefill && scopeId) {
+      setEditing({ mac_address: prefill.mac_address ?? "", ip_address: prefill.ip_address });
+      open();
+      onPrefillConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill, scopeId]);
+
   const save = (body: Partial<DhcpReservation>) => {
-    const mut = editing
+    const mut = editing?.id
       ? update.mutateAsync({ id: editing.id, body })
       : create.mutateAsync(body);
     mut
       .then(() => {
         close();
-        notifications.show({ color: "green", message: editing ? "Reservation updated" : "Reservation created" });
+        notifications.show({ color: "green", message: editing?.id ? "Reservation updated" : "Reservation created" });
       })
       .catch((e: Error) => notifications.show({ color: "red", title: "Error", message: e.message }));
   };
@@ -140,6 +160,17 @@ export function ReservationsTab({ scopeOptions }: { scopeOptions: { value: strin
     });
 
   const saving = create.isPending || update.isPending;
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return reservations;
+    return reservations.filter(
+      (r) =>
+        r.mac_address.toLowerCase().includes(q) ||
+        r.ip_address.toLowerCase().includes(q) ||
+        (r.hostname ?? "").toLowerCase().includes(q),
+    );
+  }, [reservations, search]);
 
   const columns: CrudColumn<DhcpReservation>[] = [
     { key: "mac", header: "MAC", render: (r) => <code>{r.mac_address}</code> },
@@ -162,7 +193,10 @@ export function ReservationsTab({ scopeOptions }: { scopeOptions: { value: strin
         <Switch
           size="xs"
           checked={r.enabled}
-          onChange={() => update.mutateAsync({ id: r.id, body: { enabled: !r.enabled } }).catch(() => {})}
+          onChange={() =>
+            update.mutateAsync({ id: r.id, body: { enabled: !r.enabled } })
+              .catch((e: Error) => notifications.show({ color: "red", title: "Error", message: e.message }))
+          }
         />
       ),
     },
@@ -173,23 +207,37 @@ export function ReservationsTab({ scopeOptions }: { scopeOptions: { value: strin
       <Group justify="space-between" mb="md">
         <Title order={4}>Host Reservations</Title>
         <Group>
+          {scopeId && (
+            <TextInput
+              size="xs"
+              placeholder="Search MAC, IP, hostname…"
+              leftSection={<IconSearch size={14} />}
+              value={search}
+              onChange={(e) => setSearch(e.currentTarget.value)}
+              style={{ minWidth: 200 }}
+            />
+          )}
           <Select
             size="xs"
             placeholder="Select scope"
             data={scopeOptions}
             value={scopeId}
-            onChange={(v) => setScopeId(v ?? "")}
+            onChange={onScopeChange}
             clearable
             style={{ minWidth: 220 }}
           />
-          <Button
-            size="xs"
-            leftSection={<IconPlus size={14} />}
-            disabled={!scopeId}
-            onClick={openCreate}
-          >
-            Add reservation
-          </Button>
+          <Tooltip label="Select a scope first" disabled={!!scopeId}>
+            <div style={{ display: "inline-block" }}>
+              <Button
+                size="xs"
+                leftSection={<IconPlus size={14} />}
+                disabled={!scopeId}
+                onClick={openCreate}
+              >
+                Add reservation
+              </Button>
+            </div>
+          </Tooltip>
         </Group>
       </Group>
 
@@ -197,7 +245,7 @@ export function ReservationsTab({ scopeOptions }: { scopeOptions: { value: strin
         <Text c="dimmed" size="sm">Select a scope to view reservations.</Text>
       ) : (
         <CrudTable
-          data={reservations}
+          data={filtered}
           isLoading={isLoading}
           getRowKey={(r) => r.id}
           columns={columns}
@@ -210,7 +258,7 @@ export function ReservationsTab({ scopeOptions }: { scopeOptions: { value: strin
       <EntityModal
         opened={modalOpen}
         onClose={close}
-        title={editing ? "Edit reservation" : "Add reservation"}
+        title={editing?.id ? "Edit reservation" : "Add reservation"}
         size="md"
       >
         <ReservationForm

@@ -1038,7 +1038,6 @@ export function useDhcpLeases(scopeId: string | undefined) {
   return useQuery({
     queryKey: ["dhcp-leases", scopeId],
     queryFn: () => rawGet<DhcpLease[]>("/api/v1/dhcp/leases", scopeId ? { scope_id: scopeId } : undefined),
-    enabled: !!scopeId,
     refetchInterval: 30_000,
   });
 }
@@ -1198,7 +1197,6 @@ export function useDhcpLeases6(scopeId: string | undefined) {
   return useQuery({
     queryKey: ["dhcp6-leases", scopeId],
     queryFn: () => rawGet<DhcpLease6[]>("/api/v1/dhcp6/leases", scopeId ? { scope_id: scopeId } : undefined),
-    enabled: !!scopeId,
     refetchInterval: 30_000,
   });
 }

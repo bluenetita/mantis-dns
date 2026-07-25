@@ -15,4 +15,6 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-export { Dhcpv6Tab } from "./Dhcpv6Tab";
+export { Scope6sTab } from "./Scope6sTab";
+export { Reservation6sTab } from "./Reservation6sTab";
+export { Leases6Tab } from "./Leases6Tab";

@@ -17,6 +17,7 @@
 
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import type { MockedFunction } from "vitest";
 import { renderWithProviders } from "../../test/utils";
 import {
@@ -80,6 +81,11 @@ beforeEach(() => {
   mockUseDeleteDhcpReservation.mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as never);
 });
 
+function ControlledReservationsTab() {
+  const [scopeId, setScopeId] = useState<string | null>(null);
+  return <ReservationsTab scopeOptions={scopeOptions} scopeId={scopeId} onScopeChange={setScopeId} />;
+}
+
 async function selectScope(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByPlaceholderText("Select scope"));
   await user.click(await screen.findByText("office (10.8.1.0/24)"));
@@ -88,7 +94,7 @@ async function selectScope(user: ReturnType<typeof userEvent.setup>) {
 describe("ReservationsTab", () => {
   it("prompts to select a scope before showing the table", () => {
     mockUseDhcpReservations.mockReturnValue({ data: [], isLoading: false } as never);
-    renderWithProviders(<ReservationsTab scopeOptions={scopeOptions} />);
+    renderWithProviders(<ControlledReservationsTab />);
     expect(screen.getByText(/Select a scope to view reservations/i)).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
@@ -99,7 +105,7 @@ describe("ReservationsTab", () => {
       data: [makeReservation({ id: "r1", mac_address: "aa:bb:cc:dd:ee:ff" })],
       isLoading: false,
     } as never);
-    renderWithProviders(<ReservationsTab scopeOptions={scopeOptions} />);
+    renderWithProviders(<ControlledReservationsTab />);
     await selectScope(user);
     expect(await screen.findByText("aa:bb:cc:dd:ee:ff")).toBeInTheDocument();
   });
@@ -107,7 +113,7 @@ describe("ReservationsTab", () => {
   it("opens the add-reservation modal once a scope is selected", async () => {
     const user = userEvent.setup();
     mockUseDhcpReservations.mockReturnValue({ data: [], isLoading: false } as never);
-    renderWithProviders(<ReservationsTab scopeOptions={scopeOptions} />);
+    renderWithProviders(<ControlledReservationsTab />);
     await selectScope(user);
     await user.click(screen.getByRole("button", { name: /add reservation/i }));
     expect(await screen.findByRole("heading", { name: "Add reservation" })).toBeInTheDocument();
@@ -119,7 +125,7 @@ describe("ReservationsTab", () => {
     const deleteMutate = vi.fn().mockResolvedValue(undefined);
     mockUseDeleteDhcpReservation.mockReturnValue({ mutateAsync: deleteMutate, isPending: false } as never);
     mockUseDhcpReservations.mockReturnValue({ data: [makeReservation({ id: "r1" })], isLoading: false } as never);
-    renderWithProviders(<ReservationsTab scopeOptions={scopeOptions} />);
+    renderWithProviders(<ControlledReservationsTab />);
     await selectScope(user);
 
     await user.click(await screen.findByRole("button", { name: "Delete" }));

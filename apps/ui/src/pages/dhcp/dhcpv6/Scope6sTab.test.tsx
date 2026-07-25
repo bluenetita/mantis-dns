@@ -123,6 +123,7 @@ describe("Scope6sTab", () => {
     mockUseDhcpScopes6.mockReturnValue({ data: [], isLoading: false } as never);
     renderWithProviders(<Scope6sTab tenantOptions={tenantOptions} />);
     await user.click(screen.getByRole("button", { name: /add scope/i }));
+    await user.click(await screen.findByText(/^Advanced/));
     const field = await screen.findByRole("combobox", { name: /^Interface/ });
     await user.click(field);
     await user.click(await screen.findByText("eth1"));

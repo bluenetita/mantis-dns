@@ -19,3 +19,4 @@ export { ScopesTab } from "./ScopesTab";
 export { ReservationsTab } from "./ReservationsTab";
 export { LeasesTab } from "./LeasesTab";
 export { StatusTab } from "./StatusTab";
+export type { ReservePrefill } from "./helpers";

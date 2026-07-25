@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { Button, Group, NumberInput, Select, Stack, Switch, Text, TextInput, Title } from "@mantine/core";
+import { Accordion, Button, Group, NumberInput, Select, Stack, Switch, Text, TextInput, Title } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { modals } from "@mantine/modals";
@@ -31,6 +31,7 @@ import {
   type DhcpScope6,
 } from "../../../api/hooks";
 import { CrudTable, EntityModal, type CrudColumn } from "../../../components/crud";
+import { fmtDuration } from "../helpers";
 
 function Scope6Form({
   initial,
@@ -109,21 +110,30 @@ function Scope6Form({
         </Group>
         <TextInput label="DNS servers" placeholder="2001:4860:4860::8888" {...form.getInputProps("dns_servers")} />
         <TextInput label="Domain name" {...form.getInputProps("domain_name")} />
-        <Select
-          label="Interface (optional)"
-          placeholder="All interfaces"
-          description="mantis-dhcp6 doesn't bind per-interface sockets yet (design.md §22.9) — setting this excludes the scope from direct-attach (unrelayed) traffic entirely; leave blank unless this scope is relay-only"
-          data={interfaceOptions}
-          searchable
-          clearable
-          {...form.getInputProps("interface")}
-          onChange={(value) => form.setFieldValue("interface", value ?? "")}
-        />
         <Group grow>
           <NumberInput label="Preferred lifetime (s)" min={60} {...form.getInputProps("preferred_lifetime_s")} />
           <NumberInput label="Valid lifetime (s)" min={60} {...form.getInputProps("valid_lifetime_s")} />
         </Group>
-        <Switch label="DDNS" {...form.getInputProps("ddns_enabled", { type: "checkbox" })} />
+        <Accordion variant="contained">
+          <Accordion.Item value="advanced">
+            <Accordion.Control>Advanced (DDNS, interface)</Accordion.Control>
+            <Accordion.Panel>
+              <Stack gap="sm">
+                <Switch label="DDNS" {...form.getInputProps("ddns_enabled", { type: "checkbox" })} />
+                <Select
+                  label="Interface (optional)"
+                  placeholder="All interfaces"
+                  description="mantis-dhcp6 doesn't bind per-interface sockets yet (design.md §22.9) — setting this excludes the scope from direct-attach (unrelayed) traffic entirely; leave blank unless this scope is relay-only"
+                  data={interfaceOptions}
+                  searchable
+                  clearable
+                  {...form.getInputProps("interface")}
+                  onChange={(value) => form.setFieldValue("interface", value ?? "")}
+                />
+              </Stack>
+            </Accordion.Panel>
+          </Accordion.Item>
+        </Accordion>
         <Switch label="Enabled" {...form.getInputProps("enabled", { type: "checkbox" })} />
         <Group justify="flex-end" mt="sm">
           <Button variant="default" onClick={onCancel}>Cancel</Button>
@@ -164,7 +174,10 @@ export function Scope6sTab({ tenantOptions }: { tenantOptions: { value: string; 
       children: <Text size="sm">Delete <b>{s.name}</b> ({s.subnet})?</Text>,
       labels: { confirm: "Delete", cancel: "Cancel" },
       confirmProps: { color: "red" },
-      onConfirm: () => del6.mutateAsync(s.id).catch(() => {}),
+      onConfirm: () =>
+        del6.mutateAsync(s.id)
+          .then(() => notifications.show({ color: "green", message: "Scope deleted" }))
+          .catch((e: Error) => notifications.show({ color: "red", title: "Error", message: e.message })),
     });
 
   const columns: CrudColumn<DhcpScope6>[] = [
@@ -175,7 +188,7 @@ export function Scope6sTab({ tenantOptions }: { tenantOptions: { value: string; 
       header: "Pool",
       render: (s) => <Text size="xs" c="dimmed">{s.pool_start} –<br />{s.pool_end}</Text>,
     },
-    { key: "lifetime", header: "Lifetime (s)", render: (s) => s.valid_lifetime_s.toLocaleString() },
+    { key: "lifetime", header: "Lifetime", render: (s) => fmtDuration(s.valid_lifetime_s) },
     {
       key: "enabled",
       header: "Enabled",
@@ -183,7 +196,10 @@ export function Scope6sTab({ tenantOptions }: { tenantOptions: { value: string; 
         <Switch
           size="xs"
           checked={s.enabled}
-          onChange={() => update6.mutateAsync({ id: s.id, body: { enabled: !s.enabled } }).catch(() => {})}
+          onChange={() =>
+            update6.mutateAsync({ id: s.id, body: { enabled: !s.enabled } })
+              .catch((e: Error) => notifications.show({ color: "red", title: "Error", message: e.message }))
+          }
         />
       ),
     },
@@ -192,7 +208,7 @@ export function Scope6sTab({ tenantOptions }: { tenantOptions: { value: string; 
   return (
     <>
       <Group justify="space-between" mb="md">
-        <Title order={5}>IPv6 Scopes</Title>
+        <Title order={4}>IPv6 Scopes</Title>
         <Button size="xs" leftSection={<IconPlus size={14} />} onClick={openCreate}>
           Add scope
         </Button>

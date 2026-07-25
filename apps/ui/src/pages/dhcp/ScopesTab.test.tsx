@@ -128,6 +128,7 @@ describe("ScopesTab", () => {
     mockUseDhcpScopes.mockReturnValue({ data: [], isLoading: false } as never);
     renderWithProviders(<ScopesTab tenantOptions={tenantOptions} zoneOptions={zoneOptions} />);
     await user.click(screen.getByRole("button", { name: /add scope/i }));
+    await user.click(await screen.findByText(/^Advanced/));
     const field = await screen.findByRole("combobox", { name: /^Interface/ });
     await user.click(field);
     await user.click(await screen.findByText("eth1"));
@@ -142,6 +143,7 @@ describe("ScopesTab", () => {
     } as never);
     renderWithProviders(<ScopesTab tenantOptions={tenantOptions} zoneOptions={zoneOptions} />);
     await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(await screen.findByText(/^Advanced/));
     const field = await screen.findByRole("combobox", { name: /^Interface/ });
     expect(field).toHaveValue("eth9");
   });
