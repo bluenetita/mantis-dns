@@ -8,7 +8,7 @@ depends synchronously on policy authoring, storage, or UI availability.
                          │              MANAGEMENT PLANE                  │
                          │  Admin API · Web UI (SPA) · Auth · RBAC        │
                          └───────────────┬──────────────────────────────┘
-                                         │ REST/gRPC
+                                         │ REST (FastAPI)
                          ┌───────────────▼──────────────────────────────┐
                          │               CONTROL PLANE                    │
                          │  Policy compiler · Blocklist/feed ingester     │
@@ -33,10 +33,14 @@ depends synchronously on policy authoring, storage, or UI availability.
 - **Management UI** (`apps/ui`, TypeScript/React) — talks to the control
   plane's REST API. Tenant/group/policy administration, feed management,
   analytics.
-- **mantis-dhcp** (`services/dhcp`, Rust) — native DHCPv4 server, hands out
-  the filter node as the resolver to clients on the network it serves. Reads
-  scope/reservation config directly from the control plane's Postgres
-  tables — no separate daemon or push step.
+- **mantis-dhcp** (`services/dhcp`, Rust) — native DHCPv4 and DHCPv6 servers
+  (two binaries, `mantis-dhcp` and `mantis-dhcp6`), handing out the filter node
+  as the resolver to clients on the network they serve. Read scope/reservation
+  config directly from the control plane's Postgres tables — no separate daemon
+  or push step. On lease ACK they write A/AAAA records into the DNS zone below.
+- **DNS zones** — tenant-owned authoritative records (`corp.local`, DHCP-derived
+  hostnames) answered locally by the filter node before policy or upstream
+  routing is consulted. See [`docs/design.md`](docs/design.md) §24.
 
 ## Cross-language contract
 
@@ -49,10 +53,13 @@ lockstep; see the fixture tests in `services/control/tests/test_bloom.py`.
 ## Request path (cache miss)
 
 1. Client's resolver (set via DHCP or VPN push) sends a query to a filter node.
-2. Filter node resolves the query against the current signed policy bundle
+2. Local zones first: a name inside a tenant's own zone is answered
+   authoritatively and skips steps 3–4 entirely.
+3. Otherwise the filter node resolves against the current signed policy bundle
    (bloom filter → allow/deny override).
-3. Blocked → sinkhole response. Allowed → local cache → upstream resolver (DoT/DoH).
-4. Answer returned; query event recorded for analytics.
+4. Blocked → sinkhole response, or a redirect to the block page if the group's
+   template says so. Allowed → local cache → upstream pool (DoT/DoH/do53).
+5. Answer returned; query event recorded for analytics and SIEM export.
 
 ## Deployment topologies
 

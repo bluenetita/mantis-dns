@@ -1,8 +1,8 @@
 # Enterprise DNS Filtering Platform — Design Document
 
 **Codename:** Mantis-DNS
-**Status:** Draft v1.2
-**Date:** 2026-07-01
+**Status:** Draft v1.3
+**Date:** 2026-07-25 (status markers re-validated against the codebase on this date)
 **Audience:** Platform engineering, network security, SRE
 
 > **Deployment profiles.** The platform targets two profiles from one codebase:
@@ -11,7 +11,7 @@
 >
 > Category-based content filtering with auto-updating feeds (porn, gambling, firearms, etc.) is a first-class feature in both profiles (§18).
 
-> **⚠️ Build status.** §4–§9, §11–§12, §14, and roadmap phases 3/5/6 (§16) describe
+> **⚠️ Build status.** §4–§9, §11–§12, §14, and roadmap phases 3/5 (§16) describe
 > the **target cloud/K8s design** — they are not implemented. Nothing in this repo
 > today runs Kubernetes, Kafka/NATS, Redis Cluster, ClickHouse, etcd/Consul, Vault,
 > Patroni, or SPIFFE/SPIRE. Items pulled from these sections are marked `🚧 not
@@ -19,14 +19,21 @@
 > a single-process Rust filter node, one PostgreSQL instance, filesystem-based
 > bundle distribution, in-memory rate limiting — see [`ARCHITECTURE.md`](../ARCHITECTURE.md)
 > for the as-built summary. §17.2 already flags object store/Kafka/ClickHouse as
-> optional-and-unused at this scale; §18–§21 carry their own "current state" notes
+> optional-and-unused at this scale; §18–§25 carry their own "current state" notes
 > where relevant.
+>
+> Sections describing subsystems that are **fully built** and match this document:
+> §18 (category filtering), §20 (SIEM export), §22 (DHCP), §24 (DNS zones),
+> §25 (block page). §21 (upstream) is built except for the telemetry/dashboard
+> items flagged inline. §19 (UI) and §23 (fleet observability) carry per-item
+> status. Per-sprint delivery detail lives in
+> [`sprint-plan.md`](sprint-plan.md).
 
 ---
 
 ## 1. Summary
 
-Pi-hole is a single-node, SQLite-backed DNS sinkhole built for a home network. This document redesigns its capabilities — DNS-based ad/tracker/malware blocking, per-client policy, query logging, and a management UI — into a horizontally scalable, multi-tenant, highly available platform suitable for enterprise deployment, co-located with an **OpenVPN Access Server (AS) cluster** so that VPN clients receive filtered, policy-controlled DNS regardless of which gateway node they connect to.
+Mantis-DNS is a DNS-based ad/tracker/malware blocking platform with per-client policy, query logging, and a management UI, built as a horizontally scalable, multi-tenant, highly available platform suitable for enterprise deployment, co-located with an **OpenVPN Access Server (AS) cluster** so that VPN clients receive filtered, policy-controlled DNS regardless of which gateway node they connect to.
 
 The core architectural shift is the separation of the system into three planes:
 
@@ -34,7 +41,7 @@ The core architectural shift is the separation of the system into three planes:
 - **Control plane** — policy, blocklist, and configuration distribution.
 - **Management plane** — API, UI, multi-tenant administration, audit.
 
-This separation is the single most important departure from Pi-hole, which collapses all three into one process and one SQLite file.
+This separation — rather than one process and one SQLite file — is the core architectural bet behind the rest of this document.
 
 ---
 
@@ -62,16 +69,16 @@ This separation is the single most important departure from Pi-hole, which colla
 
 ---
 
-## 3. Pi-hole Baseline & Its Limits
+## 3. Single-Node Baseline & Its Limits
 
-| Concern | Pi-hole today | Enterprise requirement |
+| Concern | Single-node DNS sinkhole | Enterprise requirement |
 |---------|---------------|------------------------|
 | Storage | SQLite on local disk | Replicated, HA datastore |
-| Scaling | Single host (or manual sync via tools like gravity-sync) | Stateless autoscaling fleet |
+| Scaling | Single host (manual sync tooling at best) | Stateless autoscaling fleet |
 | HA | None native | Active-active, multi-AZ |
 | Policy scope | Global + limited per-client groups | Multi-tenant, hierarchical groups |
-| Config distribution | Local `gravity.db` rebuild | Versioned, pushed to fleet |
-| API/UI | PHP web admin, single instance | Stateless API, SSO, RBAC, audit |
+| Config distribution | Local DB rebuild | Versioned, pushed to fleet |
+| API/UI | Single-instance web admin | Stateless API, SSO, RBAC, audit |
 | Logging | Local query log | Central pipeline, retention, search |
 | Upstream privacy | Optional | DoT/DoH enforced |
 | Secrets | Local config files | Vault / KMS |
@@ -283,7 +290,7 @@ Organization (tenant)
 
 ## 11. Observability
 
-- **Metrics:** QPS, block ratio, cache hit ratio, latency histograms, upstream errors, bundle version per node — surfaced via the control plane telemetry API and the in-app Analytics dashboard.
+- **Metrics:** QPS, block ratio, cache hit ratio, latency histograms — surfaced via the control plane telemetry API and the in-app Analytics dashboard, aggregated across the fleet. **Per-node** metrics (bundle version per node, per-node QPS/rcode mix, upstream errors) are 🚧 — nothing in `query_events` or the telemetry API identifies the emitting node today; that is exactly what §23 exists to fix. mantis-dhcp is the exception: it already exposes per-daemon liveness and Prometheus counters (§22.11).
 - **Logs (Loki/ELK) 🚧:** operational; structured JSON.
 - **Query analytics (ClickHouse 🚧):** per-tenant top domains, blocked categories, client breakdown, retention by policy. *As built: PostgreSQL.*
 - **Traces (OpenTelemetry) 🚧:** resolve path spans for latency debugging.
@@ -299,17 +306,18 @@ Organization (tenant)
 - **IaC:** Terraform 🚧 for infra, Helm 🚧 for k8s workloads, GitOps (Argo/Flux) 🚧 for config. *As built: shell installers (`infra/lxc/*.sh`) + Ansible-shaped provisioning notes in §17.5, not yet an Ansible playbook.*
 - **Rollout:** canary policy bundles to a subset of nodes 🚧; automatic rollback on error-rate spike 🚧. Blue/green for control-plane services 🚧. *As built: the update scripts (`scripts/update.sh`, `infra/lxc/install*.sh`) do backup → deploy → health-check → keep-previous-generation → manual rollback instructions on failure — no automatic traffic-based rollback.*
 - **Backup/DR:** PostgreSQL PITR 🚧 (as built: `pg_dump` before upgrades), object-store versioning 🚧, etcd snapshots 🚧, ClickHouse backups 🚧. Multi-AZ 🚧; documented RTO/RPO 🚧.
-- **Upgrades:** filter nodes are cattle — rolling replace 🚧 (as built: in-place restart per node, no rolling fleet orchestration). Schema migrations gated and reversible — built (Alembic).
+- **Upgrades:** filter nodes are cattle — rolling replace 🚧 (as built: in-place restart per node, no rolling fleet orchestration). Schema migrations gated and reversible — built (Alembic, `services/control/migrations/`).
 
 ---
 
-## 13. Migration Path (from a Pi-hole deployment)
+## 13. *(withdrawn)*
 
-1. **Import** existing Pi-hole blocklists, allow/deny entries, and group definitions into the control-plane PostgreSQL schema.
-2. **Stand up** control plane + one filter node; validate parity of blocking decisions against the old Pi-hole on a query replay.
-3. **Shadow mode:** run filter fleet in parallel, mirror queries, compare answers, no client impact.
-4. **Cutover** one OpenVPN AS group at a time by changing the pushed DNS option to the new VIP.
-5. **Decommission** Pi-hole after all groups migrated and logs/retention validated.
+This section previously described a migration path from an existing Pi-hole
+deployment. Mantis-DNS is not positioned as a Pi-hole migration target and no
+import/shadow-mode/cutover tooling was ever built, so the section was removed
+rather than left standing as a plan nobody intends to execute. The number is
+kept as a tombstone so every `§14`–`§25` cross-reference in this document and in
+the code stays valid.
 
 ---
 
@@ -324,7 +332,7 @@ Organization (tenant)
 | Shared cache | Redis Cluster | KeyDB / Dragonfly | 🚧 not built |
 | Bus | Kafka | NATS JetStream | 🚧 not built |
 | Query analytics | ClickHouse | Druid | 🚧 PostgreSQL instead |
-| Metrics | In-app Analytics dashboard (telemetry API) | External APM (optional) | ✅ built |
+| Metrics | In-app Analytics dashboard (telemetry API) | External APM (optional) | ✅ built (fleet-aggregate only). The filter node's Prometheus exporter was removed (`metrics_init.rs` is now a one-line tombstone) — note `infra/prometheus.yml` still lists a `filter:9090` target that nothing serves. mantis-dhcp does expose `/metrics` (§22.11); restoring the filter's is §23.8. |
 | Secrets | Vault | Cloud KMS | 🚧 env vars / systemd `EnvironmentFile` instead |
 | Orchestration | Kubernetes | Nomad | 🚧 systemd / Docker Compose; early Helm chart exists (`charts/mantis-dns`), unverified |
 
@@ -352,7 +360,17 @@ Organization (tenant)
 | 3 | Telemetry pipeline (Kafka → ClickHouse), in-app analytics dashboards | 🚧 dashboards ✅ built on PostgreSQL; Kafka/ClickHouse not built |
 | 4 | Management API + UI, SSO/RBAC, audit | 🚧 API/UI/audit ✅ built; SSO not built |
 | 5 | HA hardening, multi-AZ, DR drills, canary rollout, autoscaling | 🚧 not built |
-| 6 | Migration tooling, shadow mode, production cutover | 🚧 not built |
+
+Phases 6–10 were not in the original roadmap — they record work that shipped after it was written, so the table accounts for the whole product rather than stopping at phase 5:
+
+| Phase | Deliverable | Status |
+|-------|-------------|--------|
+| 6 | Enterprise UI rebuild on Mantine + TanStack Query + generated OpenAPI client (§19) | ✅ built — SSO, WCAG audit, E2E/visual tests still open (§19.1) |
+| 7 | SIEM integration: enriched query events, cursor pull API, HMAC webhook push, RFC 5424 syslog, client registry (§20) | ✅ built |
+| 8 | DNS upstream configuration: resolver profiles, HA pools with health monitoring and failover, split-horizon routes, DNSSEC policy (§21) | ✅ built — upstream telemetry metrics and the health dashboard still open (§21.4) |
+| 9 | Native DHCP engine: DHCPv4 + DHCPv6, DB-coordinated HA, DDNS, relay, PXE, conflict detection, Prometheus metrics (§22) | ✅ built — replaced the ISC Kea integration entirely (§22.1) |
+| 10 | DNS zones (§24) and block page (§25) | ✅ built |
+| 11 | Fleet observability: per-node identity, stats, and a Nodes page (§23) | 🚧 not started — the largest remaining gap; also blocks §21.4's health dashboard |
 
 ---
 
@@ -526,22 +544,39 @@ Adding a category = adding feed rows; no code change. The ingester, compiler, an
 
 ## 19. Management UI — Enterprise-Grade Plan
 
-### 19.1 Current state (honest baseline)
+### 19.1 Current state
 
-The UI shipped through Sprint 6 is a **working prototype, not an enterprise product**. It proves the API contract end to end (tenant/group/policy CRUD, category toggles, overrides, bundle compile, feed management, live telemetry) but is deliberately unpolished:
+> **Historical note.** The paragraphs below originally described the Sprint 6
+> prototype (browser-native `prompt`/`alert`/`confirm`, hand-rolled `fetch` +
+> `useState`, raw HTML tables, no auth/routing/design-system/tests). That
+> baseline no longer exists — Epic J (Sprints 11–13) replaced it. What follows
+> is the state as verified against `apps/ui` on 2026-07-25.
 
-- Browser-native `prompt()` / `alert()` / `confirm()` for all input and feedback.
-- Hand-rolled `fetch` + `useState`, no server-state caching, no optimistic updates, no retry.
-- Raw HTML tables with no pagination, virtualization, sorting, or filtering — they will not survive a feed of 500k domains or a query log of millions of rows.
-- No authentication, no routing, no design system, no empty/loading/error states, no accessibility, no tests.
+The console is built on the foundation this section called for:
 
-This section is the plan to take it from prototype to a console an enterprise would actually procure and operate. It supersedes the single "UI polish" bullet previously buried in Sprint 8.
+- **Design system:** Mantine 9 (`@mantine/core`, `form`, `modals`, `notifications`, `charts`), light/dark theme tokens in `theme.ts`. No native `prompt`/`alert`/`confirm` remain.
+- **Server state:** TanStack Query throughout (`src/api/hooks.ts`); no hand-rolled `fetch`+`useState` views left.
+- **Typed client:** `openapi-typescript` codegen from FastAPI's `/openapi.json` into `src/api/schema.ts`, with `npm run gen:api:check` gating CI on drift — the hand-written `api.ts` is gone.
+- **Shell + routing:** React Router with an app shell (`src/app/Shell.tsx`), role-gated nav (`minRole` per entry), error boundary, tenant context.
+- **Auth:** session-based login with server-side roles (`src/auth/`, `auth_routers.py`), RBAC-gated nav and actions, self-service password change, user management page.
+- **Pages:** Dashboard, Tenants, Groups, Policy, Feeds, DNS Zones (+ detail), Analytics, Query Log, Audit, Users, Upstream, DHCP, Settings, Clients, Block Page.
+- **Quality gates in CI:** `tsc -b`, `oxlint`, Vitest, and a `size-limit` bundle budget (400 kB JS / 40 kB CSS gzip).
+
+**Still open against §19.2** (tracked in the sprint plan, not silently closed):
+
+| Req | Gap |
+|---|---|
+| U1 | 🚧 **OIDC/SAML SSO** — as built is local username/password with server-side sessions. The RBAC model underneath (U2) is complete; only the federated-identity front end is missing. |
+| U4 | 🚧 **Row virtualization** — feeds and query log use server-side pagination/filtering, which covers the stated failure mode, but no view virtualizes a large rendered result set. |
+| U10 | 🚧 **WCAG 2.1 AA audit** — Mantine supplies most of the primitives; the audit itself has not been run and no a11y assertion exists in CI. |
+| U12 | 🟡 **i18n** — `react-i18next` is wired and all user-facing strings are keyed, but `en` is the only locale shipped. Scaffolding done, localization not. |
+| U14 | 🚧 **E2E + visual regression** — Vitest + Testing Library component tests exist; no Playwright, no Storybook/Chromatic. |
 
 ### 19.2 Enterprise requirements (what "enterprise-grade" actually means here)
 
 | # | Requirement | Why it's non-negotiable |
 |---|-------------|-------------------------|
-| U1 | Authentication + session management (OIDC/SAML SSO) | No enterprise runs an unauthenticated admin console; ties to §9 RBAC. |
+| U1 | Authentication + session management (OIDC/SAML SSO) | No enterprise runs an unauthenticated admin console; ties to §9 RBAC. *As built: local accounts + server-side sessions; SSO 🚧.* |
 | U2 | Role-aware UI (super-admin, tenant-admin, policy-author, auditor) | UI must hide/disable what the role can't do, not just rely on API 403s. |
 | U3 | Multi-tenant navigation + tenant/org context switcher | MSPs manage dozens of tenants; the 3-column prototype doesn't scale past ~5. |
 | U4 | Data-grid views: server-side pagination, sorting, filtering, virtualization | Feeds (100k–1M domains) and query logs (millions of rows) cannot be client-loaded. |
@@ -561,7 +596,8 @@ This section is the plan to take it from prototype to a console an enterprise wo
 ```
 apps/ui/
  ├── api/                 generated OpenAPI client (typed, from FastAPI /openapi.json)
- ├── auth/                OIDC PKCE flow, session context, role guards
+ ├── auth/                session context, role guards (OIDC PKCE flow 🚧 — as built:
+ │                        local login against auth_routers.py)
  ├── routes/             file/route-based code splitting (lazy)
  │    ├── tenants/        list, detail, create
  │    ├── groups/         per-tenant, subnet wiring, policy editor
@@ -583,9 +619,9 @@ apps/ui/
 | Forms + validation | **React Hook Form + Zod** | Typed schemas shared with the API client; inline validation; no `prompt()`. |
 | Routing | **TanStack Router** or React Router | Type-safe params, lazy route code-splitting. |
 | API client | **openapi-typescript** codegen | FastAPI already emits `/openapi.json`; generate the typed client instead of hand-writing `api.ts` (eliminates a whole class of drift, same philosophy as the proto contract on the backend). |
-| Auth | **oidc-client-ts** | Standard OIDC PKCE against Keycloak/Okta/Entra (§9). |
+| Auth | **oidc-client-ts** 🚧 | Standard OIDC PKCE against Keycloak/Okta/Entra (§9). *Not adopted — the console authenticates against the control plane's own user table.* |
 | Toasts/modals | Mantine notifications + modals | Replaces every `alert()`/`confirm()`. |
-| Testing | **Vitest + Testing Library**, **Playwright** (E2E), **Storybook** + Chromatic (visual regression) | Component, end-to-end, and visual coverage. |
+| Testing | **Vitest + Testing Library** ✅, **Playwright** (E2E) 🚧, **Storybook** + Chromatic (visual regression) 🚧 | Component, end-to-end, and visual coverage. |
 | Quality gates | ESLint, Prettier, `tsc --noEmit`, bundle-size check | Enforced in CI (§ Cross-cutting). |
 
 ### 19.4 Information architecture
@@ -597,7 +633,7 @@ apps/ui/
 
 ### 19.5 Key views to (re)build
 
-1. **Policy editor** — replace the prototype: category toggles with live domain counts and per-category action (block / log-only / allow), override management with validated domain input, a **domain test box** (enter a domain → see which category/feed matches and the resulting decision — the explainability feature from §18.5, still unbuilt), bundle compile + propagation status indicator.
+1. **Policy editor** ✅ — category toggles with live domain counts and per-category action (block / log-only / allow), override management with validated domain input, a **domain test box** (the §18.5 explainability feature — built: `POST /api/v1/groups/{group_id}/policy/test` → `PolicyTestResult`, surfaced in `PolicyPage.tsx`), bundle compile + propagation status indicator. Policy can also be duplicated from another group (`DuplicatePolicyModal.tsx`).
 2. **Feed manager** — catalog browser with search/filter, per-feed ingest status + last-run/next-run, sanity-gate rejection surfacing, license display, add/edit/delete with real forms.
 3. **Query-log explorer** — server-side paginated, filterable by tenant/group/decision/time-range, backed by ClickHouse once §6 lands (Postgres for now).
 4. **Analytics dashboard** — block ratio, QPS, cache-hit ratio, top blocked domains, per-category volume; native charts backed by the telemetry/metrics APIs (already implemented).
@@ -611,16 +647,16 @@ apps/ui/
 
 ### 19.7 Phased delivery (folds into the sprint plan)
 
-| Phase | Deliverable |
-|-------|-------------|
-| UI-0 | Foundation: component library, TanStack Query, OpenAPI-generated client, app shell + routing, theme. Port existing prototype views onto it (no new features, just the platform). |
-| UI-1 | Auth + RBAC: OIDC login, session, role-gated nav/actions (depends on backend §9 / Sprint 8). |
-| UI-2 | Data grids: feed manager + query-log explorer with server-side pagination/sort/filter/virtualization. |
-| UI-3 | Forms + UX: replace all prompt/alert/confirm with validated forms, modals, toasts, confirmation dialogs. |
-| UI-4 | Analytics + audit: dashboards, domain-test explainability box, audit log viewer. |
-| UI-5 | Hardening: a11y audit (WCAG AA), i18n scaffolding, E2E + visual-regression tests, performance budget in CI. |
+| Phase | Deliverable | Status |
+|-------|-------------|--------|
+| UI-0 | Foundation: component library, TanStack Query, OpenAPI-generated client, app shell + routing, theme. Port existing prototype views onto it (no new features, just the platform). | ✅ built |
+| UI-1 | Auth + RBAC: OIDC login, session, role-gated nav/actions (depends on backend §9 / Sprint 8). | 🟡 session + RBAC ✅; OIDC 🚧 |
+| UI-2 | Data grids: feed manager + query-log explorer with server-side pagination/sort/filter/virtualization. | 🟡 server-side pagination/filter ✅; virtualization 🚧 |
+| UI-3 | Forms + UX: replace all prompt/alert/confirm with validated forms, modals, toasts, confirmation dialogs. | ✅ built (Mantine form/modals/notifications; no native dialogs remain) |
+| UI-4 | Analytics + audit: dashboards, domain-test explainability box, audit log viewer. | ✅ built |
+| UI-5 | Hardening: a11y audit (WCAG AA), i18n scaffolding, E2E + visual-regression tests, performance budget in CI. | 🟡 i18n scaffolding ✅ (`en` only), size budget ✅ (`size-limit`), component tests ✅; WCAG audit 🚧, Playwright/visual regression 🚧 |
 
-UI-0 is the unlock and should land before piling on features — every feature built on the prototype's hand-rolled foundation is throwaway work.
+UI-0 was the unlock and landed first, as intended — no enterprise feature was built on the prototype foundation.
 
 ---
 
@@ -677,7 +713,7 @@ QueryEvent {
 }
 ```
 
-**Current implementation state (Sprint 6 baseline):** `group_id`, `qname`, `decision`, `occurred_at` are stored. All other fields are targeted for Sprint 14 enrichment work.
+**Current implementation state:** ✅ built. The Sprint 14 enrichment shipped — `QueryEvent` stores `tenant_id`, `client_ip`, `qtype`, `matched_rule`, `matched_category`, `matched_feed_id` (comma-joined feed ids, widened to `String(512)` by migration `a1b2c3d4e5f6`), `response_code`, `cache_hit` and `latency_us` alongside the original `group_id`/`qname`/`decision`/`occurred_at`, plus a monotonic `seq` identity column used solely as the pull API's pagination cursor. The one field §23 adds later is `node_id` (🚧 — see §23.5).
 
 ---
 
@@ -1095,6 +1131,8 @@ Probe cycle (every health_check_interval_s):
 
 Health events (`UpstreamFailedEvent`, `UpstreamRecoveredEvent`) are forwarded to the telemetry pipeline (§5.4) and surfaced in the Analytics UI as resolver health timelines.
 
+> 🚧 **As built:** the probe loop, state machine and latency EMA are implemented (`health_monitor.rs`, `MemberHealthSnapshot`) and `UpstreamBundleForwarder` consumes the resulting `HealthStore` at query time — failover works. What is *not* built is the observability half: no `UpstreamFailedEvent`/`UpstreamRecoveredEvent` is emitted to telemetry, none of `upstream_latency_us` / `upstream_errors_total` / `upstream_health_state` / `upstream_pool_healthy_members` / `upstream_dnssec_failures_total` exists, and no min-healthy alert is written to the audit log. Consequently `HealthTab.tsx` is a placeholder, and health state is visible only in the node's own logs. §23 is the section that fixes this: the per-node heartbeat ships `HealthStore::snapshot` per pool member to the control plane, which is what makes this data reachable by the UI at all.
+
 If a pool's healthy member count drops below `min_healthy_members`:
 - An alert is emitted to the audit log and (if configured) to the notification channel.
 - If `fallback_pool_id` is set, queries for this pool are routed to the fallback pool.
@@ -1114,6 +1152,8 @@ DNSSEC validation is performed by the upstream resolver, not by the filter node 
 
 For `strict` mode to work, the resolver must be configured to validate DNSSEC and return `SERVFAIL` on validation failures (e.g. Unbound `val-override-date: "20990101T0000"` turned off, `module-config: "validator iterator"`). The filter node validates that the configured resolver behaves correctly during health probes by sending a query to a known-broken DNSSEC domain (e.g. `dnssec-failed.org`) and asserting `SERVFAIL` is returned.
 
+> **As built:** `strict` is implemented by setting hickory's `ResolverOpts::validate = true` (the `dnssec-ring` feature), so the filter node's own resolver stub rejects unvalidated answers rather than merely inspecting the upstream's `AD` bit — a stronger guarantee than the table describes, but a different mechanism. 🚧 The `dnssec-failed.org` resolver-behaviour assertion during health probes is **not** built (`health_monitor.rs` probes only the pool's configured `health_check_query`), and no `DnssecFailureEvent` is emitted.
+
 ---
 
 ### 21.6 Split-horizon and private DNS
@@ -1132,7 +1172,9 @@ Dns64Config {
 }
 ```
 
-**Stub zones (authoritative answers):** for domains the tenant owns that should be answered from local data without forwarding (e.g. `corp.local` records managed by the DNS Zones feature, §DNS-Zones), the route type `stub_zone` overrides pool routing entirely and answers from the local zone database. This is a zero-latency path (no upstream needed) and is the mechanism by which the DNS Zones feature integrates with the upstream routing model.
+**Stub zones (authoritative answers):** for domains the tenant owns that should be answered from local data without forwarding (e.g. `corp.local` records managed by the DNS Zones feature, **§24**), the local zone database answers authoritatively and no upstream is consulted. This is a zero-latency path and is how DNS Zones integrates with the upstream model.
+
+> **As built — mechanism differs from the original plan.** This was designed as an `UpstreamRoute` of type `stub_zone` that outranks pool routing. It is *not* implemented that way: `match_type` has no `stub_zone` value (`domain_suffix|domain_exact|qtype|category|default` only). Instead the zone lookup short-circuits *before* route evaluation — `ZoneStore::lookup` runs early in `build_response_inner`, and a hit returns `ZoneLookup::Answer` or an authoritative `ZoneLookup::NxDomain` without ever entering the routing or Bloom-filter path. Telemetry labels these `decision = "stub_zone"`. The observable behaviour matches the intent (local data wins, zero upstream latency); the configuration surface does not — there is no route row to inspect or reorder, because zone membership alone decides it. See §24.3.
 
 ---
 
@@ -1450,5 +1492,335 @@ Before an OFFER, mantis-dhcp can ICMP-echo the candidate address to catch a devi
 - `pick_conflict_free_candidate` (server.rs): pulls a candidate via `db::peek_free_ip_excluding`, probes it, and on a reply marks it `mark_declined_preemptive` (state=declined) and retries with it excluded — bounded by `conflict_probe_max_attempts` (default 4), each probe capped at `conflict_probe_timeout` (default 300ms). Exhausting attempts without a clean address means no OFFER goes out for that DISCOVER.
 - Scoping: only the DISCOVER pool-scan path is probed. A direct REQUEST for a specific address (renewal, or a client asserting a prior offer) goes through `db::allocate` unprobed — that path already has an explicit requester, so an ICMP round-trip there would only add latency without a matching security benefit.
 - Opt-out: `MANTIS_DHCP_CONFLICT_DETECTION=0` (or `false`) skips probing entirely, trading the extra OFFER latency away in favor of relying on DHCPDECLINE alone — same tradeoff most DHCP servers with this feature expose as a toggle.
+
+---
+
+## 23. Fleet Observability — Per-Node Statistics
+
+Every other subsystem in this document has an operator-facing surface in the UI. The filter fleet — the only component actually on the DNS hot path — has none. A filter node today is anonymous: `telemetry.rs`'s event payload carries `group_id`, `client_ip`, `qname` and decision context but nothing identifying **which node** produced it, so every row in `query_events` looks like it came from the same nowhere. `metrics_init.rs` is a single comment saying the Prometheus exporter was removed and "observability handled via the control plane telemetry API" — but that API only ever grew query analytics, never node analytics. The result is that the three questions an operator actually asks during an incident have no answer anywhere in the product:
+
+- *Is every node enforcing the same policy?* A node stuck on an old bundle keeps answering queries, correctly signed and verified, using yesterday's block lists. Nothing anywhere reports a bundle version per node (§11 lists stale-bundle alerting as 🚧).
+- *Is one node behaving differently from the rest?* Version skew after a partial rolling upgrade, a SERVFAIL spike confined to one host, a 90/10 traffic split from anycast/VIP misrouting — all invisible.
+- *Are the numbers in Analytics even complete?* `TelemetryEmitter::emit` drops events on a full channel with a `warn!` and nothing else. When the control plane is slow or unreachable, the Analytics dashboard and every SIEM export path silently under-report, and the only trace is a line in the node's own journal.
+
+That last one is the sharpest: an observability gap that quietly corrupts the observability that does exist.
+
+mantis-dhcp already solved the *identity* half of this problem (§22.11, `dhcp_daemon_heartbeats`) and the *counters* half (§22.11, opt-in `/metrics` with in-process relaxed atomics). This section applies both to the filter fleet rather than inventing a third idiom, and adds the piece neither has: a fleet view in the UI.
+
+---
+
+### 23.1 Requirements
+
+| ID | Requirement |
+|---|---|
+| FO1 | Every filter node is individually identifiable and its liveness visible in the UI, with the same stale-not-pruned semantics as `dhcp_daemon_heartbeats`. |
+| FO2 | Policy-bundle and upstream-bundle version **per node**, so config skew across the fleet is a glance, not an investigation. |
+| FO3 | Query pressure per node: QPS, latency distribution, cache effectiveness, rcode mix, block ratio. |
+| FO4 | Telemetry drop count is a first-class, visible number — never only a log line. |
+| FO5 | Per-node upstream health, so a divergence between nodes (A says a resolver is dead, B says it's fine) is diagnosable without SSH. |
+| FO6 | Zero measurable cost on the DNS hot path. |
+| FO7 | No new authentication surface on the node, and no requirement that the control plane be able to reach the node. |
+| FO8 | Fleet topology is operator data, not tenant data — tenant-scoped users must not see it at all. |
+| FO9 | One counter set feeding both the UI and any Prometheus scrape; no second, driftable copy. |
+
+---
+
+### 23.2 Node identity
+
+`MANTIS_NODE_NAME`, falling back to `/proc/sys/kernel/hostname` — the same best-effort helper mantis-dhcp uses (`mantis_dhcp::hostname`, copied rather than shared: a two-line `read_to_string` is not worth a crate dependency from filter onto the DHCP engine).
+
+The env var is not optional cosmetics. mantis-dhcp gets away with bare hostname because it runs `network_mode: host` (§22.6), so its hostname is the real host's. mantis-filter has no such constraint and is routinely containerised or run as a sidecar, where the hostname is a random 12-hex-digit container id that changes on every restart — which would make the fleet table a graveyard of dead one-shot rows. `MANTIS_NODE_NAME` set to something stable and meaningful (`filter-vpn-gw-01`) is the documented deployment requirement for any non-host-networked install; the hostname fallback covers the LXC/systemd profile (§17) where it is already correct.
+
+Identity is `(node_name)` alone — unlike the DHCP daemons there is no `family` axis, and unlike a per-boot UUID a restart must take over the *same* row rather than leaving a dead one beside it. `started_at` moving forward is what marks a restart; `instance_id` is refreshed on takeover so a counter reset is unambiguous rather than looking like a wrapped counter.
+
+---
+
+### 23.3 What a node measures
+
+**In-process, relaxed atomics** (`services/filter/mantis-filter/src/node.rs`), mirroring `metrics.rs`'s `Counters` in mantis-dhcp:
+
+```rust
+pub struct NodeStats {
+    // Monotonic counters — control plane diffs consecutive heartbeats for rates.
+    queries_total:      AtomicU64,
+    blocked_total:      AtomicU64,
+    allowed_total:      AtomicU64,
+    stub_zone_total:    AtomicU64,
+    cache_hits:         AtomicU64,
+    cache_misses:       AtomicU64,
+    rcode_noerror:      AtomicU64,
+    rcode_nxdomain:     AtomicU64,
+    rcode_servfail:     AtomicU64,
+    rcode_refused:      AtomicU64,
+    rcode_other:        AtomicU64,
+    telemetry_dropped:  AtomicU64,
+    no_bundle_servfail: AtomicU64,
+    cache_evictions:    AtomicU64,
+    // Coarse log2 latency histogram: bucket i covers [2^i, 2^(i+1)) us,
+    // i = 63 - leading_zeros(us), clamped to 0..15. Top bucket is >=32ms.
+    latency_buckets:    [AtomicU64; 16],
+}
+```
+
+**The single instrumentation point is `TelemetryEmitter::emit`.** Every call site that resolves a query already hands `emit` exactly the fields these counters need — `decision`, `response_code`, `cache_hit`, `latency_us` — so `NodeStats::record()` is called once at the top of `emit`, *before* the `try_send`, and the whole rest of `lib.rs` is untouched. This is deliberate: scattering counter bumps through `build_response_inner` would be more code, more merge-conflict surface, and would risk a future decision path being added without its counter. It also means counters stay accurate when the telemetry channel is saturated — the drop path bumps `telemetry_dropped` and the query is still counted, so a node under backpressure reports *more* signal, not less.
+
+Two paths do not flow through `emit` and get an explicit one-line bump each:
+
+- The bootstrap/unmatched-route `ServFail` early return in `build_response_inner` (the `bootstrap_fail_open()` branch) — the one case where a node is answering *nothing* usefully, which is precisely what an operator needs to see.
+- `DnsCache::insert`'s eviction branch, for `cache_evictions`.
+
+**Sampled at heartbeat time, not tracked continuously** — same reasoning as §22.11's pool-utilisation gauges (compute where it's cheap, don't keep a second copy that can drift):
+
+| Field | Source |
+|---|---|
+| `cache_entries` | new `DnsCache::len()` — one read lock per 10 s |
+| `rss_kb`, `open_fds` | `/proc/self/statm`, `/proc/self/fd` — best-effort, `None` on non-Linux |
+| `policy_bundles[]` | `{group_id, version, age_s}` per `BundleStore` (one in single-tenant mode, one per tenant under `TenantRouter`) |
+| `upstream_bundles[]` | `{tenant_id, version}` from `UpstreamBundleStore` |
+| `upstream_members[]` | `HealthStore::snapshot(pool, resolver)` per member of the live upstream bundle → `{pool_id, resolver_id, healthy, latency_ema_us, consecutive_failures}` |
+| `key_pin_configured` | `MANTIS_CONTROL_PUBLIC_KEY_SHA256` non-empty |
+| `build_version` | `env!("CARGO_PKG_VERSION")` |
+
+The `upstream_members` block is the payoff for FO5. `HealthStore` is explicitly per-node and uncoordinated by design (§21.4 — "no shared health state to avoid distributed coordination on the hot path"), which is the right call for resolution and exactly the wrong property for diagnosis: the *divergence* between nodes' independent verdicts is the diagnostic signal. Node A alone calling a resolver dead means A's egress path is broken, not the resolver. Shipping the verdicts read-only to the control plane keeps the hot path uncoordinated while making the divergence visible.
+
+**Not in v1: in-flight query count.** It is the truest saturation signal, but it is the one metric that cannot be derived at the `emit` choke point — it needs an increment/decrement guard around request handling in both `run_udp_server` and `run_tcp_server` (and their router-mode twins), which is the hot-path scatter this design otherwise avoids. QPS plus p99 latency covers saturation adequately for a first cut. Deferred, marked in code.
+
+---
+
+### 23.4 Transport — push, not scrape
+
+The node POSTs to `POST /api/v1/nodes/heartbeat` every 10 s, authenticated by `MANTIS_SERVICE_TOKEN` via the existing `with_service_token` helper — the same channel and the same credential `/query-events`, `/routing-table` and `/public-key` already use. No new listener, no new credential, no new port to firewall (FO7).
+
+Push rather than scrape, despite §22.11 having gone the other way for DHCP, because the constraints differ:
+
+- The UI tab needs the data **in Postgres**. A Prometheus endpoint on the node cannot feed a control-plane API; adopting scrape-only would mean the fleet tab is available only to deployments that also run Prometheus *and* wire it back, which is not a product feature.
+- Filter nodes are the component most likely to sit behind NAT or in a sidecar next to an OpenVPN AS host (§7.4 option A), where control-plane-initiated connections are the awkward direction. The node already dials out every 10 s for bundles.
+
+The heartbeat body is the full counter snapshot (absolute values, not deltas) plus the sampled gauges. Absolute values mean a lost heartbeat costs resolution, not correctness — the next one still diffs correctly against the last stored sample, which a delta-based protocol could not do.
+
+Failure is silent and non-fatal by exactly the same rule as telemetry flush: a node whose control plane is down must keep resolving DNS. `warn!` and move on.
+
+---
+
+### 23.5 Data model
+
+```python
+class FilterNodeHeartbeat(Base):
+    """Liveness + load snapshot for a running mantis-filter instance
+    (design.md §23). Identity is `node_name` (MANTIS_NODE_NAME, else
+    hostname) — a restart takes over the same row rather than leaving a
+    dead one beside it, same reasoning as DhcpDaemonHeartbeat's
+    (hostname, family). Rows are never auto-pruned: a stale row *is* the
+    signal an operator wants to keep seeing.
+
+    Counters are the node's absolute monotonic values as of `last_seen_at`;
+    `prev_stats` holds the previous sample so rates come from a stored pair
+    rather than a time-series table. An `instance_id` change means the
+    process restarted and counters reset — the rate calculation must return
+    None for that interval, not a negative or absurd rate.
+    """
+    __tablename__ = "filter_node_heartbeats"
+
+    node_name:          Mapped[str] = mapped_column(String(255), primary_key=True)
+    instance_id:        Mapped[str] = mapped_column(String(36))
+    build_version:      Mapped[str] = mapped_column(String(32))
+    started_at:         Mapped[datetime]
+    last_seen_at:       Mapped[datetime]
+    prev_seen_at:       Mapped[datetime | None]
+    key_pin_configured: Mapped[bool]
+    # Whole snapshot as posted, plus the previous one. JSONB, not 30
+    # columns: these are display-only aggregates read as a unit by exactly
+    # one endpoint, never filtered or joined on, and the field set will
+    # keep moving as metrics are added. A column per counter would mean a
+    # migration per metric for zero query benefit.
+    stats:              Mapped[dict] = mapped_column(JSONB)
+    prev_stats:         Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+```
+
+JSONB for the counter payload is a deliberate exception to this codebase's otherwise strongly-typed schema, justified narrowly: it is never a query predicate, never joined, never aggregated in SQL, and read whole by a single endpoint. The Pydantic model on the ingest side still validates every field, so the typing lives where it matters — at the trust boundary — rather than in DDL that would need a migration each time a counter is added.
+
+`query_events.node_id` — `String(64)`, nullable, **no index in v1**. Sent once per batch (`QueryEventBatch.node_id`, not per event: a 500-event flush would otherwise repeat the same string 500 times on the wire) and stamped onto each row. It unlocks per-node time-series by reusing the existing `/analytics/*` endpoints with one extra filter, which is why it lands now rather than later. The index is deferred until a per-node analytics query actually ships: `query_events` is the highest-volume table in the system and the one retention already has to work hardest on (`retention.py`), so an index nothing reads yet is pure write cost.
+
+---
+
+### 23.6 API
+
+`services/control/mantis_control/api/node_routers.py`:
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `POST /api/v1/nodes/heartbeat` | `require_service_token` | Upsert on `node_name`, rotating `stats` → `prev_stats`. Returns `202`. |
+| `GET /api/v1/nodes` | `require_role("operator")` | Every filter node plus every DHCP daemon row, one unified shape, with rates computed and skew flags set. |
+
+`GET /api/v1/nodes` returns a `role` discriminator (`"filter"` / `"dhcp4"` / `"dhcp6"`) and folds in `dhcp_daemon_heartbeats` rather than making the UI call two endpoints and reconcile two shapes. The DHCP rows populate only the identity/liveness fields; load counters are `null` for them. Staleness uses the same 3×-cadence rule as §22.11 — 30 s for both, since both heartbeat every 10 s.
+
+Rates are computed server-side from the `(prev_stats, prev_seen_at)` / `(stats, last_seen_at)` pair, and are `null` — never zero, never negative — when `instance_id` changed between samples or when `prev_stats` is absent. Latency percentiles are interpolated linearly within the log2 buckets and reported as such; they are approximate by construction and the UI labels them `~p95`, not `p95`. An honest approximation beats a precise-looking number derived from a histogram that cannot support it.
+
+Fleet-level flags are computed in the same response, since they are properties of the set rather than of any row: `bundle_version_skew` (any node's policy-bundle version behind the fleet max for its group), `build_version_skew`, and `traffic_share` per node.
+
+---
+
+### 23.7 UI — Nodes page
+
+New top-level nav entry in `Shell.tsx`, `minRole: "operator"`, between `/upstream` and `/dhcp` — it belongs with the infrastructure pages, not with the tenant-facing analytics ones.
+
+`pages/NodesPage.tsx`, one table, one row per node, no tab bar: filter and DHCP daemons are both "a process that should be alive on a host", and splitting them into tabs would hide exactly the correlation an operator wants (the filter node and the DHCP daemon on the same host both went stale ten seconds ago). Columns: node, role, status badge, build, bundle version + age, uptime, QPS, ~p95, cache hit %, block %, SERVFAIL rate, traffic share.
+
+Skew and drop conditions surface as banners above the table, not as a column someone has to notice: *"2 nodes on policy bundle v41, fleet is on v43 (oldest 2 h 14 m)"*, *"filter-gw-03 dropped 12,847 telemetry events in the last hour — Analytics and SIEM export are under-reporting for this node"*. A per-row expansion carries the detail: rcode breakdown, latency histogram, per-tenant bundle list, and the upstream member health matrix from FO5.
+
+The DHCP Status tab's existing per-instance badge stays where it is; it is scope-local context on a page about DHCP, and duplicating rather than moving it costs nothing.
+
+---
+
+### 23.8 Prometheus
+
+`NodeStats` is exposed at an opt-in `/metrics` endpoint on the filter node under `MANTIS_FILTER_METRICS_BIND_ADDR` — same convention, same default-disabled posture, and the same axum-based text-exposition shape as mantis-dhcp's `metrics.rs`. This is not a second metrics system: it is a second *reader* of the one `Arc<NodeStats>` the heartbeat task also reads (FO9), roughly thirty lines. It restores what `metrics_init.rs` removed, without reintroducing the split-brain of two independent counter sets — and it means the fleet tab and an existing Grafana stack agree by construction.
+
+A control-plane-side fleet aggregate endpoint (the whole fleet's last-known snapshot re-exported as Prometheus text from one URL, avoiding per-node scrape reachability entirely) is a natural follow-on and explicitly not in this sprint.
+
+---
+
+### 23.9 Security
+
+- **RBAC**: `operator` on `GET /api/v1/nodes`, verbatim the reasoning `/api/v1/dhcp/health` already carries — hostnames, build versions, bundle versions and fleet topology are infrastructure data, not tenant-scoped data. A tenant-scoped user gets `403`, not a filtered list: an empty-but-successful response would still leak the existence of the fleet view, and there is no tenant-relevant subset of this data to return.
+- **Ingest auth** is `require_service_token` — identical trust tier to `/query-events`. A leaked service token could already forge query events; it can now additionally forge a node's stats. That is a strict subset of the existing blast radius, not a new tier.
+- **`node_name` is node-supplied and therefore attacker-controlled** given a compromised token. It is length-bounded at ingest, and it is never interpolated into SQL, a shell, or a filesystem path — it is a primary key and a React text node. Worth stating explicitly because "the node tells us its own name" is exactly the shape of input that gets trusted by accident later.
+- **No secrets in the payload.** `key_pin_configured` is a boolean, never the pin. The bundle version is an integer, never bundle content.
+
+---
+
+### 23.10 Retention
+
+Heartbeat rows are never auto-pruned, for §22.11's reason: a stale row *is* the signal. At one row per node the table is bounded by fleet size, and a decommissioned node is deleted by an operator — an explicit act, so that a node that vanished because it *died* can never be mistaken for one that vanished because it was retired.
+
+No time-series table for node metrics. The pair-of-samples design gives current rates, and once `query_events.node_id` is populated the existing `/analytics/timeseries` provides real per-node history from data already being stored under an existing retention policy. Adding a second, separately-retained metrics table to answer a question an existing table already answers is the kind of thing that looks free at design time and turns into a retention job, a partitioning decision and a disk alert.
+
+---
+
+### 23.11 Deliberately out of scope
+
+- **In-flight query gauge** — §23.3; needs hot-path scatter that nothing else in this design needs, and QPS + p99 covers it for now.
+- **Alerting.** Every input an alert rule wants (node down, stale bundle, SERVFAIL spike, telemetry drops > 0, block-ratio anomaly) is now computed and exposed; turning them into notifications is §11's 🚧 alerting work, which needs a delivery-channel decision this section has no opinion on. Banners in the UI are the v1 answer.
+- **Per-tenant or per-group counter labels** on node stats. Cardinality on the node grows with tenant count and the hot path pays for it; the same breakdown is already available from `query_events`, where it costs nothing extra.
+- **Node control actions** (drain, restart, force bundle refresh from the UI). Read-only observability first; a write path to the fleet is a separate security surface and a separate design.
+- **Cross-node cache or health coordination.** §21.4's uncoordinated-by-design property is deliberate; this section observes the divergence, it does not resolve it.
+
+---
+
+## 24. DNS Zones — Authoritative Local Records
+
+Every deployment that runs DHCP also wants its own names: `printer.lan`, `nas.corp.example.com`, a wildcard for an internal app. Forwarding those to a public resolver either leaks internal topology or returns NXDOMAIN. This section covers the authoritative local-zone feature — the answer path that runs *before* policy and upstream routing, and the DNS half of the DHCP→DNS integration described in §22.4.
+
+Shipped ahead of the sprint sequence (see sprint-plan.md, "Shipped outside the sprint sequence"), which is why it carries no epic number.
+
+---
+
+### 24.1 Data model
+
+```python
+class DnsZone(Base):                     # dns_zones, UNIQUE (tenant_id, name)
+    id, tenant_id (FK tenants, nullable) # NULL = admin-only global zone
+    name          str(255)               # "lan", "corp.example.com" — lowercased, no trailing dot
+    zone_type     str(20)                # "local" | "forward" | "passthrough"
+    description, enabled, ttl_default    # ttl_default 300s, inherited by records with ttl=NULL
+    forwarder     str(255) | null        # required when zone_type == "forward"
+
+class DnsRecord(Base):                   # dns_records, FK → dns_zones (cascade delete)
+    name          str(255)               # "@" (apex), "www", "*", "mail"
+    record_type   str(10)                # A AAAA CNAME MX TXT NS PTR SRV CAA
+    ttl           int | null             # NULL → inherit zone.ttl_default
+    data          str(1024)
+    priority      int | null             # MX / SRV
+    enabled       bool
+    ddns_owner_mac   str(17)  | null     # set only by the v4 DDNS bridge
+    ddns_owner_duid  str(128) | null     # set only by the v6 DDNS bridge
+```
+
+**Zone types — honest status.** Only `local` is enforced. `GET /api/v1/local-zones` filters on `zone_type == "local"`, so `forward` and `passthrough` zones are stored, validated (a `forward` zone is rejected without a parseable `forwarder` IP) and editable in the UI, but **never reach the filter node** — 🚧 nothing consumes `forwarder`. A `forward` zone today behaves exactly like no zone at all: the query falls through to normal §21 pool routing. Per-zone forwarding overlaps heavily with §21.2's `domain_suffix` routes, which *are* enforced; whether to implement `forward` zones or drop the type in favour of routes is an open decision, not a scheduled item.
+
+**`ddns_owner_*` is the security-relevant field.** A record created through the zone-editing API has both owner columns `NULL`, and the DDNS bridge must never overwrite such a record. A record created by DDNS carries the MAC (v4) or DUID (v6) of the client that owns the name, and an event from a *different* client is rejected. Without this, any DHCP client could set its hostname option to `printer` and hijack that name's A record — the DHCP hostname option being fully attacker-controlled (§22.12). Enforcement lives in `dhcp_internal_routers._upsert_a_record`.
+
+---
+
+### 24.2 Distribution to the filter node
+
+`GET /api/v1/local-zones?group_id=…` (`require_service_token`) returns the group's tenant's enabled `local` zones flattened to one row per enabled record, with the owner name already expanded to an FQDN (`@` → the zone apex, otherwise `name.zone`) and TTLs already resolved against `ttl_default`. Filter nodes poll it on the same machine-to-machine cadence and with the same service-token credential as `/routing-table` and the policy bundle — no user JWT, no new listener.
+
+Flattening server-side is deliberate: the node holds a lookup table, not a zone hierarchy, so apex expansion and TTL inheritance are computed once in Python rather than reimplemented in Rust with a second chance to diverge.
+
+Unlike the policy bundle, this payload is **not** ed25519-signed — it is fetched over the same authenticated channel as the routing table, which is also unsigned. That is a consistency argument, not a security one: if the bundle's signature is worth having against a compromised distribution path, this payload has the same exposure. Recorded as a real asymmetry rather than a decision.
+
+---
+
+### 24.3 Answer path (filter node)
+
+`zone_store.rs` holds an `ArcSwap<ZoneData>`: a list of zone apex names plus a `HashMap<normalized_owner_name, Vec<Record>>`. Lookup is three-valued:
+
+| Result | Meaning | Node behaviour |
+|---|---|---|
+| `NotLocal` | qname falls outside every hosted zone | fall through to the normal Bloom-filter decision + upstream forward |
+| `Answer(records)` | name is inside a local zone; empty vec = the name exists but has no record of the queried type | answer authoritatively (empty ⇒ NODATA) |
+| `NxDomain` | name is inside a local zone but exists at no type | authoritative NXDOMAIN, **no upstream fallback** |
+
+The NODATA/NXDOMAIN distinction is the part worth stating: a name that exists with only unsupported record types still gets a (possibly empty) map entry, so it reads as NODATA rather than NXDOMAIN. Collapsing the two would tell a client the name does not exist when it does, and clients cache the two negative answers differently.
+
+This check runs early in `build_response_inner`, before route evaluation and before the Bloom lookup — so a locally-hosted name can never be blocked by a category feed, and never incurs upstream latency. Telemetry records `decision = "stub_zone"`, `matched_rule = "stub_zone"`, which is what makes local-zone traffic separable in Analytics and in SIEM export. See §21.6 for how this diverges from the originally-designed `stub_zone` route type.
+
+Records whose `name` or rdata fails to parse are skipped with a `warn!` rather than failing the whole refresh — one malformed row must not take the zone offline.
+
+---
+
+### 24.4 API and UI
+
+`zone_routers.py` (`tags=["dns-zones"]`):
+
+| Endpoint | Auth |
+|---|---|
+| `GET /api/v1/dns-zones`, `GET /dns-zones/{id}`, `GET /dns-zones/{id}/records` | authenticated, tenant-filtered |
+| `POST/PATCH/DELETE /dns-zones`, `.../records` | `require_role("operator")` |
+| `GET /dns-zones/{id}/export` | authenticated, tenant-filtered — BIND-format zone file download |
+
+Every mutation writes an audit-log entry (`dns_zone.create` / `.update` / `.delete` and the record equivalents). Tenant scoping goes through `_get_zone_or_403`; a zone with `tenant_id = NULL` is admin-only.
+
+UI: `ZonesPage.tsx` (zone list, create/edit, export) and `ZoneDetailPage.tsx` (record editor), nav entry `/zones` with no `minRole` — visible to any authenticated user, with mutations gated server-side at `operator`.
+
+---
+
+### 24.5 Security
+
+The zone-file export is the sharp edge, and both defences exist in code:
+
+- **Zone names** are constrained to a hostname/label-sequence regex (`_ZONE_NAME_RE`). `export_zone` writes the zone name verbatim into `$ORIGIN`/SOA/NS lines *and* into the `Content-Disposition` header, so an unvalidated name could inject a CRLF into the header or an `$INCLUDE /etc/passwd` directive into a file explicitly meant to be handed to a real nameserver.
+- **Record `name` and `data`** are rejected at write time if they begin with `$` (`_validate_record_field`). BIND-family loaders treat a leading `$` as a control directive, and both fields are written as the first two fields on their line. No legitimate owner name or rdata needs a leading `$`, so this is rejected on input rather than escaped on output — one rule at the trust boundary instead of an escaping rule every future writer has to remember.
+- **Defence in depth on export:** newlines and `$` are additionally stripped from the zone name at export time, covering rows written before `_ZONE_NAME_RE` existed.
+- **DDNS ownership** — §24.1's `ddns_owner_mac`/`ddns_owner_duid`, enforced in `dhcp_internal_routers.py`.
+
+---
+
+### 24.6 Not built
+
+- 🚧 **`forward` and `passthrough` zone types** — stored and validated, never enforced (§24.1).
+- 🚧 **Zone file import.** Export exists; there is no `$ORIGIN`-parsing import path, which is the harder and more dangerous direction.
+- 🚧 **DNSSEC signing of local zones.** Answers are unsigned; §21.5 concerns validation of *upstream* answers, not signing of ours.
+- 🚧 **Secondary / AXFR.** No zone transfer in either direction — the control plane is the only source and filter nodes poll it.
+- 🚧 **Signed local-zone payload** — §24.2.
+
+---
+
+## 25. Block Page
+
+When a query is blocked, `NXDOMAIN` tells the user nothing. The block page turns a block into an explanation: which category matched, which policy, who to ask for an exception.
+
+The full design — template model, resolution order, branding fields, the HTTP listener, and the reasoning behind serving it from the filter node rather than the control plane — is in **[`design-block-page.md`](design-block-page.md)**, written before this section existed and not duplicated here. This section exists so the feature is discoverable from the main design document.
+
+What is built:
+
+- **Per-group template with tenant-wide default fallback.** `resolve_block_template` (`block_page.py`) resolves a group's own override, else the tenant default (`group_id IS NULL`), else none. Both the policy compiler (which needs the hot-path fields — mode, redirect target, TTL) and the filter node's block-page listener (which needs the branding fields) call the same resolver, so the two can never disagree about which template applies.
+- **Block modes:** `BLOCK_MODE_NXDOMAIN`, `BLOCK_MODE_ZERO_IP`, `BLOCK_MODE_REDIRECT`. Only `REDIRECT` reaches the block page; the other two answer at the DNS layer and never involve HTTP.
+- **Filter-node listener** (`blockpage.rs`), bound via `BLOCKPAGE_BIND_ADDR` (blank = disabled — the same opt-in convention as mantis-dhcp's `/metrics`, §22.11). Serving it from the node keeps the redirect target on the host that answered the query, so a blocked client never needs to reach the control plane.
+- **Branding:** logo, text, colours, contact address, editable per template. Migrations `b3f1c2a90d4e` (templates) and `fc7584542ce8` (logo/text).
+- **UI:** `BlockPageCard.tsx` with a live preview; `GET/PUT /api/v1/groups/{group_id}/block-page-template`.
+
+Like §24, this shipped outside the sprint sequence and carries no epic number.
 
 ---
