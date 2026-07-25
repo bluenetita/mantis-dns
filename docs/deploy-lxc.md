@@ -90,6 +90,15 @@ for the full list of variables.
 systemd unit itself and works fine in an unprivileged LXC — no `NET_ADMIN`,
 no privileged container needed for the filter node alone.
 
+Want a customizable block page instead of `NXDOMAIN` for blocked domains
+(`docs/design-block-page.md`)? Set `BLOCKPAGE_BIND_ADDR=0.0.0.0:80` in
+`/etc/mantis-filter/mantis-filter.env` and restart the service — the same
+`CAP_NET_BIND_SERVICE` grant covers `:80`. Because this filter LXC has its own
+IP on the Proxmox bridge, separate from whatever LXC runs the UI, there's no
+`:80`/`:443` clash to worry about the way there would be co-locating both on
+one host — point the policy's `redirect_ipv4`/`redirect_ipv6` at this LXC's
+own address and it just works.
+
 ## Option C — management plane, native install (no Docker)
 
 Recommended if you want the control plane + UI on Proxmox without the
