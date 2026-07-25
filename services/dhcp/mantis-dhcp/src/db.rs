@@ -421,7 +421,8 @@ pub async fn peek_free_ip_excluding(
 }
 
 /// Addresses `allocate`/`peek_free_ip_excluding` must never hand to a
-/// different client: currently-active-or-declined dynamic leases, plus every
+/// different client: currently-active, declined, or expired-but-still-held
+/// (state 2 — see `Config::expired_hold_s`) dynamic leases, plus every
 /// address a reservation (`dhcp_static_leases`) in this scope has claimed —
 /// without the latter, a reservation whose IP happens to fall inside the
 /// dynamic range could be raced away by an unrelated client's DISCOVER
@@ -433,7 +434,7 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     let rows = sqlx::query(
-        "SELECT ip_address FROM dhcp_leases WHERE scope_id = $1 AND state IN (0, 1)
+        "SELECT ip_address FROM dhcp_leases WHERE scope_id = $1 AND state IN (0, 1, 2)
          UNION
          SELECT ip_address FROM dhcp_static_leases WHERE scope_id = $1 AND enabled = true",
     )
@@ -469,7 +470,12 @@ pub async fn mark_declined_preemptive(pool: &PgPool, scope_id: &str, ip: Ipv4Add
 /// Claim a *specific* IP a client REQUESTed (selecting from an OFFER, a
 /// reservation, or INIT-REBOOT re-asserting a previous lease). Returns
 /// `Ok(false)` — caller should NAK — if that address is currently an active
-/// lease for a *different* mac; per-scope advisory lock same as `allocate`.
+/// *or expired-but-held* (state 2, `Config::expired_hold_s`) lease for a
+/// *different* mac; per-scope advisory lock same as `allocate`. A *matching*
+/// mac reclaiming its own held-but-expired address is exactly the case the
+/// hold window exists for, so that still succeeds below (the `ON CONFLICT`
+/// upsert resets it to state 0 regardless of which of the two states it
+/// found it in).
 pub async fn claim_specific(
     pool: &PgPool,
     scope: &Scope,
@@ -485,7 +491,7 @@ pub async fn claim_specific(
         .execute(&mut *tx)
         .await?;
 
-    if let Some(row) = sqlx::query("SELECT mac_address FROM dhcp_leases WHERE scope_id = $1 AND ip_address = $2 AND state = 0")
+    if let Some(row) = sqlx::query("SELECT mac_address FROM dhcp_leases WHERE scope_id = $1 AND ip_address = $2 AND state IN (0, 2)")
         .bind(&scope.id)
         .bind(ip.to_string())
         .fetch_optional(&mut *tx)
@@ -607,27 +613,69 @@ pub struct ExpiredLease {
     pub hostname: Option<String>,
 }
 
-/// Expired *active* leases (state 0) are deleted outright (not soft-marked)
-/// so the address becomes immediately available to the next allocation scan
-/// — see `allocate`'s `taken` set, which is built from currently-existing
-/// rows. Declined leases (state 1) are excluded from allocation forever
-/// otherwise — see `decline`/`mark_declined_preemptive` — so this also
-/// reclaims any whose `decline_probation_s` has elapsed since they were
-/// marked, the same probation-then-retry behavior Kea's
-/// `decline-probation-period` provides, in case the conflict that caused
-/// the decline was transient.
-pub async fn sweep_expired(pool: &PgPool, decline_probation_s: i64) -> anyhow::Result<Vec<ExpiredLease>> {
+/// Three independent, bounded steps (each capped at `batch_limit` rows via a
+/// `ctid IN (SELECT ... LIMIT n)` subquery, so a daemon recovering from a
+/// long backlog spreads the work across several 30-second ticks instead of
+/// one large statement — design.md §26 R7):
+///
+/// 1. An active lease (state 0) whose `expires_at` has passed moves to state
+///    2 ("expired-reclaimed" — a value `DhcpLease.state`'s docstring already
+///    reserved for this, in models.py, before `sweep_expired` ever used it).
+///    It is *not* deleted yet: `taken_or_reserved_addresses` still excludes
+///    state 2 from allocation to a different client for `expired_hold_s`
+///    more seconds (`Config::expired_hold_s`) — long enough for a client
+///    whose renewal was merely delayed or lost to reclaim the same address
+///    (`claim_specific` allows this) before anyone else can take it. This is
+///    also the moment reported back for DDNS cleanup: the hostname mapping
+///    stops being valid here, independent of how long the address stays
+///    defensively held from other clients.
+/// 2. A declined lease (state 1) whose `decline_probation_s` has elapsed is
+///    deleted outright and reported for DDNS cleanup too — unchanged from
+///    before this function grew a state-2 step.
+/// 3. An expired-and-held lease (state 2) whose *original* `expires_at` is
+///    more than `expired_hold_s` in the past is finally deleted, freeing the
+///    address. Not reported for DDNS — step 1 already handled that when this
+///    same row entered state 2.
+pub async fn sweep_expired(
+    pool: &PgPool,
+    decline_probation_s: i64,
+    expired_hold_s: i64,
+    batch_limit: i64,
+) -> anyhow::Result<Vec<ExpiredLease>> {
     let probation_cutoff = Utc::now() - chrono::Duration::seconds(decline_probation_s);
-    let rows = sqlx::query(
+    let hold_cutoff = Utc::now() - chrono::Duration::seconds(expired_hold_s);
+
+    let newly_expired = sqlx::query(
+        "UPDATE dhcp_leases SET state = 2
+         WHERE ctid IN (SELECT ctid FROM dhcp_leases WHERE state = 0 AND expires_at < now() LIMIT $1)
+         RETURNING scope_id, ip_address, mac_address, hostname",
+    )
+    .bind(batch_limit)
+    .fetch_all(pool)
+    .await?;
+
+    let declined_past_probation = sqlx::query(
         "DELETE FROM dhcp_leases
-         WHERE (state = 0 AND expires_at < now())
-            OR (state = 1 AND allocated_at < $1)
+         WHERE ctid IN (SELECT ctid FROM dhcp_leases WHERE state = 1 AND allocated_at < $1 LIMIT $2)
          RETURNING scope_id, ip_address, mac_address, hostname",
     )
     .bind(probation_cutoff)
+    .bind(batch_limit)
     .fetch_all(pool)
     .await?;
-    rows.into_iter()
+
+    sqlx::query(
+        "DELETE FROM dhcp_leases
+         WHERE ctid IN (SELECT ctid FROM dhcp_leases WHERE state = 2 AND expires_at < $1 LIMIT $2)",
+    )
+    .bind(hold_cutoff)
+    .bind(batch_limit)
+    .execute(pool)
+    .await?;
+
+    newly_expired
+        .into_iter()
+        .chain(declined_past_probation)
         .map(|row| {
             Ok(ExpiredLease {
                 scope_id: row.try_get("scope_id")?,
@@ -658,6 +706,12 @@ pub struct ScopeUtilization {
     pub scope_name: String,
     pub assigned: i64,
     pub declined: i64,
+    /// State 2 — expired but still excluded from allocation during
+    /// `Config::expired_hold_s` (see `sweep_expired`). Counted separately
+    /// from `assigned` rather than folded into it: it's a genuinely
+    /// different operational state an operator would want to tell apart
+    /// from "actively leased" when a pool looks fuller than expected.
+    pub held: i64,
 }
 
 /// Per-scope lease counts for the metrics endpoint (`metrics.rs`) — same
@@ -667,7 +721,8 @@ pub async fn scope_utilization(pool: &PgPool) -> anyhow::Result<Vec<ScopeUtiliza
     let rows = sqlx::query(
         "SELECT s.id AS scope_id, s.name AS scope_name,
                 count(*) FILTER (WHERE l.state = 0) AS assigned,
-                count(*) FILTER (WHERE l.state = 1) AS declined
+                count(*) FILTER (WHERE l.state = 1) AS declined,
+                count(*) FILTER (WHERE l.state = 2) AS held
          FROM dhcp_scopes s
          LEFT JOIN dhcp_leases l ON l.scope_id = s.id
          WHERE s.enabled = true
@@ -682,6 +737,7 @@ pub async fn scope_utilization(pool: &PgPool) -> anyhow::Result<Vec<ScopeUtiliza
                 scope_name: row.try_get("scope_name")?,
                 assigned: row.try_get("assigned")?,
                 declined: row.try_get("declined")?,
+                held: row.try_get("held")?,
             })
         })
         .collect()
@@ -1212,7 +1268,16 @@ mod tests {
         // own sweep call against this same shared Postgres can race in and
         // delete this row first, so the DB post-state (not this call's own
         // return value) is the only reliable thing to assert on here.
-        sweep_expired(&pool, 86400).await.unwrap();
+        //
+        // hold_s must NOT be 0 (or otherwise small): `sweep_expired`'s final
+        // delete step is just as unscoped as everything else here, so a
+        // hold_s=0 call from *this* test would physically delete every
+        // other concurrently-running test's held (state 2) leases the
+        // instant they entered that state, regardless of which test or
+        // scope they belong to -- this test isn't exercising the hold
+        // window at all, so a realistic default keeps it from becoming a
+        // landmine for its neighbors instead.
+        sweep_expired(&pool, 86400, 300, 1000).await.unwrap();
         assert_eq!(active_lease_ip(&pool, &scope.id, expired_mac).await, None);
         assert_eq!(active_lease_ip(&pool, &scope.id, live_mac).await, Some(live_ip));
     }
@@ -1224,9 +1289,23 @@ mod tests {
         let mac = "aa:bb:cc:dd:ee:32";
         allocate(&pool, &scope, mac, None, Some("printer"), -10).await.unwrap();
 
-        let swept = sweep_expired(&pool, 86400).await.unwrap();
-        let lease = swept.iter().find(|l| l.mac == mac).expect("expired lease must be reported");
-        assert_eq!(lease.hostname.as_deref(), Some("printer"));
+        // sweep_expired now runs three separate statements per call rather
+        // than one atomic DELETE, which widens the window in which a
+        // *different*, concurrently-running test's own (equally unscoped)
+        // sweep_expired call can be the one whose UPDATE...RETURNING claims
+        // this exact row first -- Postgres guarantees only one caller's
+        // statement ever matches a given row, but not which caller. So this
+        // asserts DB post-state (which is unaffected by who won that race)
+        // rather than this call's own return value, same convention as
+        // every other sweep_expired test in this file.
+        sweep_expired(&pool, 86400, 300, 1000).await.unwrap();
+        let hostname: Option<String> = sqlx::query_scalar("SELECT hostname FROM dhcp_leases WHERE scope_id = $1 AND mac_address = $2")
+            .bind(&scope.id)
+            .bind(mac)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(hostname.as_deref(), Some("printer"), "the lease's hostname must survive the state-0-to-2 transition intact for DDNS cleanup");
     }
 
     #[tokio::test]
@@ -1238,8 +1317,13 @@ mod tests {
         assert!(decline(&pool, &scope.id, ip, mac).await.unwrap());
 
         // Not yet past probation -- must survive a sweep with a long window.
-        let swept = sweep_expired(&pool, 86400).await.unwrap();
-        assert!(swept.iter().all(|l| l.ip != ip), "a freshly-declined lease must not be reclaimed early");
+        // `sweep_expired` is unscoped across the whole table, and every test
+        // scope in this file shares the same literal IP range (`make_scope`
+        // always starts at 10.99.0.10) -- comparing `l.ip` alone could match
+        // an unrelated concurrently-running test's row at the same address
+        // text in a *different* scope, so `scope_id` must be checked too.
+        let swept = sweep_expired(&pool, 86400, 300, 1000).await.unwrap();
+        assert!(swept.iter().all(|l| !(l.scope_id == scope.id && l.ip == ip)), "a freshly-declined lease must not be reclaimed early");
 
         // Back-date allocated_at so it looks like probation has elapsed.
         sqlx::query("UPDATE dhcp_leases SET allocated_at = now() - interval '2 hours' WHERE scope_id = $1 AND ip_address = $2")
@@ -1249,12 +1333,90 @@ mod tests {
             .await
             .unwrap();
 
-        let swept = sweep_expired(&pool, 3600).await.unwrap();
-        assert!(swept.iter().any(|l| l.ip == ip), "a declined lease past its probation window must be reclaimed");
+        let swept = sweep_expired(&pool, 3600, 300, 1000).await.unwrap();
+        assert!(swept.iter().any(|l| l.scope_id == scope.id && l.ip == ip), "a declined lease past its probation window must be reclaimed");
 
         // Reclaimed, so a fresh allocation can now reuse the address.
         let reused = allocate(&pool, &scope, "aa:bb:cc:dd:ee:34", None, None, 3600).await.unwrap();
         assert_eq!(reused, ip);
+    }
+
+    #[tokio::test]
+    async fn sweep_expired_holds_an_expired_lease_from_a_different_mac_but_lets_the_owner_reclaim_it() {
+        let pool = test_pool().await;
+        let scope = make_scope(&pool, 2).await;
+        let owner = "aa:bb:cc:dd:ee:40";
+        let ip = allocate(&pool, &scope, owner, None, None, -10).await.unwrap();
+
+        // Long hold window: the sweep transitions the lease to state 2
+        // (held) but must not physically delete it yet. Same caveat as
+        // every other sweep_expired test here: `sweep_expired` is unscoped
+        // across the whole table, so a concurrently-running test's own
+        // sweep call can process this row first -- assert the DB's post
+        // state directly rather than this call's own return value.
+        sweep_expired(&pool, 86400, 3600, 1000).await.unwrap();
+        let state: i32 = sqlx::query_scalar("SELECT state FROM dhcp_leases WHERE scope_id = $1 AND ip_address = $2")
+            .bind(&scope.id)
+            .bind(ip.to_string())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(state, 2, "an expired active lease must move to the held state, not vanish or stay active");
+
+        // A different mac must not be able to grab the held address.
+        let other = "aa:bb:cc:dd:ee:41";
+        assert!(
+            !claim_specific(&pool, &scope, ip, other, None, None, 3600).await.unwrap(),
+            "a different mac must not be able to claim an address still inside its expired-hold window"
+        );
+        assert!(
+            !peek_free_ip_excluding(&pool, &scope, &Default::default()).await.unwrap().map(|free| free == ip).unwrap_or(false),
+            "a held address must not be offered to a fresh DISCOVER either"
+        );
+
+        // The original owner reclaiming the exact same address during the
+        // hold window is exactly what the hold exists for.
+        assert!(
+            claim_specific(&pool, &scope, ip, owner, None, None, 3600).await.unwrap(),
+            "the original owner must be able to reclaim its own address during the hold window"
+        );
+        assert_eq!(active_lease_ip(&pool, &scope.id, owner).await, Some(ip));
+    }
+
+    #[tokio::test]
+    async fn sweep_expired_frees_a_held_lease_once_its_hold_window_elapses() {
+        let pool = test_pool().await;
+        let scope = make_scope(&pool, 2).await;
+        let owner = "aa:bb:cc:dd:ee:42";
+        let ip = allocate(&pool, &scope, owner, None, None, -10).await.unwrap();
+
+        // First sweep: enters the hold (long window, so the second delete
+        // step must not touch it yet).
+        sweep_expired(&pool, 86400, 3600, 1000).await.unwrap();
+        let other = "aa:bb:cc:dd:ee:43";
+        assert!(!claim_specific(&pool, &scope, ip, other, None, None, 3600).await.unwrap());
+
+        // Back-date expires_at so the hold window looks elapsed, mirroring
+        // how the probation test above back-dates allocated_at.
+        sqlx::query("UPDATE dhcp_leases SET expires_at = now() - interval '2 hours' WHERE scope_id = $1 AND ip_address = $2")
+            .bind(&scope.id)
+            .bind(ip.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Second sweep with a short hold window: the now-old hold must be
+        // physically deleted, and reported only once (at the first sweep
+        // above), not again here.
+        let swept = sweep_expired(&pool, 86400, 60, 1000).await.unwrap();
+        assert!(
+            swept.iter().all(|l| !(l.scope_id == scope.id && l.ip == ip)),
+            "a lease already reported when it entered hold must not be reported a second time on final deletion"
+        );
+        assert!(
+            claim_specific(&pool, &scope, ip, other, None, None, 3600).await.unwrap(),
+            "a different mac must be able to claim the address once its hold window has fully elapsed"
+        );
     }
 
     #[tokio::test]

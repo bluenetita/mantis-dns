@@ -42,9 +42,19 @@ pub struct Config {
     pub ddns_retry_interval_s: u64,
     /// See v4's `Config::decline_probation_s` — same purpose, same default.
     pub decline_probation_s: i64,
+    /// See v4's `Config::expired_hold_s` — same purpose, same default, same
+    /// shared env var (this daemon reuses `MANTIS_DHCP_DECLINE_PROBATION_S`
+    /// for `decline_probation_s` above too, for the same reason: one shared
+    /// concept, one knob, regardless of which daemon process reads it).
+    pub expired_hold_s: i64,
+    /// See v4's `Config::reclaim_batch_limit` — same purpose, same default.
+    pub reclaim_batch_limit: i64,
     /// Opt-in Prometheus `/metrics` listener, same convention as the v4
     /// daemon's `MANTIS_DHCP_METRICS_BIND_ADDR` (blank = disabled).
     pub metrics_bind_addr: Option<std::net::SocketAddr>,
+    /// See v4's `Config::max_inflight_packets` — same purpose, same default,
+    /// own env var since this is a separate process.
+    pub max_inflight_packets: usize,
 }
 
 impl Config {
@@ -77,7 +87,19 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(86400),
+            expired_hold_s: std::env::var("MANTIS_DHCP_EXPIRED_HOLD_S")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(300),
+            reclaim_batch_limit: std::env::var("MANTIS_DHCP_RECLAIM_BATCH_LIMIT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1000),
             metrics_bind_addr,
+            max_inflight_packets: std::env::var("MANTIS_DHCP6_MAX_INFLIGHT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(512),
         })
     }
 }

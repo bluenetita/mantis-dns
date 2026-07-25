@@ -46,6 +46,29 @@ pub struct Config {
     /// conflict that caused the decline may have been transient, so a
     /// declined address shouldn't be dead forever.
     pub decline_probation_s: i64,
+    /// How long a lease stays in state 2 (expired-reclaimed — an address the
+    /// schema already reserved this state for, `DhcpLease.state`'s comment in
+    /// models.py, but which `sweep_expired` never used until now) after its
+    /// `expires_at` passes before the address becomes available to a
+    /// *different* client. Without this, a client whose RENEW/REBIND was
+    /// simply delayed or lost — not gone — could have its address reassigned
+    /// out from under it the instant `expires_at` ticks over; a client
+    /// re-asserting the *same* address during this window (`claim_specific`)
+    /// still succeeds, only a different mac requesting it is turned away.
+    /// Five minutes covers a lost renewal's retry (T1/T2 timers mean a
+    /// well-behaved client retries within seconds to low minutes) without
+    /// meaningfully starving a small pool the way an hours-long hold would.
+    pub expired_hold_s: i64,
+    /// Upper bound on rows a single `sweep_expired` tick will reclaim or
+    /// delete, applied independently to each step via a bounded
+    /// `ctid IN (SELECT ... LIMIT n)`. `dhcp_leases` is this daemon's largest
+    /// table and the sweep runs unattended on a timer — an unbounded
+    /// UPDATE/DELETE is fine at normal load (a handful of expiries per tick)
+    /// but not a bound worth skipping, since a daemon restarted after being
+    /// down for a while could otherwise face a single multi-hour-backlog
+    /// statement. A bounded batch just means recovery takes a few extra
+    /// 30-second ticks instead of one long one.
+    pub reclaim_batch_limit: i64,
     /// Opt-in Prometheus `/metrics` listener (blank = disabled — same
     /// convention as mantis-filter's BLOCKPAGE_BIND_ADDR).
     pub metrics_bind_addr: Option<std::net::SocketAddr>,
@@ -56,6 +79,20 @@ pub struct Config {
     pub conflict_detection_enabled: bool,
     pub conflict_probe_timeout: std::time::Duration,
     pub conflict_probe_max_attempts: u32,
+    /// Upper bound on concurrently-in-flight packet handlers per socket —
+    /// the bounded-concurrency equivalent of Kea's `thread-pool-size` +
+    /// `packet-queue-size`. Each packet is handled in its own spawned task
+    /// (`main.rs`'s `socket_loop`) rather than awaited inline, both so one
+    /// slow Postgres call can't stall every other client's DORA exchange and
+    /// so a panic in one handler is isolated to that task instead of
+    /// silently ending that interface's service forever. This still needs a
+    /// ceiling: an unbounded number of concurrent tasks under a packet flood
+    /// would trade one failure mode (serialized handling) for another
+    /// (unbounded memory/connection-pool pressure). 512 is generous for any
+    /// single DORA burst this daemon is realistically sized for (§17.4);
+    /// past it, packets are dropped and counted (`dhcp_packet_queue_drops_total`)
+    /// rather than queued unboundedly.
+    pub max_inflight_packets: usize,
 }
 
 impl Config {
@@ -91,12 +128,24 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(86400),
+            expired_hold_s: std::env::var("MANTIS_DHCP_EXPIRED_HOLD_S")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(300),
+            reclaim_batch_limit: std::env::var("MANTIS_DHCP_RECLAIM_BATCH_LIMIT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1000),
             metrics_bind_addr,
             conflict_detection_enabled: std::env::var("MANTIS_DHCP_CONFLICT_DETECTION")
                 .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
                 .unwrap_or(true),
             conflict_probe_timeout: std::time::Duration::from_millis(300),
             conflict_probe_max_attempts: 4,
+            max_inflight_packets: std::env::var("MANTIS_DHCP_MAX_INFLIGHT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(512),
         })
     }
 }

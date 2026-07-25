@@ -1,0 +1,39 @@
+# cargo-fuzz project for mantis-dhcp's wire-format decode path (design.md
+# §26 R7/R8). Deliberately its own `[workspace]` (excluded from the root
+# workspace, not a member) — libfuzzer-sys needs nightly and sanitizer
+# support that the rest of this codebase has no reason to depend on; keeping
+# it separate means `cargo build`/`cargo test` at the repo root never touch
+# this crate or require nightly.
+#
+# Run with (needs `cargo install cargo-fuzz` and a nightly toolchain):
+#   cargo +nightly fuzz run decode_v4
+#   cargo +nightly fuzz run decode_v6
+
+[package]
+name = "mantis-dhcp-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+dhcproto = "0.15"
+
+[[bin]]
+name = "decode_v4"
+path = "fuzz_targets/decode_v4.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_v6"
+path = "fuzz_targets/decode_v6.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

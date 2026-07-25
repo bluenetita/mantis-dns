@@ -112,6 +112,17 @@ fn reply_dest(req: &Message) -> SocketAddr {
     }
 }
 
+/// Builds every reply (OFFER/ACK/NAK/INFORM-ACK all flow through here) and,
+/// per RFC 3046 §2.2, echoes the Relay Agent Information option (option 82)
+/// back verbatim whenever the request carried one. We already consume its
+/// circuit-id/remote-id sub-options for relay-based scope selection
+/// (`relay_agent_info`, design.md §22.7) — RFC 3046 requires a server that
+/// acts on the option to echo it back unmodified in every reply, since the
+/// relay agent uses the echoed sub-options to pick which downstream port to
+/// forward the reply out of and strips the option before it ever reaches the
+/// client. A reply missing it can be silently dropped by the relay, which
+/// looks indistinguishable from a lost packet — this was previously the one
+/// place this daemon claimed option-82 support without fully honoring it.
 fn base_reply(req: &Message, yiaddr: Ipv4Addr, siaddr: Ipv4Addr, mtype: MessageType, opts: DhcpOptions) -> Message {
     let mut reply = Message::new(Ipv4Addr::UNSPECIFIED, yiaddr, siaddr, req.giaddr(), req.chaddr());
     reply.set_opcode(Opcode::BootReply);
@@ -120,6 +131,9 @@ fn base_reply(req: &Message, yiaddr: Ipv4Addr, siaddr: Ipv4Addr, mtype: MessageT
     reply.set_flags(req.flags());
     let mut opts = opts;
     opts.insert(DhcpOption::MessageType(mtype));
+    if let Some(rai) = req.opts().get(OptionCode::RelayAgentInformation) {
+        opts.insert(rai.clone());
+    }
     reply.set_opts(opts);
     reply
 }
@@ -728,6 +742,32 @@ mod tests {
         let giaddr: Ipv4Addr = "192.0.2.1".parse().unwrap();
         let m = msg(Ipv4Addr::UNSPECIFIED, giaddr, &[0; 6], false);
         assert_eq!(nak_dest(&m), SocketAddr::new(giaddr.into(), 67));
+    }
+
+    #[test]
+    fn base_reply_echoes_relay_agent_information_verbatim() {
+        use dhcproto::v4::relay::{RelayAgentInformation, RelayInfo};
+
+        let giaddr: Ipv4Addr = "192.0.2.1".parse().unwrap();
+        let mut req = msg(Ipv4Addr::UNSPECIFIED, giaddr, &[0; 6], false);
+        let mut rai = RelayAgentInformation::default();
+        rai.insert(RelayInfo::AgentCircuitId(vec![0x01, 0x02]));
+        rai.insert(RelayInfo::AgentRemoteId(vec![0xaa, 0xbb]));
+        req.opts_mut().insert(DhcpOption::RelayAgentInformation(rai.clone()));
+
+        let reply = base_reply(&req, Ipv4Addr::UNSPECIFIED, Ipv4Addr::UNSPECIFIED, MessageType::Ack, DhcpOptions::new());
+        assert_eq!(
+            reply.opts().get(OptionCode::RelayAgentInformation),
+            Some(&DhcpOption::RelayAgentInformation(rai)),
+            "a reply to a relayed request must echo option 82 back verbatim (RFC 3046 §2.2)"
+        );
+    }
+
+    #[test]
+    fn base_reply_omits_relay_agent_information_when_request_had_none() {
+        let req = msg(Ipv4Addr::UNSPECIFIED, Ipv4Addr::UNSPECIFIED, &[0; 6], false);
+        let reply = base_reply(&req, Ipv4Addr::UNSPECIFIED, Ipv4Addr::UNSPECIFIED, MessageType::Ack, DhcpOptions::new());
+        assert_eq!(reply.opts().get(OptionCode::RelayAgentInformation), None);
     }
 
     #[test]

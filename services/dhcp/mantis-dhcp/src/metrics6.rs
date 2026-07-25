@@ -40,6 +40,10 @@ pub struct Counters {
     decline: AtomicU64,
     information_request: AtomicU64,
     confirm: AtomicU64,
+    /// See v4's `metrics.rs::Counters::handler_panics` — same purpose.
+    handler_panics: AtomicU64,
+    /// See v4's `metrics.rs::Counters::queue_drops` — same purpose.
+    queue_drops: AtomicU64,
 }
 
 impl Counters {
@@ -58,6 +62,14 @@ impl Counters {
             _ => return,
         };
         counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_handler_panic(&self) {
+        self.handler_panics.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_queue_drop(&self) {
+        self.queue_drops.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -93,6 +105,8 @@ async fn handle(State(state): State<AppState>) -> String {
         c.information_request.load(Ordering::Relaxed),
     );
     push_counter(&mut out, "dhcp6_confirm_total", "CONFIRM packets received", c.confirm.load(Ordering::Relaxed));
+    push_counter(&mut out, "dhcp6_handler_panics_total", "Per-packet handler tasks that panicked (isolated, not fatal)", c.handler_panics.load(Ordering::Relaxed));
+    push_counter(&mut out, "dhcp6_packet_queue_drops_total", "Packets dropped: MANTIS_DHCP6_MAX_INFLIGHT concurrent handlers already running", c.queue_drops.load(Ordering::Relaxed));
 
     match crate::db6::scope_utilization6(&state.pool).await {
         Ok(rows) => {
@@ -118,6 +132,14 @@ async fn handle(State(state): State<AppState>) -> String {
                 out.push_str(&format!(
                     "dhcp6_pool_declined{{scope_id=\"{}\",scope_name=\"{}\"}} {}\n",
                     escape(&r.scope_id), escape(&r.scope_name), r.declined
+                ));
+            }
+            out.push_str("# HELP dhcp6_pool_held Expired leases still excluded from allocation during their hold window\n");
+            out.push_str("# TYPE dhcp6_pool_held gauge\n");
+            for r in &rows {
+                out.push_str(&format!(
+                    "dhcp6_pool_held{{scope_id=\"{}\",scope_name=\"{}\"}} {}\n",
+                    escape(&r.scope_id), escape(&r.scope_name), r.held
                 ));
             }
         }
@@ -164,6 +186,16 @@ mod tests {
         let c = Counters::default();
         c.record(MessageType::Unknown(255));
         assert_eq!(c.solicit.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn record_handler_panic_and_queue_drop_are_independent_counters() {
+        let c = Counters::default();
+        c.record_handler_panic();
+        c.record_queue_drop();
+        c.record_queue_drop();
+        assert_eq!(c.handler_panics.load(Ordering::Relaxed), 1);
+        assert_eq!(c.queue_drops.load(Ordering::Relaxed), 2);
     }
 
     #[test]

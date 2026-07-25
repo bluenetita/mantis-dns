@@ -393,6 +393,14 @@ def phase_core() -> None:
         offer3, opts3 = dhcp4.exchange(disc3, (DHCP_IP, 67), xid3, (RUNNER_IPV4, 67))
         assert offer3 is not None and opts3.get("message-type") == dhcp4.OFFER, \
             "matching relay_ip + circuit/remote id was rejected"
+        # RFC 3046 §2.2: a server that acts on option 82 (this scope's
+        # relay allow-list just did, above) must echo it back verbatim so
+        # the relay can strip it and pick the right downstream port. Check
+        # the raw wire bytes rather than relying on scapy's decode of a
+        # sub-optioned option, which isn't guaranteed to round-trip through
+        # its own named-tuple representation the way simple options do.
+        assert rai_match in bytes(offer3), \
+            "OFFER did not echo option 82 (RelayAgentInformation) back verbatim -- RFC 3046 §2.2"
 
     def t_inform_reply():
         c = dhcp4.Client()
@@ -402,14 +410,83 @@ def phase_core() -> None:
         assert reply is not None and opts.get("message-type") == dhcp4.ACK, f"INFORM got {opts}"
         assert opts.get("subnet_mask") == "255.255.255.0"
 
+    def t_fuzzer_found_crash_is_contained_not_fatal():
+        # Exact bytes a ~20s cargo-fuzz run against dhcproto::v4::Message::
+        # decode found (design.md §22.14): a `debug_assert!(len == 3)` in its
+        # option-94 (ClientNetworkInterface) parser. Masked in *this*
+        # project's release build (debug-assertions off), but the point of
+        # main.rs moving decode inside the per-packet spawned task was to
+        # contain *any* panic there regardless of which one -- this proves
+        # that containment against a real, reproduced crash trigger, not a
+        # synthetic one. Sent as a raw datagram (not built via dhcp4.Client,
+        # which can't emit a maliciously-shaped packet): if decode instead
+        # panics unguarded, this daemon's process (and every other in-flight
+        # client) goes down with it, and the DORA immediately below fails.
+        crash_bytes = bytes([
+            255, 255, 3, 255, 255, 255, 255, 104, 255, 255, 250, 255, 255, 255, 191, 0,
+            255, 44, 251, 255, 105, 105, 105, 105, 105, 105, 105, 216, 216, 216, 216, 216,
+            216, 216, 216, 216, 216, 5, 0, 0, 0, 0, 0, 0, 0, 105, 216, 216, 216, 216,
+            216, 216, 216, 216, 216, 216, 5, 0, 0, 0, 0, 0, 0, 0, 216, 216, 216, 216,
+            216, 216, 216, 216, 216, 216, 216, 188, 188, 255, 255, 255, 255, 255, 250, 255,
+            0, 255, 44, 0, 251, 255, 188, 188, 188, 188, 126, 188, 216, 216, 216, 216, 184,
+            184, 184, 72, 71, 71, 71, 252, 255, 255, 253, 0, 0, 0, 0, 184, 184, 184, 184,
+            216, 216, 216, 216, 216, 216, 216, 216, 216, 40, 39, 39, 42, 216, 216, 216, 5,
+            216, 216, 216, 216, 216, 216, 208, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255,
+            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 59, 255, 255, 255, 255,
+            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 216, 216, 216, 216,
+            5, 0, 0, 0, 0, 0, 0, 0, 216, 216, 216, 46, 216, 216, 216, 216, 216, 216, 209,
+            216, 216, 216, 155, 216, 216, 216, 216, 216, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0,
+            128, 0, 0, 0, 0, 94, 0, 63, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 65, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 255, 255, 97, 216, 216, 216, 0, 0, 105, 216, 216,
+        ])
+        panics_before = counter_value(fetch_metrics(METRICS_URL), "dhcp_handler_panics_total")
+
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            for _ in range(3):  # UDP, no delivery guarantee -- a few shots
+                s.sendto(crash_bytes, (DHCP_IP, 67))
+                time.sleep(0.2)
+
+        # The daemon must still answer a completely normal client afterward
+        # -- this is the real, hard invariant: whatever these bytes do
+        # inside dhcproto, they must never take the daemon down. This is
+        # true regardless of whether they happen to panic in *this*
+        # particular build (see below).
+        c = dhcp4.Client()
+        _offer, _oo, ack, ack_opts = v4_dora(c)
+        assert ack_opts.get("message-type") == dhcp4.ACK, \
+            "daemon did not answer a normal DORA after the fuzz-found crash bytes -- containment failed"
+
+        # Whether dhcp_handler_panics_total actually moved is informational,
+        # not asserted: this exact input's cargo-fuzz-discovered panic is a
+        # `debug_assert!` (design.md §22.14), which — as documented there —
+        # is compiled out under this project's own release profile
+        # (services/dhcp/Dockerfile builds `--release`), so it may
+        # legitimately never fire here even though it fires under `cargo
+        # fuzz run` (whose profile force-enables debug-assertions). A future
+        # dhcproto upgrade, a debug build, or a Rust/optimizer change could
+        # make it fire or stop firing either way; only the line above (the
+        # daemon survives) is a requirement this test can make in general.
+        panics_moved = _poll(
+            lambda: True if counter_value(fetch_metrics(METRICS_URL), "dhcp_handler_panics_total") > panics_before else None,
+            timeout=5, interval=0.5,
+        )
+        print(f"    (info: dhcp_handler_panics_total {'did' if panics_moved else 'did not'} increase past {panics_before} "
+              f"for this input in this build -- see design.md §22.14 on why that's not asserted either way)")
+
     def t_metrics_endpoint():
         text = fetch_metrics(METRICS_URL)
         for name in ("dhcp_discover_total", "dhcp_offer_total", "dhcp_request_total", "dhcp_ack_total",
                      "dhcp_nak_total", "dhcp_release_total", "dhcp_decline_total", "dhcp_inform_total",
-                     "dhcp_ddns_retry_queue_depth"):
+                     "dhcp_ddns_retry_queue_depth",
+                     # Added alongside per-packet task isolation and the
+                     # expired-lease hold window (design.md §22.14) -- must
+                     # exist even before either condition has ever fired.
+                     "dhcp_handler_panics_total", "dhcp_packet_queue_drops_total"):
             assert re.search(rf"^{name}[ {{]", text, re.MULTILINE), f"{name} missing from /metrics"
         assert counter_value(text, "dhcp_discover_total") > 0
         assert gauge_for_label(text, "dhcp_pool_assigned", f'scope_id="{scope_id}"') >= 0
+        assert gauge_for_label(text, "dhcp_pool_held", f'scope_id="{scope_id}"') >= 0
 
     def t_expiry_lease_created_for_later_phase():
         c = dhcp4.Client()
@@ -433,6 +510,7 @@ def phase_core() -> None:
     check("relay_allowlist", t_relay_allowlist)
     check("relay_circuit_remote_id_enforcement", t_relay_circuit_remote_id_enforcement)
     check("inform_reply", t_inform_reply)
+    check("fuzzer_found_crash_is_contained_not_fatal", t_fuzzer_found_crash_is_contained_not_fatal)
     check("metrics_endpoint", t_metrics_endpoint)
     check("expiry_lease_created_for_later_phase", t_expiry_lease_created_for_later_phase)
 
@@ -669,13 +747,52 @@ def phase_v6() -> None:
         assert unwrapped is not None and unwrapped[0] == 2, \
             f"relay-unwrapped message should be an ADVERTISE, got {unwrapped!r}"
 
+    def t_fuzzer_found_crash_is_contained_not_fatal6():
+        # Exact bytes a ~20s cargo-fuzz run against server6.rs's unwrap_relay
+        # + dhcproto::v6::Message::decode found (design.md §22.14): an
+        # `attempt to subtract with overflow` on an attacker-controlled
+        # length in dhcproto's v6 option parser. Confirmed against this real
+        # release build (see the print below, and t_fuzzer_found_crash_is_
+        # contained_not_fatal's comment in phase_core for the v4 case): the
+        # overflow check itself is release-masked like the v4 debug_assert!
+        # cases, *and* empirically the garbage length it would otherwise
+        # produce does not go on to trip a second, non-maskable panic either
+        # in this build -- an earlier version of this comment guessed it
+        # "very likely" would, and that guess didn't hold. The daemon
+        # surviving is the only thing asserted below; that guess is now
+        # corrected rather than repeated.
+        crash_bytes = bytes([0, 0, 36, 36, 0, 16, 0, 0, 0, 36, 36, 0, 16, 0, 0, 0])
+        panics_before = counter_value(fetch_metrics(METRICS6_URL), "dhcp6_handler_panics_total")
+
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as s:
+            s.bind((RUNNER_IPV6, 0, 0, 0))
+            for _ in range(3):
+                s.sendto(crash_bytes, V6_DEST)
+                time.sleep(0.2)
+
+        c = dhcp6.Client()
+        sol = c.solicit(want_na=True)
+        data = send(sol)
+        assert data is not None, "daemon did not answer a normal SOLICIT after the fuzz-found crash bytes -- containment failed"
+        adv = dhcp6.decode(data)
+        assert adv.msgtype == 2, f"expected ADVERTISE(2) after the crash bytes, got {adv.msgtype}"
+
+        panics_moved = _poll(
+            lambda: True if counter_value(fetch_metrics(METRICS6_URL), "dhcp6_handler_panics_total") > panics_before else None,
+            timeout=5, interval=0.5,
+        )
+        print(f"    (info: dhcp6_handler_panics_total {'did' if panics_moved else 'did not'} increase past {panics_before} "
+              f"for this input in this build -- see design.md §22.14)")
+
     def t_metrics6_endpoint():
         text = fetch_metrics(METRICS6_URL)
         for name in ("dhcp6_solicit_total", "dhcp6_advertise_total", "dhcp6_request_total",
                      "dhcp6_reply_total", "dhcp6_release_total", "dhcp6_decline_total",
-                     "dhcp_ddns_retry_queue_depth"):
+                     "dhcp_ddns_retry_queue_depth",
+                     "dhcp6_handler_panics_total", "dhcp6_packet_queue_drops_total"):
             assert re.search(rf"^{name}[ {{]", text, re.MULTILINE), f"{name} missing from v6 /metrics"
         assert counter_value(text, "dhcp6_solicit_total") > 0
+        assert gauge_for_label(text, "dhcp6_pool_held", f'scope_id="{scope6_id}"') >= 0
 
     check("solicit_advertise_ia_na", t_solicit_advertise_ia_na)
     check("request_reply_commits_lease", t_request_reply_commits_lease)
@@ -689,6 +806,7 @@ def phase_v6() -> None:
     check("information_request", t_information_request)
     check("confirm_on_link_and_not_on_link", t_confirm_on_link_and_not_on_link)
     check("relay_forward_wrap_and_unwrap", t_relay_forward_wrap_and_unwrap)
+    check("fuzzer_found_crash_is_contained_not_fatal6", t_fuzzer_found_crash_is_contained_not_fatal6)
     check("metrics6_endpoint", t_metrics6_endpoint)
 
 
@@ -831,6 +949,7 @@ def phase_ddns_verify() -> None:
 def phase_expiry() -> None:
     st = load_state()
     a = api_mod.Api()
+    a.login()
     scope_id = st["scope_id"]
 
     def t_expired_lease_is_swept_and_ddns_record_removed():
@@ -838,10 +957,45 @@ def phase_expiry() -> None:
             leases = a.list_leases(scope_id, state=0)
             return not any(r["ip_address"] == st["expiry_ip"] for r in leases)
         swept = _poll(lambda: True if gone() else None, timeout=120, interval=5)
-        assert swept, f"lease for {st['expiry_ip']} was not swept within 90s"
+        assert swept, f"lease for {st['expiry_ip']} was not swept within 120s"
 
-    a.login()
+        # The name of this check has always promised this half too; it was
+        # never actually asserted. The DDNS "expire" event fires at the same
+        # moment the lease leaves state 0 (design.md §22.14's state-2 hold
+        # is a *later*, separate step -- see the next check), so the record
+        # should already be gone by the time `gone()` above returns.
+        record_gone = _poll(lambda: True if not _find_record(a, st["zone_id"], "expiry-host", "A") else None,
+                             timeout=15, interval=2)
+        assert record_gone, f"DDNS A record for expiry-host was not removed after {st['expiry_ip']} expired"
+
+    def t_expired_lease_is_held_before_a_different_client_can_reuse_it():
+        # design.md §22.14 / §26 R7: an expired lease moves to a hold state
+        # before its address is handed to a *different* client, protecting a
+        # lost RENEW/REBIND retry. MANTIS_DHCP_EXPIRED_HOLD_S is set to 3600s
+        # in this compose file specifically so this check can't race against
+        # the hold elapsing on its own -- see that env var's comment for why.
+        # The check above already waited for state 0 to clear, so
+        # `expiry_ip` is now held (state 2), not deleted.
+        other = dhcp4.Client()
+        xid = other._xid()
+        req = other.request(xid, requested_ip=st["expiry_ip"], server_id=DHCP_IP)
+        reply, reply_opts = dhcp4.exchange(req, V4_BROADCAST, xid, ("0.0.0.0", 68))
+        assert reply_opts.get("message-type") == dhcp4.NAK, \
+            f"a different mac was able to claim {st['expiry_ip']} while it should still be in its hold window: {reply_opts}"
+
+        # The original owner reclaiming the exact same address during the
+        # hold window is exactly what the hold exists for.
+        owner = dhcp4.Client(mac=st["expiry_mac"])
+        xid2 = owner._xid()
+        req2 = owner.request(xid2, requested_ip=st["expiry_ip"], server_id=DHCP_IP)
+        reply2, reply2_opts = dhcp4.exchange(req2, V4_BROADCAST, xid2, ("0.0.0.0", 68))
+        assert reply2_opts.get("message-type") == dhcp4.ACK, \
+            f"the original owner could not reclaim {st['expiry_ip']} during its own hold window: {reply2_opts}"
+        assert reply2.yiaddr == st["expiry_ip"]
+
     check("expired_lease_is_swept_and_ddns_record_removed", t_expired_lease_is_swept_and_ddns_record_removed)
+    check("expired_lease_is_held_before_a_different_client_can_reuse_it",
+          t_expired_lease_is_held_before_a_different_client_can_reuse_it)
 
 
 PHASES = {

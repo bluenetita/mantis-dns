@@ -70,11 +70,13 @@ async fn main() -> anyhow::Result<()> {
         let http = reqwest::Client::new();
         let interval_s = cfg.lease_sweep_interval_s;
         let probation_s = cfg.decline_probation_s;
+        let hold_s = cfg.expired_hold_s;
+        let batch_limit = cfg.reclaim_batch_limit;
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_s));
             loop {
                 ticker.tick().await;
-                match db::sweep_expired(&pool, probation_s).await {
+                match db::sweep_expired(&pool, probation_s, hold_s, batch_limit).await {
                     Ok(expired) if !expired.is_empty() => {
                         tracing::debug!("swept {} expired/reclaimed lease(s)", expired.len());
                         let snap = snapshot.load();
@@ -206,13 +208,14 @@ async fn main() -> anyhow::Result<()> {
     // Each dedicated socket gets its own background task; the wildcard
     // socket (relayed traffic, and scopes with no `interface` set) runs in
     // the foreground below and keeps the process alive.
+    let max_inflight = cfg.max_inflight_packets;
     for (socket, iface) in interface_sockets {
         let srv = srv.clone();
-        tokio::spawn(async move { socket_loop(socket, srv, Some(iface)).await });
+        tokio::spawn(async move { socket_loop(Arc::new(socket), srv, Some(iface), max_inflight).await });
     }
 
     let wildcard = bind_socket(&cfg.bind_addr)?;
-    socket_loop(wildcard, srv, None).await;
+    socket_loop(Arc::new(wildcard), srv, None, max_inflight).await;
     Ok(())
 }
 
@@ -263,9 +266,44 @@ fn distinct_interfaces(scopes: &[db::Scope]) -> Vec<String> {
         .collect()
 }
 
-async fn socket_loop(socket: UdpSocket, srv: server::Server, recv_interface: Option<String>) {
+/// One task per received packet, gated by a `max_inflight`-permit semaphore,
+/// rather than awaiting `Server::handle` inline in this loop. Two problems
+/// that shape stems from:
+///
+/// - **Throughput.** `handle` does at least one Postgres round-trip; awaited
+///   inline, a single slow query stalls every other client's DORA exchange
+///   on this socket, DHCP-request-storm-at-boot being exactly the moment
+///   that hurts most.
+/// - **Fault isolation.** Tokio catches a panic at each spawned task's
+///   boundary — the panic doesn't propagate to this loop or to any other
+///   in-flight packet's task, only to the one packet that triggered it. Above
+///   this loop is the only place per-packet work was ever awaited directly,
+///   so it was also the only place a single malformed/unlucky packet could
+///   permanently end this socket's service with no crash, no restart, and no
+///   signal beyond a log line — see `dhcp_handler_panics_total` in
+///   metrics.rs. Spawning turns that into an isolated, counted event.
+///
+/// The semaphore permit is acquired *before* spawning (not inside the spawned
+/// task), so once `max_inflight` tasks are outstanding, this loop itself
+/// stops accepting new packets from the socket until one finishes — natural
+/// backpressure, rather than spawning without bound under a flood.
+async fn socket_loop(socket: Arc<UdpSocket>, srv: server::Server, recv_interface: Option<String>, max_inflight: usize) {
     let mut buf = [0u8; 1500];
+    let permits = Arc::new(tokio::sync::Semaphore::new(max_inflight));
+    let mut tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
     loop {
+        // Non-blocking drain of finished handler tasks, so a panic is
+        // observed (logged + counted) promptly rather than only when this
+        // JoinSet is finally dropped at process shutdown.
+        while let Some(res) = tasks.try_join_next() {
+            if let Err(e) = res {
+                if e.is_panic() {
+                    tracing::error!("DHCP packet handler panicked (isolated to this packet): {e}");
+                    srv.metrics.record_handler_panic();
+                }
+            }
+        }
+
         let (n, src) = match socket.recv_from(&mut buf).await {
             Ok(v) => v,
             Err(e) => {
@@ -273,26 +311,107 @@ async fn socket_loop(socket: UdpSocket, srv: server::Server, recv_interface: Opt
                 continue;
             }
         };
-        let msg = match dhcproto::v4::Message::decode(&mut Decoder::new(&buf[..n])) {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::debug!("dropping malformed packet from {src}: {e}");
+
+        let permit = match permits.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                tracing::debug!("max in-flight DHCP packets ({max_inflight}) reached, dropping packet from {src}");
+                srv.metrics.record_queue_drop();
                 continue;
             }
         };
-        if msg.opcode() != dhcproto::v4::Opcode::BootRequest {
-            continue;
-        }
 
-        if let Some(reply) = srv.handle(&msg, recv_interface.as_deref()).await {
-            let mut out = Vec::with_capacity(300);
-            if let Err(e) = reply.message.encode(&mut Encoder::new(&mut out)) {
-                tracing::warn!("failed to encode reply: {e}");
-                continue;
+        // Decoding is deliberately *inside* the spawned task, not above this
+        // permit acquisition — `Message::decode` is untrusted-input parsing
+        // in a third-party crate, and a cargo-fuzz run against it found a
+        // real, reproducible panic (an internal assertion in dhcproto's own
+        // option parser) within seconds, triggerable by a single crafted
+        // UDP packet from anywhere on the network, no auth needed (design.md
+        // §26 R8). Decoding above this line, in the recv loop itself, would
+        // put that panic outside the per-task isolation the rest of this
+        // loop relies on — it would unwind through `socket_loop`'s own task
+        // instead of a spawned one, which for the wildcard socket *is* this
+        // process's main task. Moving decode inside the spawned task means
+        // the exact same isolation and `dhcp_handler_panics_total` counting
+        // that covers `Server::handle` also covers decode.
+        let packet = buf[..n].to_vec();
+        let srv = srv.clone();
+        let socket = socket.clone();
+        let recv_interface = recv_interface.clone();
+        tasks.spawn(async move {
+            let _permit = permit;
+            let msg = match dhcproto::v4::Message::decode(&mut Decoder::new(&packet)) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::debug!("dropping malformed packet from {src}: {e}");
+                    return;
+                }
+            };
+            if msg.opcode() != dhcproto::v4::Opcode::BootRequest {
+                return;
             }
-            if let Err(e) = socket.send_to(&out, reply.dest).await {
-                tracing::warn!("failed to send reply to {}: {e}", reply.dest);
+            if let Some(reply) = srv.handle(&msg, recv_interface.as_deref()).await {
+                let mut out = Vec::with_capacity(300);
+                if let Err(e) = reply.message.encode(&mut Encoder::new(&mut out)) {
+                    tracing::warn!("failed to encode reply: {e}");
+                    return;
+                }
+                let client_max = match msg.opts().get(dhcproto::v4::OptionCode::MaxMessageSize) {
+                    Some(dhcproto::v4::DhcpOption::MaxMessageSize(n)) => Some(*n),
+                    _ => None,
+                };
+                warn_if_reply_oversized(out.len(), client_max, reply.dest);
+                if let Err(e) = socket.send_to(&out, reply.dest).await {
+                    tracing::warn!("failed to send reply to {}: {e}", reply.dest);
+                }
             }
+        });
+    }
+}
+
+/// This daemon never sets option 52 (Overload) or truncates anything to fit
+/// — the well-known option set `options::build` assembles is small (subnet
+/// mask, router, DNS, domain name, three lease timers, server id), and PXE
+/// fields (`siaddr`, `file`/boot filename) are fixed BOOTP header fields,
+/// not variable options, so they don't compete for the same space. The one
+/// way a reply from this daemon gets large is an operator's own
+/// `dhcp_options` custom rows (`options::apply_custom`) — unbounded in
+/// count/size by design (design.md §22, "arbitrary option-code passthrough")
+/// — or an unusually long `domain_name`. Neither is truncated or rejected
+/// here; this only logs, so a misconfiguration shows up as a warning instead
+/// of a silently-dropped reply on an embedded/PXE client whose stack can't
+/// handle a large UDP payload.
+///
+/// Compared against the client's own declared limit (option 57, Maximum
+/// DHCP Message Size) when present, since that's the authoritative bound;
+/// otherwise against 576 bytes, the historical BOOTP/DHCP "every
+/// implementation must support at least this much" floor (RFC 1122's
+/// minimum IP reassembly buffer size, which RFC 2131 inherits) — a
+/// conservative default given plenty of real embedded clients still assume
+/// it.
+/// The classic BOOTP/DHCP safety floor (RFC 1122's minimum IP reassembly
+/// buffer size, inherited by RFC 2131) — used only when the client didn't
+/// declare its own limit via option 57.
+const LEGACY_SAFE_REPLY_SIZE: usize = 576;
+
+fn safe_reply_size_limit(client_max: Option<u16>) -> usize {
+    client_max.map(usize::from).unwrap_or(LEGACY_SAFE_REPLY_SIZE)
+}
+
+fn warn_if_reply_oversized(size: usize, client_max: Option<u16>, dest: std::net::SocketAddr) {
+    let limit = safe_reply_size_limit(client_max);
+    if size > limit {
+        match client_max {
+            Some(declared) => tracing::warn!(
+                "reply to {dest} is {size} bytes, over the {declared}-byte maximum that client itself declared \
+                 (option 57) -- it may truncate or silently drop this reply; check for oversized custom \
+                 dhcp_options or an unusually long domain_name on this scope"
+            ),
+            None => tracing::warn!(
+                "reply to {dest} is {size} bytes, over the classic {limit}-byte DHCP/BOOTP safety floor -- \
+                 some embedded/PXE clients silently drop or truncate replies this large; check for oversized \
+                 custom dhcp_options or an unusually long domain_name on this scope"
+            ),
         }
     }
 }
@@ -374,5 +493,55 @@ mod tests {
     fn distinct_interfaces_empty_when_no_scope_has_one() {
         let scopes = vec![scope_with_interface(None)];
         assert!(distinct_interfaces(&scopes).is_empty());
+    }
+
+    #[test]
+    fn safe_reply_size_limit_falls_back_to_the_legacy_floor_when_client_declared_nothing() {
+        assert_eq!(safe_reply_size_limit(None), LEGACY_SAFE_REPLY_SIZE);
+    }
+
+    #[test]
+    fn safe_reply_size_limit_honors_a_smaller_client_declared_max() {
+        assert_eq!(safe_reply_size_limit(Some(300)), 300);
+    }
+
+    #[test]
+    fn safe_reply_size_limit_honors_a_larger_client_declared_max() {
+        assert_eq!(safe_reply_size_limit(Some(1500)), 1500);
+    }
+
+    /// `socket_loop` can't be exercised directly here (it needs a real socket
+    /// and a `Server` backed by a real `PgPool`), but its panic-isolation
+    /// claim rests entirely on three primitives — a `Semaphore` permit held
+    /// by the spawned task, a `JoinSet` the loop drains non-blockingly, and
+    /// `JoinError::is_panic()` — used in exactly this combination. This
+    /// exercises that combination directly: one task panics, one succeeds;
+    /// both must be observable, and the panicking task's permit must still
+    /// be released rather than leaking a concurrency slot forever.
+    #[tokio::test]
+    async fn joinset_isolates_a_panicking_task_and_still_releases_its_permit() {
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let mut tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+
+        let permit = permits.clone().try_acquire_owned().expect("first permit available");
+        tasks.spawn(async move {
+            let _permit = permit;
+            panic!("simulated handler panic");
+        });
+
+        let result = tasks.join_next().await.expect("the panicking task completes");
+        assert!(result.unwrap_err().is_panic(), "a panicking spawned task must surface as JoinError::is_panic()");
+
+        // The panic must not have poisoned the semaphore or leaked the
+        // permit — a second task should be able to acquire it immediately.
+        let permit2 = permits
+            .clone()
+            .try_acquire_owned()
+            .expect("permit must be available again after the panicking task dropped it");
+        tasks.spawn(async move {
+            let _permit = permit2;
+        });
+        let result2 = tasks.join_next().await.expect("the second task completes");
+        assert!(result2.is_ok(), "a well-behaved task after a panic must complete normally");
     }
 }

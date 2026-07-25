@@ -47,6 +47,17 @@ pub struct Counters {
     release: AtomicU64,
     decline: AtomicU64,
     inform: AtomicU64,
+    /// A spawned per-packet handler task panicked. Tokio isolates the panic
+    /// to that one task (the socket loop and every other in-flight packet
+    /// are unaffected — see `main.rs`'s `socket_loop`), but a silently
+    /// self-healing failure is still a failure an operator should be able to
+    /// see, not just infer from a gap in DORA counters.
+    handler_panics: AtomicU64,
+    /// A packet was dropped because `MANTIS_DHCP_MAX_INFLIGHT` concurrent
+    /// handlers were already running — the bounded-concurrency equivalent of
+    /// Kea's `packet-queue-size` overflow. Distinct from `handler_panics`:
+    /// this is deliberate backpressure under load, not a bug.
+    queue_drops: AtomicU64,
 }
 
 impl Counters {
@@ -63,6 +74,14 @@ impl Counters {
             _ => return,
         };
         counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_handler_panic(&self) {
+        self.handler_panics.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_queue_drop(&self) {
+        self.queue_drops.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -91,6 +110,8 @@ async fn handle(State(state): State<AppState>) -> String {
     push_counter(&mut out, "dhcp_release_total", "DHCPRELEASE packets received", c.release.load(Ordering::Relaxed));
     push_counter(&mut out, "dhcp_decline_total", "DHCPDECLINE packets received", c.decline.load(Ordering::Relaxed));
     push_counter(&mut out, "dhcp_inform_total", "DHCPINFORM packets received", c.inform.load(Ordering::Relaxed));
+    push_counter(&mut out, "dhcp_handler_panics_total", "Per-packet handler tasks that panicked (isolated, not fatal)", c.handler_panics.load(Ordering::Relaxed));
+    push_counter(&mut out, "dhcp_packet_queue_drops_total", "Packets dropped: MANTIS_DHCP_MAX_INFLIGHT concurrent handlers already running", c.queue_drops.load(Ordering::Relaxed));
 
     match crate::db::scope_utilization(&state.pool).await {
         Ok(rows) => {
@@ -108,6 +129,14 @@ async fn handle(State(state): State<AppState>) -> String {
                 out.push_str(&format!(
                     "dhcp_pool_declined{{scope_id=\"{}\",scope_name=\"{}\"}} {}\n",
                     escape(&r.scope_id), escape(&r.scope_name), r.declined
+                ));
+            }
+            out.push_str("# HELP dhcp_pool_held Expired leases still excluded from allocation during their hold window\n");
+            out.push_str("# TYPE dhcp_pool_held gauge\n");
+            for r in &rows {
+                out.push_str(&format!(
+                    "dhcp_pool_held{{scope_id=\"{}\",scope_name=\"{}\"}} {}\n",
+                    escape(&r.scope_id), escape(&r.scope_name), r.held
                 ));
             }
         }
@@ -156,6 +185,16 @@ mod tests {
         c.record(MessageType::Unknown(255));
         assert_eq!(c.discover.load(Ordering::Relaxed), 0);
         assert_eq!(c.ack.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn record_handler_panic_and_queue_drop_are_independent_counters() {
+        let c = Counters::default();
+        c.record_handler_panic();
+        c.record_handler_panic();
+        c.record_queue_drop();
+        assert_eq!(c.handler_panics.load(Ordering::Relaxed), 2);
+        assert_eq!(c.queue_drops.load(Ordering::Relaxed), 1);
     }
 
     #[test]

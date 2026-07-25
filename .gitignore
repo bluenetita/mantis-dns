@@ -2,6 +2,12 @@
 /target/
 **/target/
 
+# cargo-fuzz generated output (crash reproducers, discovered corpus) --
+# machine-specific and reproducible from the fuzz_targets/*.rs harnesses
+# themselves, which are the part worth committing.
+services/dhcp/mantis-dhcp/fuzz/corpus/
+services/dhcp/mantis-dhcp/fuzz/artifacts/
+
 # Python
 .venv/
 __pycache__/

@@ -61,11 +61,13 @@ async fn main() -> anyhow::Result<()> {
         let http = reqwest::Client::new();
         let interval_s = cfg.lease_sweep_interval_s;
         let probation_s = cfg.decline_probation_s;
+        let hold_s = cfg.expired_hold_s;
+        let batch_limit = cfg.reclaim_batch_limit;
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_s));
             loop {
                 ticker.tick().await;
-                match db6::sweep_expired6(&pool, probation_s).await {
+                match db6::sweep_expired6(&pool, probation_s, hold_s, batch_limit).await {
                     Ok(expired) if !expired.is_empty() => {
                         tracing::debug!("swept {} expired/reclaimed v6 lease(s)", expired.len());
                         let snap = snapshot.load();
@@ -152,13 +154,29 @@ async fn main() -> anyhow::Result<()> {
         ),
     }
 
-    socket_loop(socket, srv).await;
+    socket_loop(Arc::new(socket), srv, cfg.max_inflight_packets).await;
     Ok(())
 }
 
-async fn socket_loop(socket: UdpSocket, srv: server6::Server) {
+/// Per-packet spawned task, bounded by `max_inflight` — see v4's
+/// `main.rs::socket_loop` for the full reasoning (throughput: one slow
+/// Postgres call inside `handle_packet` must not stall every other client;
+/// fault isolation: a panic in one handler is contained to that task instead
+/// of silently ending this daemon's only socket loop forever).
+async fn socket_loop(socket: Arc<UdpSocket>, srv: server6::Server, max_inflight: usize) {
     let mut buf = [0u8; 1500];
+    let permits = Arc::new(tokio::sync::Semaphore::new(max_inflight));
+    let mut tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
     loop {
+        while let Some(res) = tasks.try_join_next() {
+            if let Err(e) = res {
+                if e.is_panic() {
+                    tracing::error!("DHCPv6 packet handler panicked (isolated to this packet): {e}");
+                    srv.metrics.record_handler_panic();
+                }
+            }
+        }
+
         let (n, src) = match socket.recv_from(&mut buf).await {
             Ok(v) => v,
             Err(e) => {
@@ -167,13 +185,28 @@ async fn socket_loop(socket: UdpSocket, srv: server6::Server) {
             }
         };
 
-        // No per-interface socket dispatch yet (see module docs) -- always
-        // the wildcard/`None` case in `db6::Snapshot6::find_scope_for_direct`.
-        if let Some(reply_bytes) = srv.handle_packet(&buf[..n], None).await {
-            if let Err(e) = socket.send_to(&reply_bytes, src).await {
-                tracing::warn!("failed to send v6 reply to {src}: {e}");
+        let permit = match permits.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                tracing::debug!("max in-flight DHCPv6 packets ({max_inflight}) reached, dropping packet from {src}");
+                srv.metrics.record_queue_drop();
+                continue;
             }
-        }
+        };
+
+        let packet = buf[..n].to_vec();
+        let srv = srv.clone();
+        let socket = socket.clone();
+        tasks.spawn(async move {
+            let _permit = permit;
+            // No per-interface socket dispatch yet (see module docs) -- always
+            // the wildcard/`None` case in `db6::Snapshot6::find_scope_for_direct`.
+            if let Some(reply_bytes) = srv.handle_packet(&packet, None).await {
+                if let Err(e) = socket.send_to(&reply_bytes, src).await {
+                    tracing::warn!("failed to send v6 reply to {src}: {e}");
+                }
+            }
+        });
     }
 }
 

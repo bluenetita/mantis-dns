@@ -75,6 +75,14 @@ const OPT_RELAY_MSG: u16 = 9;
 /// `Message` bytes, recording each relay hop's header (outermost/nearest-us
 /// first) along the way — see module docs for why this doesn't use
 /// dhcproto's `RelayMessage::decode` for this.
+///
+/// This hand-rolled byte-level parser (not dhcproto's own `Message::decode`)
+/// is exactly the part of the v6 wire path this codebase wrote itself and
+/// is responsible for hardening (design.md §26 R8) — it's fuzzed directly
+/// via a *copy* of this function in `fuzz/fuzz_targets/decode_v6.rs`, kept
+/// dependency-free there rather than made `pub` and pulled in through this
+/// crate (which would drag tokio/sqlx/reqwest into the fuzz binary for no
+/// reason, same reasoning as `mantis_dhcp::hostname()`'s doc comment).
 fn unwrap_relay(buf: &[u8]) -> Option<(&[u8], Vec<RelayHop>)> {
     let mut hops = Vec::new();
     let mut cur = buf;

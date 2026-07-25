@@ -1495,6 +1495,58 @@ Before an OFFER, mantis-dhcp can ICMP-echo the candidate address to catch a devi
 
 ---
 
+### 22.14 Deviation register — mantis-dhcp vs. Kea/ISC practice (verified 2026-07-25)
+
+§26 R8 raised a specific worry: replacing a 20-year-old, widely-deployed DHCP implementation (Kea) with a from-scratch one means inheriting none of its accumulated hardening against real-world edge cases, and every config knob in a mature server exists because a real deployment broke without it. This section is the result of actually checking — Kea's current security-advisory history and configuration reference, fetched 2026-07-25, not recalled from memory — against what mantis-dhcp actually does, item by item. Where a citation in an earlier informal review of this codebase turned out to be wrong (two CVE numbers were misremembered and don't correspond to real Kea advisories), it's corrected here rather than repeated.
+
+**Kea's own CVE history says the worry is justified, and current.** Eleven public advisories, [kb.isc.org/docs/all-kea-advisories](https://kb.isc.org/docs/all-kea-advisories):
+
+| CVE | Class | Released |
+|---|---|---|
+| CVE-2026-3608 | Stack overflow, unauthenticated remote crash, all four Kea daemons | 2026-03-25 |
+| CVE-2025-11232 | Invalid characters cause an assertion failure (crash) | 2025-10-29 |
+| CVE-2025-40779 | Crash from a specific client-option/subnet-selection interaction | 2025-08-27 |
+| CVE-2025-32803 / -32802 / -32801 | Local file-permission/path/hook-loading issues (info leak, local privesc) | 2025-05-28 |
+| CVE-2019-6474 | Malformed client request causes exit on restart | 2019-08-28 |
+| CVE-2019-6473 | Invalid hostname option terminates kea-dhcp4 | 2019-08-28 |
+| CVE-2019-6472 | Malformed DUID packet terminates kea-dhcp6 | 2019-08-28 |
+| CVE-2018-5739 | Memory leak exhausts resources | 2018-07-11 |
+| CVE-2015-8373 | Unexpected termination on a malformed packet | 2015-12-22 |
+
+**8 of 11 are crash/DoS from parsing attacker-controlled input** — the exact class this section is about — and the most recent one is four months old at the time of writing, in a project with a dedicated security team and over a decade of production hardening. This is direct, current evidence that "fuzz the parser, contain the panic" isn't defense against a hypothetical; it's defense against the single most common failure mode this entire protocol family has.
+
+**Fuzzing found three of them here in under a minute.** `services/dhcp/mantis-dhcp/fuzz/` (cargo-fuzz, added this pass) targets the exact two calls `main.rs`/`bin/mantis-dhcp6.rs` make on every unauthenticated UDP packet: `dhcproto::v4::Message::decode` and, for v6, this codebase's own hand-rolled `unwrap_relay` (`server6.rs`) feeding into `dhcproto::v6::Message::decode`. A ~20-second run against each found:
+
+| Where | Panic | Release-build impact |
+|---|---|---|
+| `dhcproto-0.15.0/src/v4/options.rs:706` | `debug_assert!(len == 3)` on `ClientNetworkInterface` (option 94) | Masked — `debug_assert!` compiles out under this workspace's release profile (`services/dhcp/Dockerfile:15` builds `--release`, and no `[profile.release]` override enables debug-assertions) |
+| `dhcproto-0.15.0/src/v4/options.rs:735` | `debug_assert!(len == 4)` on a different fixed-length option | Masked, same reason — a *second*, independent instance of the same pattern, suggesting more exist unfound |
+| `dhcproto-0.15.0/src/v6/options.rs:653` | `attempt to subtract with overflow` on an attacker-controlled length | Masked, and — checked, not assumed — its downstream consequence doesn't crash a release build either: the DHCP testbench (`testbench/dhcp`, `t_fuzzer_found_crash_is_contained_not_fatal6`) sends this exact input at a real `--release` build and the daemon answers a normal SOLICIT right afterward with `dhcp6_handler_panics_total` unmoved. An earlier draft of this row guessed the wrapped garbage length would "very likely" trip a second, non-maskable bounds-check panic; it doesn't, at least not here — corrected rather than left as an unverified guess |
+
+None of these are fixed in this codebase (they're in the `dhcproto` dependency, not our code) and none are reported upstream as part of this pass. What *is* fixed here is the reason it's survivable regardless of whether any given bug happens to be release-masked: `main.rs`'s decode call moved from the recv loop itself into the per-packet spawned task (§26 R7/R2, this pass) specifically because of this finding — decoding above the task-spawn boundary would mean a panic during parsing unwinds through the wildcard socket's own task, which for that socket *is* the process's main task. Tokio's per-task panic isolation (validated both by `main.rs`'s `joinset_isolates_a_panicking_task_and_still_releases_its_permit` unit test with a synthetic panic, and by the DHCP testbench's two `fuzzer_found_crash_is_contained_not_fatal[6]` checks sending these exact real crash inputs at a live `--release` daemon) doesn't care whether a panic came from `debug_assert!`, an overflow check, or a bounds check — it isolates the class, not the instance, which is what makes this the right fix even though none of the three specific bugs found here happen to fire in this project's actual release build.
+
+**Not wired into CI.** The harness exists and is proven to find real bugs quickly; it needs a nightly toolchain and (for the libFuzzer backend) a working `clang`, neither of which this project's stable-toolchain CI currently provisions. Running it here required a throwaway `rustlang/rust:nightly` container. Wiring a short (30–60s per target), bounded fuzz smoke-test into CI is the natural next step and is *not yet done* — tracked as an open item, not silently assumed complete.
+
+**Lease reclamation, against Kea's actual verified defaults** ([kea.readthedocs.io, Lease Expiration](https://kea.readthedocs.io/en/kea-2.2.0/arm/lease-expiration.html)):
+
+| Concept | Kea parameter, verified default | mantis-dhcp | Note |
+|---|---|---|---|
+| Grace period before an expired-but-recently-active lease's address is handed to a *different* client | `hold-reclaimed-time` = 3600s | `expired_hold_s` (`MANTIS_DHCP_EXPIRED_HOLD_S`) = 300s | Built this pass — previously immediate (§22.3 originally deleted an expired lease the instant `expires_at` passed, with no hold at all). 300s, not 3600s: covers a lost RENEW/REBIND retry (seconds to low minutes per RFC 2131 timers) without holding a small pool's addresses idle for an hour. The schema had already reserved state value 2 for exactly this ("expired-reclaimed", `models.py`'s `DhcpLease.state` comment) before this pass wired it up — see below. |
+| Rows processed per reclamation pass | `max-reclaim-leases` = 100 | `reclaim_batch_limit` (`MANTIS_DHCP_RECLAIM_BATCH_LIMIT`) = 1000 | Built this pass — previously unbounded (a single `DELETE` with no `LIMIT`, §26 R7). Not directly comparable 1:1: Kea's one number bounds one combined pass; mantis-dhcp applies the same bound independently to three steps (state 0→2 mark, state 1 probation-delete, state 2 hold-delete) via a `ctid IN (SELECT ... LIMIT n)` subquery each. |
+| Wall-clock cap per reclamation pass | `max-reclaim-time` = 250ms | 🚧 not built | Only row-count is bounded, not wall-clock time. A real gap: a batch of 1000 rows could still take longer than 250ms depending on I/O conditions. Flagged, not fixed this pass. |
+| Escalating warning if leases keep going unprocessed | `unwarned-reclaim-cycles` = 5 | 🚧 not built | Every sweep just logs at `debug`/`warn` per-event; no cycle-count escalation. Minor, noted for completeness. |
+| Grace period before a *declined* address is reused | `decline-probation-period` = 86400s | `decline_probation_s` (`MANTIS_DHCP_DECLINE_PROBATION_S`) = 86400s | Already matched before this pass; confirmed correct against the real default rather than assumed. |
+
+**Client identity: verified no bug, and mantis-dhcp is structurally safer than Kea's own default here.** Kea's `match-client-id` defaults to **`true`** — client-identifier (option 61) takes precedence over the MAC address unless an operator explicitly sets it to `false` ([search-verified, ISC docs](https://kb.isc.org/docs/understanding-client-classification) and Kea's `dhcp4-srv` reference). That default is exactly the configuration that produces the classic PXE bug: firmware and OS sending different option-61 values for the same physical machine get treated as two different clients, and split into two leases. Tracing every call site in `db.rs`/`server.rs` (this pass, task-scoped verification) confirms `client_id` is stored (`INSERT`/`UPDATE ... client_id = $n`) but never once appears in a `WHERE` clause or an identity comparison anywhere in this codebase — `mac_address` is the sole key for every allocation, renewal, and conflict decision. mantis-dhcp doesn't need an operator to know to flip a setting to avoid this bug; it never offers the riskier option in the first place. No code change — this was already correct, just unverified until now.
+
+**Option 82 (Relay Agent Information) is now echoed.** RFC 3046 §2.2: a server that acts on the option (mantis-dhcp does, for relay-based scope selection, §22.7) must echo it back verbatim in the reply — the relay uses the echoed sub-options to pick which downstream port to forward the reply out of, and strips the option before it reaches the client. Before this pass, `base_reply` built every OFFER/ACK/NAK/INFORM-ACK without it; a reply could be silently dropped by real relay hardware despite this daemon correctly consuming the option on the way in. Fixed in `server.rs::base_reply`, covering all four reply types uniformly since they all flow through it.
+
+**Option 57 (Maximum DHCP Message Size) / option 52 (Overload) — investigated, no equivalent gap found worth the same fix shape.** Neither was read or set anywhere before this pass. Unlike Kea's PXE-heavy deployments, this daemon's own well-known option set (`options::build`) is small — subnet mask, router, DNS, domain name, three lease timers, server id — and its PXE fields (`siaddr`, boot filename) are fixed BOOTP header fields, not variable options competing for the same space, so option 52 overload genuinely has little to do here. The real exposure is operator-added custom `dhcp_options` rows (`options::apply_custom`), unbounded in count/size by design. Rather than truncating or rejecting a configuration a human intentionally set (a much riskier behavioral change), `main.rs` now logs a warning (`warn_if_reply_oversized`) when an assembled reply exceeds the client's own declared option-57 limit, or the classic 576-byte BOOTP/DHCP floor when the client declared none — visibility for the misconfiguration case, not silent enforcement. v6 has no equivalent: RFC 8415 defines no client-max-message-size option, resting instead on IPv6's own 1280-byte minimum link MTU guarantee (RFC 8200) — nothing to replicate there.
+
+**Named owner.** This register exists so the deviations above don't have to be re-discovered from scratch next time someone asks "are we sure this is safe" — but a register is not a substitute for an actual owner. §26 R8's ask for a named owner for the CVE-monitoring/fuzzing process is still open.
+
+---
+
 ## 23. Fleet Observability — Per-Node Statistics
 
 > **🪓 Sequencing changed 2026-07-25 (§26.10).** This epic is correct and still

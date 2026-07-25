@@ -273,7 +273,7 @@ pub async fn allocate_na(
         // v4's `taken_or_reserved_addresses`) — a reservation is served via
         // `confirm_reservation_na`, never handed out here.
         let exists = sqlx::query(
-            "SELECT 1 FROM dhcp_leases6 WHERE scope_id = $1 AND ip_address = $2 AND lease_type = 0 AND state IN (0, 1)
+            "SELECT 1 FROM dhcp_leases6 WHERE scope_id = $1 AND ip_address = $2 AND lease_type = 0 AND state IN (0, 1, 2)
              UNION
              SELECT 1 FROM dhcp_static_leases6 WHERE scope_id = $1 AND ip_address = $2 AND enabled = true",
         )
@@ -316,7 +316,10 @@ pub async fn allocate_na(
 /// echoing an ADVERTISE's IAAddr, or a RENEW/REBIND/CONFIRM re-asserting a
 /// previously-held one). `Ok(false)` — caller should reply with
 /// `Status::NoBinding`/`NotOnLink` — if it's currently held by a *different*
-/// DUID.
+/// DUID; "held" includes state 2 (expired-but-in-hold, see `sweep_expired6`)
+/// so a different client can't grab it mid-hold, while the *same* DUID
+/// reclaiming its own address there still succeeds below — same reasoning
+/// as v4's `claim_specific`.
 pub async fn claim_specific_na(
     pool: &PgPool,
     scope: &Scope6,
@@ -334,7 +337,7 @@ pub async fn claim_specific_na(
         .await?;
 
     if let Some(row) = sqlx::query(
-        "SELECT duid FROM dhcp_leases6 WHERE scope_id = $1 AND ip_address = $2 AND lease_type = 0 AND state = 0",
+        "SELECT duid FROM dhcp_leases6 WHERE scope_id = $1 AND ip_address = $2 AND lease_type = 0 AND state IN (0, 2)",
     )
     .bind(&scope.id)
     .bind(ip.to_string())
@@ -484,8 +487,11 @@ pub async fn allocate_pd(
         .execute(&mut *tx)
         .await?;
 
+    // "held" includes state 2 (expired-but-in-hold) so a different DUID
+    // can't grab the one available prefix mid-hold — same reasoning as
+    // `claim_specific_na`.
     if let Some(row) = sqlx::query(
-        "SELECT duid FROM dhcp_leases6 WHERE scope_id = $1 AND ip_address = $2 AND lease_type = 2 AND state = 0",
+        "SELECT duid FROM dhcp_leases6 WHERE scope_id = $1 AND ip_address = $2 AND lease_type = 2 AND state IN (0, 2)",
     )
     .bind(&scope.id)
     .bind(&key)
@@ -538,22 +544,53 @@ pub struct ExpiredLease6 {
     pub hostname: Option<String>,
 }
 
-/// Expired leases (IA_NA and IA_PD alike, state 0) are deleted outright,
-/// same immediately-reusable rationale as v4's `sweep_expired`. IA_NA leases
-/// past their `decline_probation_s` (state 1) are reclaimed the same way too
-/// — see `sweep_expired`'s docs.
-pub async fn sweep_expired6(pool: &PgPool, decline_probation_s: i64) -> anyhow::Result<Vec<ExpiredLease6>> {
+/// Same three-step, bounded shape as v4's `sweep_expired` — see its docs for
+/// the full reasoning (design.md §26 R7). IA_NA and IA_PD leases share one
+/// table and one state machine here, so both move through state 2 the same
+/// way: an expired active lease (state 0) is held for `expired_hold_s`
+/// (state 2) before it's finally deleted, giving a DUID whose renewal was
+/// merely delayed a chance to reclaim the exact same address/prefix
+/// (`claim_specific_na`/`allocate_pd`) before a different DUID can take it.
+pub async fn sweep_expired6(
+    pool: &PgPool,
+    decline_probation_s: i64,
+    expired_hold_s: i64,
+    batch_limit: i64,
+) -> anyhow::Result<Vec<ExpiredLease6>> {
     let probation_cutoff = Utc::now() - chrono::Duration::seconds(decline_probation_s);
-    let rows = sqlx::query(
+    let hold_cutoff = Utc::now() - chrono::Duration::seconds(expired_hold_s);
+
+    let newly_expired = sqlx::query(
+        "UPDATE dhcp_leases6 SET state = 2
+         WHERE ctid IN (SELECT ctid FROM dhcp_leases6 WHERE state = 0 AND expires_at < now() LIMIT $1)
+         RETURNING scope_id, ip_address, duid, hostname",
+    )
+    .bind(batch_limit)
+    .fetch_all(pool)
+    .await?;
+
+    let declined_past_probation = sqlx::query(
         "DELETE FROM dhcp_leases6
-         WHERE (state = 0 AND expires_at < now())
-            OR (state = 1 AND allocated_at < $1)
+         WHERE ctid IN (SELECT ctid FROM dhcp_leases6 WHERE state = 1 AND allocated_at < $1 LIMIT $2)
          RETURNING scope_id, ip_address, duid, hostname",
     )
     .bind(probation_cutoff)
+    .bind(batch_limit)
     .fetch_all(pool)
     .await?;
-    rows.into_iter()
+
+    sqlx::query(
+        "DELETE FROM dhcp_leases6
+         WHERE ctid IN (SELECT ctid FROM dhcp_leases6 WHERE state = 2 AND expires_at < $1 LIMIT $2)",
+    )
+    .bind(hold_cutoff)
+    .bind(batch_limit)
+    .execute(pool)
+    .await?;
+
+    newly_expired
+        .into_iter()
+        .chain(declined_past_probation)
         .map(|row| {
             Ok(ExpiredLease6 {
                 scope_id: row.try_get("scope_id")?,
@@ -571,6 +608,9 @@ pub struct ScopeUtilization6 {
     pub assigned_na: i64,
     pub assigned_pd: i64,
     pub declined: i64,
+    /// See v4's `ScopeUtilization::held` — same purpose, covers both lease
+    /// types since they share one state machine here.
+    pub held: i64,
 }
 
 pub async fn scope_utilization6(pool: &PgPool) -> anyhow::Result<Vec<ScopeUtilization6>> {
@@ -578,7 +618,8 @@ pub async fn scope_utilization6(pool: &PgPool) -> anyhow::Result<Vec<ScopeUtiliz
         "SELECT s.id AS scope_id, s.name AS scope_name,
                 count(*) FILTER (WHERE l.state = 0 AND l.lease_type = 0) AS assigned_na,
                 count(*) FILTER (WHERE l.state = 0 AND l.lease_type = 2) AS assigned_pd,
-                count(*) FILTER (WHERE l.state = 1) AS declined
+                count(*) FILTER (WHERE l.state = 1) AS declined,
+                count(*) FILTER (WHERE l.state = 2) AS held
          FROM dhcp_scopes6 s
          LEFT JOIN dhcp_leases6 l ON l.scope_id = s.id
          WHERE s.enabled = true
@@ -594,6 +635,7 @@ pub async fn scope_utilization6(pool: &PgPool) -> anyhow::Result<Vec<ScopeUtiliz
                 assigned_na: row.try_get("assigned_na")?,
                 assigned_pd: row.try_get("assigned_pd")?,
                 declined: row.try_get("declined")?,
+                held: row.try_get("held")?,
             })
         })
         .collect()
@@ -961,8 +1003,12 @@ mod tests {
         // valid_s negative -> already-expired expires_at.
         allocate_na(&pool, &scope, &duid, None, -10, -10).await.unwrap();
         // Same race caveat as db.rs's `sweep_expired_deletes_only_expired_active_leases`
-        // -- assert DB post-state, not this call's own return value.
-        sweep_expired6(&pool, 86400).await.unwrap();
+        // -- assert DB post-state, not this call's own return value. hold_s
+        // must not be small/zero for the same reason as v4's equivalent
+        // test: sweep_expired6 is unscoped across the whole table, so a
+        // small hold_s here would delete every concurrently-running test's
+        // held (state 2) leases regardless of which scope they belong to.
+        sweep_expired6(&pool, 86400, 300, 1000).await.unwrap();
         assert!(active_lease_na(&pool, &scope.id, &duid).await.is_none());
     }
 
@@ -975,8 +1021,10 @@ mod tests {
         assert!(claim_specific_na(&pool, &scope, ip, &duid, None, 3000, 4000).await.unwrap());
         assert!(decline_na(&pool, &scope.id, ip, &duid).await.unwrap());
 
-        let swept = sweep_expired6(&pool, 86400).await.unwrap();
-        assert!(swept.iter().all(|l| l.ip != ip), "a freshly-declined lease must not be reclaimed early");
+        // sweep_expired6 is unscoped across the whole table -- scope_id must
+        // be checked alongside ip, same reasoning as v4's equivalent test.
+        let swept = sweep_expired6(&pool, 86400, 300, 1000).await.unwrap();
+        assert!(swept.iter().all(|l| !(l.scope_id == scope.id && l.ip == ip)), "a freshly-declined lease must not be reclaimed early");
 
         sqlx::query("UPDATE dhcp_leases6 SET allocated_at = now() - interval '2 hours' WHERE scope_id = $1 AND ip_address = $2")
             .bind(&scope.id)
@@ -985,8 +1033,41 @@ mod tests {
             .await
             .unwrap();
 
-        let swept = sweep_expired6(&pool, 3600).await.unwrap();
-        assert!(swept.iter().any(|l| l.ip == ip), "a declined lease past its probation window must be reclaimed");
+        let swept = sweep_expired6(&pool, 3600, 300, 1000).await.unwrap();
+        assert!(swept.iter().any(|l| l.scope_id == scope.id && l.ip == ip), "a declined lease past its probation window must be reclaimed");
+    }
+
+    #[tokio::test]
+    async fn sweep_expired6_holds_an_expired_na_lease_from_a_different_duid_but_lets_the_owner_reclaim_it() {
+        let pool = test_pool().await;
+        let scope = make_scope6(&pool, false).await;
+        let owner = fresh_duid();
+        let ip = scope.pool_start;
+        assert!(claim_specific_na(&pool, &scope, ip, &owner, None, -20, -10).await.unwrap());
+
+        // Long hold window: transitions to state 2 but must not delete yet.
+        // Same DB-post-state pattern as v4's equivalent test -- sweep_expired6
+        // is unscoped, so a concurrent test's own sweep call could otherwise
+        // process this row first.
+        sweep_expired6(&pool, 86400, 3600, 1000).await.unwrap();
+        let state: i32 = sqlx::query_scalar("SELECT state FROM dhcp_leases6 WHERE scope_id = $1 AND ip_address = $2")
+            .bind(&scope.id)
+            .bind(ip.to_string())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(state, 2, "an expired active IA_NA lease must move to the held state, not vanish or stay active");
+
+        let other = fresh_duid();
+        assert!(
+            !claim_specific_na(&pool, &scope, ip, &other, None, 3000, 4000).await.unwrap(),
+            "a different DUID must not be able to claim an IA_NA address still inside its expired-hold window"
+        );
+        assert!(
+            claim_specific_na(&pool, &scope, ip, &owner, None, 3000, 4000).await.unwrap(),
+            "the original DUID must be able to reclaim its own address during the hold window"
+        );
+        assert_eq!(active_lease_na(&pool, &scope.id, &owner).await, Some(ip));
     }
 
     #[tokio::test]

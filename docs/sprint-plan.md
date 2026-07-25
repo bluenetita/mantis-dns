@@ -356,6 +356,22 @@ architecture review found risks that any feature built on top of them would
 inherit, foremost among them: no benchmark exists for the DNS hot path, so
 Epic O's own exit criteria (below) had nothing to check against.
 
+### R8 hardening (mantis-dhcp) — done, out of sequence (**completed 2026-07-25**)
+
+R8 (owning a DHCP implementation from scratch means inheriting none of Kea's
+accumulated hardening) was reasoned about in the review but never given its
+own sprint slot below — Sprints 23–25 are scoped to the DNS filter node, a
+different subsystem. This work happened anyway, ahead of and independent of
+the sequence below. Full detail, and the real Kea CVE history / config
+defaults it's checked against: **design.md §22.14**.
+
+- [x] **Option 82 echoed in every reply** (`server.rs::base_reply`) — RFC 3046 §2.2; previously consumed on the way in but never echoed back, which real relay hardware can silently drop the reply for.
+- [x] **Panic isolation + bounded concurrency**: every packet handled in its own spawned task, gated by a `MANTIS_DHCP_MAX_INFLIGHT`/`MANTIS_DHCP6_MAX_INFLIGHT` semaphore (default 512) and drained via a `JoinSet`, with a `dhcp_handler_panics_total`/`dhcp_packet_queue_drops_total` counter pair. Decoding itself moved *inside* the spawned task after cargo-fuzz found a real crash in the recv loop's own decode call — see next item.
+- [x] **cargo-fuzz harness** (`services/dhcp/mantis-dhcp/fuzz/`, two targets: v4 `Message::decode`, v6 `unwrap_relay` + `Message::decode`) — found **3 real crash sites in `dhcproto` in under a minute of combined fuzzing** (two `debug_assert!` failures in v4's option parser, one integer-underflow in v6's; the first two are masked by this project's release profile, the third's downstream consequence plausibly isn't). Not fixed upstream (third-party crate); contained here by the panic-isolation item above. 🚧 **Not wired into CI** — needs a nightly toolchain + clang this project's CI doesn't currently provision; tracked as still open.
+- [x] **Bounded, two-stage lease reclaim** (`sweep_expired`/`sweep_expired6`): an expired lease moves to a hold state (schema value 2, "expired-reclaimed" — already named in `models.py`'s docstring, never wired up before now) for `MANTIS_DHCP_EXPIRED_HOLD_S` (default 300s) before physical deletion, protecting a lost-renewal retry from losing its address to a different client; both the mark and the delete steps are batch-limited (`MANTIS_DHCP_RECLAIM_BATCH_LIMIT`, default 1000) instead of one unbounded `DELETE`. 🚧 **No wall-clock cap per pass** (Kea's `max-reclaim-time`) — only row-count is bounded; flagged, not built.
+- [x] **Client identity verified safe**: traced every use of `client_id` in `db.rs`/`server.rs` — it's stored but never used in a `WHERE` clause or identity comparison anywhere; `mac_address` is the sole key. Rules out the classic PXE dual-identity bug by construction. No code change; this was already correct.
+- [x] **Option 57/52 investigated**: neither was handled; added a log-only warning (`warn_if_reply_oversized`) when a reply exceeds the client's declared option-57 max (or the 576-byte legacy floor) — visibility for an operator's own oversized custom `dhcp_options`, not enforcement/truncation. v6 has no equivalent option to honor (RFC 8415 defines none, relying on IPv6's 1280-byte MTU floor instead).
+
 ### Sprint 23 — Perf floor (**not started**)
 
 - [ ] **Bench harness + recorded p99 baseline**, on the actual query path (cache hit, cache miss + upstream, blocked). No `benches/` directory exists today and the "Sprint 4 baseline" every regression-gate reference in this document points to was never recorded (design.md §26 R7) — this sprint is what makes every prior "10% p99 gate" claim in this document real instead of aspirational.

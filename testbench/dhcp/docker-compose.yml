@@ -81,6 +81,18 @@ services:
       - MANTIS_INTERNAL_TOKEN=test-internal-token
       - MANTIS_DHCP_SERVER_IP=172.30.0.10
       - MANTIS_DHCP_METRICS_BIND_ADDR=0.0.0.0:9100
+      # 3600s -- Kea's own real `hold-reclaimed-time` default (design.md
+      # §22.14), not this daemon's 300s default. Deliberately long: the
+      # `expiry` phase's lease is created back in `core`, and everything
+      # between them (v6/ha/ddns-trigger/ddns-verify, several polls each up
+      # to 15-120s) eats an amount of wall-clock time this compose file has
+      # no way to bound in advance. A short hold would turn "still correctly
+      # held" into a race against "already reclaimed by someone else" purely
+      # from how long earlier phases happened to take. Eventual full reclaim
+      # once the hold *does* elapse is already exhaustively covered by
+      # db.rs's own unit tests with deterministic timestamps -- not
+      # re-verified at the wire level here.
+      - MANTIS_DHCP_EXPIRED_HOLD_S=3600
     depends_on:
       postgres:
         condition: service_healthy
