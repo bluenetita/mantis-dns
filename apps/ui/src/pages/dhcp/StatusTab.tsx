@@ -17,13 +17,7 @@
 
 import { Badge, Card, Group, Loader, Progress, Stack, Table, Text, Title } from "@mantine/core";
 import { useDhcpHealth, useDhcpStats } from "../../api/hooks";
-
-function timeAgo(iso: string): string {
-  const seconds = Math.max(0, Math.round((Date.now() - new Date(`${iso}Z`).getTime()) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
-  return `${Math.round(seconds / 3600)}h ago`;
-}
+import { formatRelativeTime } from "../../format";
 
 export function StatusTab() {
   const { data: stats = [], isLoading: statsLoading } = useDhcpStats();
@@ -56,8 +50,8 @@ export function StatusTab() {
                 <Table.Tr key={i.instance_id}>
                   <Table.Td>DHCPv{i.family}</Table.Td>
                   <Table.Td>{i.hostname ?? <Text c="dimmed" size="xs">unknown</Text>}</Table.Td>
-                  <Table.Td>{timeAgo(i.started_at)}</Table.Td>
-                  <Table.Td>{timeAgo(i.last_seen_at)}</Table.Td>
+                  <Table.Td>{formatRelativeTime(i.started_at)}</Table.Td>
+                  <Table.Td>{formatRelativeTime(i.last_seen_at)}</Table.Td>
                   <Table.Td>
                     {i.stale
                       ? <Badge size="xs" color="red">Not responding</Badge>

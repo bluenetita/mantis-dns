@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { Alert, Button, Code, Stack, Text } from "@mantine/core";
+import { Alert, Anchor, Button, Code, Group, Stack, Text } from "@mantine/core";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
@@ -25,20 +25,21 @@ interface Props {
 
 interface State {
   error: Error | null;
+  showDetails: boolean;
 }
 
 /**
  * Without this, any render-time exception anywhere in the tree unmounts the
  * entire app to a blank screen with no indication of what happened — the
- * exact failure mode reported against the "add custom feed" modal. Scoping
- * this at the route level (see App.tsx) means one broken view doesn't take
- * down the whole shell, and the actual error is visible without devtools.
+ * exact failure mode reported against the "add custom feed" modal. Mounted
+ * inside Shell around the route <Outlet/>, so one broken view doesn't take
+ * the nav and header down with it.
  */
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null };
+  state: State = { error: null, showDetails: false };
 
   static getDerivedStateFromError(error: Error): State {
-    return { error };
+    return { error, showDetails: false };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
@@ -52,13 +53,22 @@ export class ErrorBoundary extends Component<Props, State> {
           <Stack gap="xs">
             <Text size="sm">{this.state.error.message}</Text>
             {this.state.error.stack && (
-              <Code block style={{ whiteSpace: "pre-wrap", fontSize: 11 }}>
-                {this.state.error.stack}
-              </Code>
+              <>
+                <Anchor size="xs" onClick={() => this.setState((s) => ({ showDetails: !s.showDetails }))}>
+                  {this.state.showDetails ? "Hide" : "Show"} technical details
+                </Anchor>
+                {this.state.showDetails && (
+                  <Code block style={{ whiteSpace: "pre-wrap", fontSize: 11 }}>
+                    {this.state.error.stack}
+                  </Code>
+                )}
+              </>
             )}
-            <Button size="xs" variant="light" onClick={() => this.setState({ error: null })}>
-              Try again
-            </Button>
+            <Group gap="xs">
+              <Button size="xs" variant="light" onClick={() => this.setState({ error: null })}>
+                Try again
+              </Button>
+            </Group>
           </Stack>
         </Alert>
       );

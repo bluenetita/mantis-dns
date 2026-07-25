@@ -17,6 +17,7 @@
 
 import {
   ActionIcon,
+  Anchor,
   Badge,
   Button,
   Center,
@@ -47,7 +48,7 @@ import {
   IconTrash,
 } from "@tabler/icons-react";
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   useCreateZone,
   useDeleteZone,
@@ -57,6 +58,9 @@ import {
 } from "../api/hooks";
 import type { components } from "../api/schema";
 import { useAuth } from "../auth/AuthContext";
+import { formatError } from "../api/errors";
+import { KpiCard } from "../components/KpiCard";
+import { useUrlFilters } from "../hooks/useUrlFilters";
 
 type Zone = components["schemas"]["ZoneOut"];
 
@@ -75,18 +79,6 @@ function typeMeta(t: string) {
 function zoneStatus(z: Zone): { color: string; label: string } {
   if (!z.enabled) return { color: "gray", label: "Disabled" };
   return { color: "green", label: "Active" };
-}
-
-// ─── KPI card ────────────────────────────────────────────────────────────────
-
-function KpiCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
-  return (
-    <Stack gap={2} style={{ borderLeft: "3px solid var(--mantine-color-blue-5)", paddingLeft: 12 }}>
-      <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: "0.05em" }}>{label}</Text>
-      <Text size="xl" fw={700} lh={1}>{value}</Text>
-      {sub && <Text size="xs" c="dimmed">{sub}</Text>}
-    </Stack>
-  );
 }
 
 // ─── Add Zone modal ───────────────────────────────────────────────────────────
@@ -138,7 +130,7 @@ function AddZoneModal({ opened, onClose }: { opened: boolean; onClose: () => voi
                 notifications.show({ message: `Zone "${values.name}" created`, color: "green" });
                 handleClose();
               },
-              onError: (e) => notifications.show({ message: String(e), color: "red" }),
+              onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
             }
           )
         )}
@@ -240,7 +232,7 @@ function EditZoneModal({ zone, onClose }: { zone: Zone | null; onClose: () => vo
                 notifications.show({ message: `Zone "${zone.name}" updated`, color: "green" });
                 handleClose();
               },
-              onError: (e) => notifications.show({ message: String(e), color: "red" }),
+              onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
             }
           )
         )}
@@ -276,20 +268,20 @@ export function ZonesPage() {
   const navigate = useNavigate();
   const [addOpened, { open: openAdd, close: closeAdd }] = useDisclosure(false);
   const [editZone, setEditZone] = useState<Zone | null>(null);
-  const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  // Filters live in the URL so a filtered view is shareable and survives reload.
+  const [filters, setFilters] = useUrlFilters({ search: "", type: "", status: "" });
   const { hasRole } = useAuth();
   const canWrite = hasRole("operator");
 
   const sorted = [...zones].sort((a, b) => a.name.localeCompare(b.name));
 
   const visible = sorted.filter((z) => {
+    const search = filters.search;
     if (search && !z.name.toLowerCase().includes(search.toLowerCase()) &&
         !(z.description ?? "").toLowerCase().includes(search.toLowerCase())) return false;
-    if (typeFilter && z.zone_type !== typeFilter) return false;
-    if (statusFilter === "active" && !z.enabled) return false;
-    if (statusFilter === "disabled" && z.enabled) return false;
+    if (filters.type && z.zone_type !== filters.type) return false;
+    if (filters.status === "active" && !z.enabled) return false;
+    if (filters.status === "disabled" && z.enabled) return false;
     return true;
   });
 
@@ -314,7 +306,7 @@ export function ZonesPage() {
       onConfirm: () =>
         deleteZone.mutate(z.id, {
           onSuccess: () => notifications.show({ message: `Zone "${z.name}" deleted`, color: "green" }),
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }),
     });
   }
@@ -351,16 +343,16 @@ export function ZonesPage() {
         <TextInput
           placeholder="Search by name or description…"
           leftSection={<IconSearch size={14} />}
-          value={search}
-          onChange={(e) => setSearch(e.currentTarget.value)}
+          value={filters.search}
+          onChange={(e) => setFilters({ search: e.currentTarget.value })}
           style={{ flex: 1, maxWidth: 360 }}
         />
         <Select
           placeholder="All types"
           clearable
           data={typeOptions}
-          value={typeFilter}
-          onChange={(v) => setTypeFilter(v ?? "")}
+          value={filters.type || null}
+          onChange={(v) => setFilters({ type: v ?? "" })}
           style={{ width: 180 }}
         />
         <Select
@@ -370,13 +362,14 @@ export function ZonesPage() {
             { value: "active", label: "Active" },
             { value: "disabled", label: "Disabled" },
           ]}
-          value={statusFilter}
-          onChange={(v) => setStatusFilter(v ?? "")}
+          value={filters.status || null}
+          onChange={(v) => setFilters({ status: v ?? "" })}
           style={{ width: 150 }}
         />
       </Group>
 
       {/* Table */}
+      <Table.ScrollContainer minWidth={640}>
       <Table striped highlightOnHover withTableBorder withColumnBorders>
         <Table.Thead>
           <Table.Tr>
@@ -407,13 +400,15 @@ export function ZonesPage() {
                 <Table.Td>
                   <Stack gap={2}>
                     <Group gap={6} wrap="nowrap">
-                      <Text
+                      <Anchor
+                        component={Link}
+                        to={`/zones/${z.id}`}
                         size="sm" fw={600} ff="monospace"
-                        style={{ cursor: "pointer", textDecoration: "underline dotted" }}
-                        onClick={() => navigate(`/zones/${z.id}`)}
+                        underline="always"
+                        c="inherit"
                       >
                         {z.name}
-                      </Text>
+                      </Anchor>
                       <ActionIcon
                         size="xs" variant="subtle" color="gray"
                         onClick={() => navigate(`/zones/${z.id}`)}
@@ -491,6 +486,7 @@ export function ZonesPage() {
           })}
         </Table.Tbody>
       </Table>
+      </Table.ScrollContainer>
 
       {visible.length > 0 && (
         <Text size="xs" c="dimmed" ta="right">{visible.length} of {zones.length} zones</Text>

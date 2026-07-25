@@ -15,39 +15,24 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { Card, Center, Group, Loader, Text } from "@mantine/core";
-import type React from "react";
+/**
+ * api/client.ts sits outside the React tree and can't call useNavigate, so a
+ * 401 can't redirect in-app directly. It notifies this listener instead;
+ * AuthContext clears its user, and RequireAuth's existing
+ * `<Navigate state={{ from: location.pathname }}>` takes it from there —
+ * same in-app redirect a plain expired-session render already gets, instead
+ * of a window.location.assign() that reloads the page and drops the route
+ * the user was on.
+ */
+let listener: (() => void) | null = null;
 
-export { KpiCard } from "../../../components/KpiCard";
+export function onSessionExpired(cb: () => void): () => void {
+  listener = cb;
+  return () => {
+    if (listener === cb) listener = null;
+  };
+}
 
-export function WidgetCard({
-  title,
-  rightSection,
-  children,
-  loading,
-  minH,
-}: {
-  title: string;
-  rightSection?: React.ReactNode;
-  children: React.ReactNode;
-  loading?: boolean;
-  minH?: number;
-}) {
-  return (
-    <Card withBorder h="100%" style={minH ? { minHeight: minH } : undefined}>
-      <Group justify="space-between" mb="sm">
-        <Text fw={500} size="sm">
-          {title}
-        </Text>
-        {rightSection}
-      </Group>
-      {loading ? (
-        <Center py="xl">
-          <Loader size="sm" />
-        </Center>
-      ) : (
-        children
-      )}
-    </Card>
-  );
+export function notifySessionExpired(): void {
+  listener?.();
 }

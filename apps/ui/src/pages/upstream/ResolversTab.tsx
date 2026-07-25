@@ -47,6 +47,7 @@ import {
 } from "../../api/hooks";
 import { CrudTable, EntityModal, type CrudColumn } from "../../components/crud";
 import { DEFAULT_PORT_BY_PROTOCOL, DNSSEC_OPTIONS, PROTOCOL_OPTIONS } from "./constants";
+import { formatError } from "../../api/errors";
 
 function ResolverForm({
   initial,
@@ -169,7 +170,7 @@ export function ResolversTab() {
             notifications.show({ message: "Resolver updated", color: "green" });
             close();
           },
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }
       );
     } else {
@@ -178,7 +179,7 @@ export function ResolversTab() {
           notifications.show({ message: `Resolver "${r.name}" created`, color: "green" });
           close();
         },
-        onError: (e) => notifications.show({ message: String(e), color: "red" }),
+        onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
       });
     }
   };
@@ -201,7 +202,7 @@ export function ResolversTab() {
           });
         }
       },
-      onError: (e) => notifications.show({ color: "red", message: String(e) }),
+      onError: (e) => notifications.show({ color: "red", message: formatError(e) }),
       onSettled: () => setProbingId(null),
     });
   }
@@ -215,7 +216,7 @@ export function ResolversTab() {
       onConfirm: () =>
         deleteResolver.mutate(r.id, {
           onSuccess: () => notifications.show({ message: `Resolver "${r.name}" deleted`, color: "green" }),
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }),
     });
   }
@@ -276,7 +277,7 @@ export function ResolversTab() {
           onChange={() =>
             updateResolver.mutate(
               { id: r.id, body: { enabled: !r.enabled } },
-              { onError: (e) => notifications.show({ message: String(e), color: "red" }) }
+              { onError: (e) => notifications.show({ message: formatError(e), color: "red" }) }
             )
           }
         />

@@ -78,6 +78,8 @@ import {
 } from "../api/hooks";
 import { API_BASE, apiUrl } from "../api/client";
 import type { components } from "../api/schema";
+import { formatError } from "../api/errors";
+import { useUrlFilters } from "../hooks/useUrlFilters";
 
 type SiemWebhook = components["schemas"]["SiemWebhookOut"];
 type SiemSyslogSink = components["schemas"]["SiemSyslogOut"];
@@ -114,7 +116,7 @@ function AddWebhookForm({ onDone }: { onDone: () => void }) {
             notifications.show({ message: `Webhook "${values.name}" created`, color: "green" });
             onDone();
           },
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         });
       })}
     >
@@ -180,7 +182,7 @@ function AddSyslogForm({ onDone }: { onDone: () => void }) {
             notifications.show({ message: `Syslog sink "${values.name}" created`, color: "green" });
             onDone();
           },
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         });
       })}
     >
@@ -251,7 +253,7 @@ function ChangePasswordForm() {
               notifications.show({ message: "Password changed", color: "green" });
               form.reset();
             },
-            onError: (e) => notifications.show({ message: String(e), color: "red" }),
+            onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
           }
         );
       })}
@@ -281,7 +283,7 @@ function SiemSection() {
   function toggleEnabled(w: SiemWebhook) {
     updateWebhook.mutate(
       { webhookId: w.id, body: { enabled: !w.enabled } },
-      { onError: (e) => notifications.show({ message: String(e), color: "red" }) }
+      { onError: (e) => notifications.show({ message: formatError(e), color: "red" }) }
     );
   }
 
@@ -295,7 +297,7 @@ function SiemSection() {
             : `${w.name}: failed — ${r.error}`,
           color: r.success ? "green" : "red",
         }),
-      onError: (e) => notifications.show({ message: String(e), color: "red" }),
+      onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
       onSettled: () => setTestingId(null),
     });
   }
@@ -309,7 +311,7 @@ function SiemSection() {
       onConfirm: () =>
         deleteWebhook.mutate(w.id, {
           onSuccess: () => notifications.show({ message: `Webhook "${w.name}" deleted`, color: "green" }),
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }),
     });
   }
@@ -340,6 +342,7 @@ function SiemSection() {
       )}
 
       {webhooks && webhooks.length > 0 && (
+        <Table.ScrollContainer minWidth={560}>
         <Table striped highlightOnHover withTableBorder withColumnBorders>
           <Table.Thead>
             <Table.Tr>
@@ -392,6 +395,7 @@ function SiemSection() {
             ))}
           </Table.Tbody>
         </Table>
+        </Table.ScrollContainer>
       )}
 
       <Modal opened={addOpened} onClose={closeAdd} title="Add SIEM webhook" size="lg">
@@ -414,7 +418,7 @@ function SiemSyslogSection() {
   function toggleEnabled(s: SiemSyslogSink) {
     updateSyslog.mutate(
       { syslogId: s.id, body: { enabled: !s.enabled } },
-      { onError: (e) => notifications.show({ message: String(e), color: "red" }) }
+      { onError: (e) => notifications.show({ message: formatError(e), color: "red" }) }
     );
   }
 
@@ -426,7 +430,7 @@ function SiemSyslogSection() {
           message: r.success ? `${s.name}: sent` : `${s.name}: failed — ${r.error}`,
           color: r.success ? "green" : "red",
         }),
-      onError: (e) => notifications.show({ message: String(e), color: "red" }),
+      onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
       onSettled: () => setTestingId(null),
     });
   }
@@ -440,7 +444,7 @@ function SiemSyslogSection() {
       onConfirm: () =>
         deleteSyslog.mutate(s.id, {
           onSuccess: () => notifications.show({ message: `Syslog sink "${s.name}" deleted`, color: "green" }),
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }),
     });
   }
@@ -471,6 +475,7 @@ function SiemSyslogSection() {
       )}
 
       {sinks && sinks.length > 0 && (
+        <Table.ScrollContainer minWidth={640}>
         <Table striped highlightOnHover withTableBorder withColumnBorders>
           <Table.Thead>
             <Table.Tr>
@@ -527,6 +532,7 @@ function SiemSyslogSection() {
             ))}
           </Table.Tbody>
         </Table>
+        </Table.ScrollContainer>
       )}
 
       <Modal opened={addOpened} onClose={closeAdd} title="Add syslog sink" size="lg">
@@ -592,6 +598,7 @@ function Cap({ yes }: { yes: boolean }) {
 export function SettingsPage() {
   const { hasRole } = useAuth();
   const isAdmin = hasRole("admin");
+  const [{ tab }, setFilters] = useUrlFilters({ tab: "system" });
 
   return (
     <Stack gap="lg">
@@ -600,7 +607,7 @@ export function SettingsPage() {
         <Text c="dimmed" size="sm">System configuration, security, and integrations.</Text>
       </Stack>
 
-      <Tabs defaultValue="system" keepMounted={false}>
+      <Tabs value={tab} onChange={(v) => setFilters({ tab: v ?? "system" })} keepMounted={false}>
         <Tabs.List mb="lg">
           <Tabs.Tab value="system"       leftSection={<IconServer size={15} />}>System</Tabs.Tab>
           <Tabs.Tab value="security"     leftSection={<IconShield size={15} />}>Security</Tabs.Tab>

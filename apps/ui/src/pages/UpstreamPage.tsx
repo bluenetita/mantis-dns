@@ -17,9 +17,12 @@
 
 import { Group, Stack, Tabs, Text, Title } from "@mantine/core";
 import { IconServer } from "@tabler/icons-react";
+import { useUrlFilters } from "../hooks/useUrlFilters";
 import { HealthTab, PoolsTab, PolicyTab, ResolversTab, RoutesTab } from "./upstream";
 
 export function UpstreamPage() {
+  const [{ tab }, setFilters] = useUrlFilters({ tab: "resolvers" });
+
   return (
     <Stack gap="lg">
       <Stack gap={2}>
@@ -32,7 +35,7 @@ export function UpstreamPage() {
         </Text>
       </Stack>
 
-      <Tabs defaultValue="resolvers" keepMounted={false}>
+      <Tabs value={tab} onChange={(v) => setFilters({ tab: v ?? "resolvers" })} keepMounted={false}>
         <Tabs.List mb="lg">
           <Tabs.Tab value="resolvers">Resolvers</Tabs.Tab>
           <Tabs.Tab value="pools">Pools</Tabs.Tab>

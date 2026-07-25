@@ -15,16 +15,17 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { Button, Group, Stack, Table, Title, Card, Text, Loader, Center, Modal } from "@mantine/core";
+import { Anchor, Button, Group, Stack, Table, Title, Card, Text, Loader, Center, Modal } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { modals } from "@mantine/modals";
 import { notifications } from "@mantine/notifications";
 import { TextInput } from "@mantine/core";
 import { IconPlus, IconTrash } from "@tabler/icons-react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useCreateTenant, useDeleteTenant, useTenants } from "../api/hooks";
 import { useAuth } from "../auth/AuthContext";
+import { formatError } from "../api/errors";
 
 function CreateTenantForm({ onDone }: { onDone: () => void }) {
   const createTenant = useCreateTenant();
@@ -43,7 +44,7 @@ function CreateTenantForm({ onDone }: { onDone: () => void }) {
             notifications.show({ message: `Tenant "${values.name}" created`, color: "green" });
             onDone();
           },
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         });
       })}
     >
@@ -75,7 +76,7 @@ export function TenantsPage() {
       onConfirm: () =>
         deleteTenant.mutate(tenantId, {
           onSuccess: () => notifications.show({ message: `Tenant "${name}" deleted`, color: "green" }),
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }),
     });
   }
@@ -86,7 +87,7 @@ export function TenantsPage() {
         <Loader />
       </Center>
     );
-  if (error) return <Text c="red">{String(error)}</Text>;
+  if (error) return <Text c="red">{formatError(error)}</Text>;
 
   return (
     <Stack>
@@ -108,6 +109,7 @@ export function TenantsPage() {
       )}
 
       {tenants && tenants.length > 0 && (
+        <Table.ScrollContainer minWidth={420}>
         <Table highlightOnHover>
           <Table.Thead>
             <Table.Tr>
@@ -119,7 +121,11 @@ export function TenantsPage() {
           <Table.Tbody>
             {tenants.map((t) => (
               <Table.Tr key={t.id} style={{ cursor: "pointer" }} onClick={() => navigate(`/tenants/${t.id}`)}>
-                <Table.Td>{t.name}</Table.Td>
+                <Table.Td>
+                  <Anchor component={Link} to={`/tenants/${t.id}`} size="sm" c="inherit" onClick={(e) => e.stopPropagation()}>
+                    {t.name}
+                  </Anchor>
+                </Table.Td>
                 <Table.Td>{new Date(t.created_at).toLocaleString()}</Table.Td>
                 <Table.Td onClick={(e) => e.stopPropagation()}>
                   {canDelete && (
@@ -138,6 +144,7 @@ export function TenantsPage() {
             ))}
           </Table.Tbody>
         </Table>
+        </Table.ScrollContainer>
       )}
 
       <Modal opened={createOpened} onClose={closeCreateModal} title="New tenant">

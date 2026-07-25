@@ -59,6 +59,10 @@ import type { Category } from "../api/hooks";
 import { categoryIcon, CATEGORY_GROUP_LABEL } from "../categoryIcons";
 import type { components } from "../api/schema";
 import { useAuth } from "../auth/AuthContext";
+import { formatError } from "../api/errors";
+import { KpiCard } from "../components/KpiCard";
+import { formatDuration, formatRelativeTime } from "../format";
+import { useUrlFilters } from "../hooks/useUrlFilters";
 
 type Feed = components["schemas"]["FeedOut"];
 
@@ -84,40 +88,9 @@ function feedStatus(f: Feed): { label: string; color: string } {
   return { label: "Active", color: "green" };
 }
 
-function relativeTime(iso: string | null | undefined): string {
-  if (!iso) return "Never";
-  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return "Just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
-}
-
-function fmtInterval(secs: number): string {
-  if (secs < 3600) return `${Math.round(secs / 60)}m`;
-  if (secs < 86400) return `${Math.round(secs / 3600)}h`;
-  return `${Math.round(secs / 86400)}d`;
-}
-
 function fmtDomains(n: number | null | undefined): string {
   if (n === null || n === undefined) return "—";
   return n.toLocaleString();
-}
-
-// ─── KPI card ────────────────────────────────────────────────────────────────
-
-function KpiCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
-  return (
-    <Stack gap={2} style={{ borderLeft: "3px solid var(--mantine-color-blue-5)", paddingLeft: 12 }}>
-      <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: "0.05em" }}>
-        {label}
-      </Text>
-      <Text size="xl" fw={700} lh={1}>
-        {value}
-      </Text>
-      {sub && <Text size="xs" c="dimmed">{sub}</Text>}
-    </Stack>
-  );
 }
 
 // ─── Add Feed form ────────────────────────────────────────────────────────────
@@ -164,7 +137,7 @@ function AddFeedModal({ opened, onClose }: { opened: boolean; onClose: () => voi
                 notifications.show({ message: `Feed "${values.id}" added`, color: "green" });
                 handleClose();
               },
-              onError: (e) => notifications.show({ message: String(e), color: "red" }),
+              onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
             }
           )
         )}
@@ -334,7 +307,7 @@ function EditFeedModal({ feed, onClose }: { feed: Feed | null; onClose: () => vo
                 notifications.show({ message: `Feed "${feed.id}" updated`, color: "green" });
                 handleClose();
               },
-              onError: (e) => notifications.show({ message: String(e), color: "red" }),
+              onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
             }
           )
         )}
@@ -383,9 +356,9 @@ export function FeedsPage() {
   const [editFeed, setEditFeed] = useState<Feed | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set());
-  const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  // Filters live in the URL so a filtered view is shareable and survives reload.
+  const [filters, setFilters] = useUrlFilters({ search: "", category: "", status: "all" });
+  const { search, category: categoryFilter, status: statusFilter } = filters;
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const { hasRole } = useAuth();
   const canWrite = hasRole("operator");
@@ -446,7 +419,7 @@ export function FeedsPage() {
   function toggleEnabled(feed: Feed) {
     updateFeed.mutate(
       { feedId: feed.id, body: { enabled: !feed.enabled } },
-      { onError: (e) => notifications.show({ message: String(e), color: "red" }) }
+      { onError: (e) => notifications.show({ message: formatError(e), color: "red" }) }
     );
   }
 
@@ -458,7 +431,7 @@ export function FeedsPage() {
           message: `${feed.id}: ${r.status} · ${fmtDomains(r.domain_count)} domains${r.reason ? ` — ${r.reason}` : ""}`,
           color: r.status === "rejected" || r.status === "error" ? "yellow" : "green",
         }),
-      onError: (e) => notifications.show({ message: String(e), color: "red" }),
+      onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
       onSettled: () => setSyncingId(null),
     });
   }
@@ -477,7 +450,7 @@ export function FeedsPage() {
       onConfirm: () =>
         deleteFeed.mutate(feed.id, {
           onSuccess: () => notifications.show({ message: `Feed "${feed.id}" deleted`, color: "green" }),
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }),
     });
   }
@@ -603,7 +576,7 @@ export function FeedsPage() {
           placeholder="Search by ID, provider, URL…"
           leftSection={<IconSearch size={14} />}
           value={search}
-          onChange={(e) => setSearch(e.currentTarget.value)}
+          onChange={(e) => setFilters({ search: e.currentTarget.value })}
           style={{ flex: 1, maxWidth: 360 }}
         />
         <Select
@@ -613,7 +586,7 @@ export function FeedsPage() {
             { value: "disabled", label: "Disabled only" },
           ]}
           value={statusFilter}
-          onChange={(v) => setStatusFilter(v ?? "all")}
+          onChange={(v) => setFilters({ status: v ?? "all" })}
           style={{ width: 160 }}
         />
       </Group>
@@ -623,10 +596,10 @@ export function FeedsPage() {
         <Badge
           size="lg"
           radius="sm"
-          variant={categoryFilter === null ? "filled" : "light"}
+          variant={categoryFilter === "" ? "filled" : "light"}
           color="gray"
           style={{ cursor: "pointer" }}
-          onClick={() => setCategoryFilter(null)}
+          onClick={() => setFilters({ category: "" })}
         >
           All ({feeds.length})
         </Badge>
@@ -643,7 +616,7 @@ export function FeedsPage() {
               color={categoryColor(id, categoryById)}
               leftSection={Icon ? <Icon size={12} /> : undefined}
               style={{ cursor: "pointer" }}
-              onClick={() => setCategoryFilter(active ? null : id)}
+              onClick={() => setFilters({ category: active ? "" : id })}
             >
               {categoryLabel(id, categoryById)} ({count})
             </Badge>
@@ -682,6 +655,7 @@ export function FeedsPage() {
       )}
 
       {/* Table */}
+      <Table.ScrollContainer minWidth={700}>
       <Table striped highlightOnHover withTableBorder withColumnBorders>
         <Table.Thead>
           <Table.Tr>
@@ -811,7 +785,7 @@ export function FeedsPage() {
                                 <Badge size="xs" variant="dot" color="blue" style={{ flexShrink: 0 }}>catalog</Badge>
                               )}
                               {f.provider && <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>{f.provider}</Text>}
-                              <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>· {fmtInterval(f.interval_seconds)}</Text>
+                              <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>· {formatDuration(f.interval_seconds)}</Text>
                             </Group>
                           </Stack>
                         </Group>
@@ -829,7 +803,7 @@ export function FeedsPage() {
                           position="left"
                         >
                           <Text size="sm" c={f.last_fetched_at ? undefined : "dimmed"}>
-                            {relativeTime(f.last_fetched_at)}
+                            {formatRelativeTime(f.last_fetched_at)}
                           </Text>
                         </Tooltip>
                       </Table.Td>
@@ -871,6 +845,7 @@ export function FeedsPage() {
           })}
         </Table.Tbody>
       </Table>
+      </Table.ScrollContainer>
 
       {visible.length > 0 && (
         <Text size="xs" c="dimmed" ta="right">

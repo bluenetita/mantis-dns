@@ -16,6 +16,7 @@
  */
 
 import createClient, { type Middleware } from "openapi-fetch";
+import { notifySessionExpired } from "../auth/sessionEvents";
 import type { paths } from "./schema";
 
 function sameOriginBase(): string {
@@ -53,9 +54,12 @@ function csrfHeaders(): Record<string, string> {
   return csrf ? { "X-Mantis-CSRF-Token": csrf } : {};
 }
 
+/** Clears the session in-app instead of a hard reload, so RequireAuth's
+ * redirect can carry the current route into `state.from` and the user lands
+ * back where they were after re-authenticating. */
 function handleUnauthorized(status: number): void {
   if (status === 401 && !window.location.pathname.startsWith("/login")) {
-    window.location.assign("/login");
+    notifySessionExpired();
   }
 }
 

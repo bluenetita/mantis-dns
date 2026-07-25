@@ -44,6 +44,7 @@ import { Link, useParams } from "react-router-dom";
 import { useClients, useDeleteClient, useRegisterClient, useTenants } from "../api/hooks";
 import { useAuth } from "../auth/AuthContext";
 import type { components } from "../api/schema";
+import { formatError } from "../api/errors";
 
 type ClientEntry = components["schemas"]["ClientOut"];
 
@@ -76,7 +77,7 @@ function EditClientForm({ tenantId, client, onDone }: { tenantId: string; client
               notifications.show({ message: `Client ${client.ip} registered`, color: "green" });
               onDone();
             },
-            onError: (e) => notifications.show({ message: String(e), color: "red" }),
+            onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
           }
         );
       })}
@@ -132,7 +133,7 @@ export function ClientsPage() {
       onConfirm: () =>
         deleteClient.mutate(client.ip, {
           onSuccess: () => notifications.show({ message: `Client ${client.ip} deleted`, color: "green" }),
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }),
     });
   }
@@ -143,7 +144,7 @@ export function ClientsPage() {
         <Loader />
       </Center>
     );
-  if (error) return <Text c="red">{String(error)}</Text>;
+  if (error) return <Text c="red">{formatError(error)}</Text>;
 
   return (
     <Stack>
@@ -179,6 +180,7 @@ export function ClientsPage() {
       )}
 
       {clients && clients.length > 0 && (
+        <Table.ScrollContainer minWidth={640}>
         <Table highlightOnHover>
           <Table.Thead>
             <Table.Tr>
@@ -240,6 +242,7 @@ export function ClientsPage() {
             ))}
           </Table.Tbody>
         </Table>
+        </Table.ScrollContainer>
       )}
 
       {tenantId && editing && (

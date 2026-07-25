@@ -32,6 +32,7 @@ import {
 } from "../../api/hooks";
 import { CrudTable, EntityModal, type CrudColumn } from "../../components/crud";
 import { STRATEGY_LABELS } from "./constants";
+import { formatError } from "../../api/errors";
 
 function PoolForm({
   initial,
@@ -126,7 +127,7 @@ export function PoolsTab() {
             notifications.show({ message: "Pool updated", color: "green" });
             close();
           },
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }
       );
     } else {
@@ -135,7 +136,7 @@ export function PoolsTab() {
           notifications.show({ message: `Pool "${p.name}" created`, color: "green" });
           close();
         },
-        onError: (e) => notifications.show({ message: String(e), color: "red" }),
+        onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
       });
     }
   };
@@ -149,7 +150,7 @@ export function PoolsTab() {
       onConfirm: () =>
         deletePool.mutate(p.id, {
           onSuccess: () => notifications.show({ message: `Pool "${p.name}" deleted`, color: "green" }),
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }),
     });
   }

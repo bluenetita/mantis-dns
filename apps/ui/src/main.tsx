@@ -29,7 +29,6 @@ import { BrowserRouter } from "react-router-dom";
 
 import './i18n';
 import App from "./App";
-import { ErrorBoundary } from "./app/ErrorBoundary";
 import { AuthProvider } from "./auth/AuthContext";
 import { theme } from "./theme";
 
@@ -46,17 +45,15 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <MantineProvider theme={theme} defaultColorScheme="auto">
       <Notifications position="top-right" />
-      <ErrorBoundary>
-        <ModalsProvider>
-          <QueryClientProvider client={queryClient}>
-            <BrowserRouter>
-              <AuthProvider>
-                <App />
-              </AuthProvider>
-            </BrowserRouter>
-          </QueryClientProvider>
-        </ModalsProvider>
-      </ErrorBoundary>
+      <ModalsProvider>
+        <QueryClientProvider client={queryClient}>
+          <BrowserRouter>
+            <AuthProvider>
+              <App />
+            </AuthProvider>
+          </BrowserRouter>
+        </QueryClientProvider>
+      </ModalsProvider>
     </MantineProvider>
   </StrictMode>
 );

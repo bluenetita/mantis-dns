@@ -19,6 +19,7 @@ import { Badge, Button, Card, Center, Group, Loader, Select, Stack, Table, Text,
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AUDIT_PAGE_SIZE, useAuditLog } from "../api/hooks";
+import { formatError } from "../api/errors";
 
 const RESOURCE_TYPES = ["tenant", "group", "policy", "feed", "dns_zone", "dns_record", "user"];
 
@@ -68,7 +69,7 @@ export function AuditPage() {
           <Loader role="status" aria-label={t("common.loading")} />
         </Center>
       )}
-      {error && <Text c="red" role="alert">{String(error)}</Text>}
+      {error && <Text c="red" role="alert">{formatError(error)}</Text>}
 
       {data && data.length === 0 && offset === 0 && (
         <Card withBorder padding="xl">
@@ -85,6 +86,7 @@ export function AuditPage() {
       )}
 
       {data && data.length > 0 && (
+        <Table.ScrollContainer minWidth={560}>
         <Table>
           <Table.Thead>
             <Table.Tr>
@@ -115,6 +117,7 @@ export function AuditPage() {
             ))}
           </Table.Tbody>
         </Table>
+        </Table.ScrollContainer>
       )}
 
       <Group justify="center" gap="sm">

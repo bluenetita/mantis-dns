@@ -25,6 +25,7 @@ import { IconPencil, IconPlus, IconTrash, IconUsers } from "@tabler/icons-react"
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useCreateGroup, useDeleteGroup, useGroups, useRenameGroup, useTenants } from "../api/hooks";
 import { useAuth } from "../auth/AuthContext";
+import { formatError } from "../api/errors";
 
 const CIDR_RE = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
 
@@ -48,7 +49,7 @@ function CreateGroupForm({ tenantId, onDone }: { tenantId: string; onDone: () =>
               notifications.show({ message: `Group "${values.name}" created`, color: "green" });
               onDone();
             },
-            onError: (e) => notifications.show({ message: String(e), color: "red" }),
+            onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
           }
         );
       })}
@@ -98,7 +99,7 @@ function RenameGroupForm({
               notifications.show({ message: `Group renamed to "${values.name}"`, color: "green" });
               onDone();
             },
-            onError: (e) => notifications.show({ message: String(e), color: "red" }),
+            onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
           }
         );
       })}
@@ -135,7 +136,7 @@ export function GroupsPage() {
       onConfirm: () =>
         deleteGroup.mutate(groupId, {
           onSuccess: () => notifications.show({ message: `Group "${name}" deleted`, color: "green" }),
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }),
     });
   }
@@ -146,7 +147,7 @@ export function GroupsPage() {
         <Loader />
       </Center>
     );
-  if (error) return <Text c="red">{String(error)}</Text>;
+  if (error) return <Text c="red">{formatError(error)}</Text>;
 
   return (
     <Stack>
@@ -180,6 +181,7 @@ export function GroupsPage() {
       )}
 
       {groups && groups.length > 0 && (
+        <Table.ScrollContainer minWidth={480}>
         <Table highlightOnHover>
           <Table.Thead>
             <Table.Tr>
@@ -196,7 +198,17 @@ export function GroupsPage() {
                 style={{ cursor: "pointer" }}
                 onClick={() => navigate(`/tenants/${tenantId}/groups/${g.id}`)}
               >
-                <Table.Td>{g.name}</Table.Td>
+                <Table.Td>
+                  <Anchor
+                    component={Link}
+                    to={`/tenants/${tenantId}/groups/${g.id}`}
+                    size="sm"
+                    c="inherit"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {g.name}
+                  </Anchor>
+                </Table.Td>
                 <Table.Td>
                   {g.vpn_subnet ? <Badge variant="light">{g.vpn_subnet}</Badge> : <Text c="dimmed">not set</Text>}
                 </Table.Td>
@@ -230,6 +242,7 @@ export function GroupsPage() {
             ))}
           </Table.Tbody>
         </Table>
+        </Table.ScrollContainer>
       )}
 
       {tenantId && editingGroup && (

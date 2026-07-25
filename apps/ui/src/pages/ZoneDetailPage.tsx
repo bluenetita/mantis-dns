@@ -59,6 +59,7 @@ import {
 import { apiUrl } from "../api/client";
 import type { components } from "../api/schema";
 import { useAuth } from "../auth/AuthContext";
+import { formatError } from "../api/errors";
 
 type Zone = components["schemas"]["ZoneOut"];
 type DnsRecord = components["schemas"]["RecordOut"];
@@ -135,13 +136,13 @@ function RecordModal({ zoneId, record, onClose }: RecordModalProps) {
         { recordId: record.id, body },
         {
           onSuccess: () => { notifications.show({ message: "Record updated", color: "green" }); handleClose(); },
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }
       );
     } else {
       createRecord.mutate(body, {
         onSuccess: () => { notifications.show({ message: "Record added", color: "green" }); handleClose(); },
-        onError: (e) => notifications.show({ message: String(e), color: "red" }),
+        onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
       });
     }
   }
@@ -239,7 +240,7 @@ function RecordsTab({ zone, canWrite }: { zone: Zone; canWrite: boolean }) {
       onConfirm: () =>
         deleteRecord.mutate(r.id, {
           onSuccess: () => notifications.show({ message: "Record deleted", color: "green" }),
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }),
     });
   }
@@ -291,6 +292,7 @@ function RecordsTab({ zone, canWrite }: { zone: Zone; canWrite: boolean }) {
         </Group>
       </Group>
 
+      <Table.ScrollContainer minWidth={640}>
       <Table striped highlightOnHover withTableBorder withColumnBorders>
         <Table.Thead>
           <Table.Tr>
@@ -368,6 +370,7 @@ function RecordsTab({ zone, canWrite }: { zone: Zone; canWrite: boolean }) {
           ))}
         </Table.Tbody>
       </Table>
+      </Table.ScrollContainer>
 
       {(showModal) && (
         <RecordModal zoneId={zone.id} record={null} onClose={() => setShowModal(false)} />
@@ -411,7 +414,7 @@ function SettingsTab({ zone, canWrite }: { zone: Zone; canWrite: boolean }) {
           },
           {
             onSuccess: () => notifications.show({ message: "Zone settings saved", color: "green" }),
-            onError: (e) => notifications.show({ message: String(e), color: "red" }),
+            onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
           }
         )
       )}
@@ -472,7 +475,7 @@ export function ZoneDetailPage() {
       onConfirm: () =>
         deleteZone.mutate(zone!.id, {
           onSuccess: () => { notifications.show({ message: `Zone deleted`, color: "green" }); navigate("/zones"); },
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }),
     });
   }

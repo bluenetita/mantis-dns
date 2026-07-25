@@ -128,6 +128,6 @@ describe('QueryLogPage', () => {
   it('shows error message when request fails', () => {
     mockUseQueryLog.mockReturnValue({ data: undefined, isLoading: false, error: new Error('503: upstream') } as never);
     renderWithProviders(<QueryLogPage />);
-    expect(screen.getByText(/503: upstream/i)).toBeInTheDocument();
+    expect(screen.getByText(/service unavailable/i)).toBeInTheDocument();
   });
 });

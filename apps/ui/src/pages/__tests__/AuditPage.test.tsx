@@ -87,7 +87,7 @@ describe('AuditPage', () => {
   it('shows error message when request fails', () => {
     mockUseAuditLog.mockReturnValue({ data: undefined, isLoading: false, error: new Error('500: server error') } as never);
     renderWithProviders(<AuditPage />);
-    expect(screen.getByText(/500: server error/i)).toBeInTheDocument();
+    expect(screen.getByText(/server error/i)).toBeInTheDocument();
   });
 
   it('advancing to next page increments page indicator', async () => {

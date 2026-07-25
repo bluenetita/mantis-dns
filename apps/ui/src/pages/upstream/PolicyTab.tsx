@@ -21,6 +21,7 @@ import { notifications } from "@mantine/notifications";
 import { useState } from "react";
 import { useTenants, useUpstreamTenantPolicy, useUpsertUpstreamTenantPolicy } from "../../api/hooks";
 import { DNSSEC_OPTIONS } from "./constants";
+import { formatError } from "../../api/errors";
 
 export function PolicyTab() {
   const { data: tenants = [] } = useTenants();
@@ -77,7 +78,7 @@ export function PolicyTab() {
           onSubmit={form.onSubmit((values) =>
             upsertPolicy.mutate(values, {
               onSuccess: () => notifications.show({ message: "Upstream policy saved", color: "green" }),
-              onError: (e) => notifications.show({ message: String(e), color: "red" }),
+              onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
             })
           )}
         >

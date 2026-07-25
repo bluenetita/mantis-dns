@@ -17,6 +17,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { apiClient, unwrap } from "../api/client";
+import { onSessionExpired } from "./sessionEvents";
 
 export type Role = "admin" | "operator" | "viewer";
 
@@ -53,6 +54,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => onSessionExpired(() => setUser(null)), []);
 
   const login = useCallback(async (email: string, password: string) => {
     const res = unwrap(

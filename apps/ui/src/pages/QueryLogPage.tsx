@@ -33,9 +33,12 @@ import {
 } from "@mantine/core";
 import { useDebouncedValue } from "@mantine/hooks";
 import { IconSearch } from "@tabler/icons-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { QUERY_LOG_PAGE_SIZE, useCategories, useQueryLog } from "../api/hooks";
+import { formatError } from "../api/errors";
+import { formatLatency } from "../format";
+import { useUrlFilters } from "../hooks/useUrlFilters";
 
 const QTYPE_OPTIONS = ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV", "PTR", "SOA", "ANY"];
 
@@ -52,66 +55,79 @@ const HOURS_OPTIONS = [
   { label: "All", value: "" },
 ];
 
-function latencyLabel(us: number | null): string {
-  if (us == null) return "—";
-  if (us < 1000) return `${us}µs`;
-  return `${(us / 1000).toFixed(1)}ms`;
-}
-
 export function QueryLogPage() {
   const { t } = useTranslation();
-  const [decision, setDecision] = useState<"" | "allow" | "block">("");
-  const [hoursStr, setHoursStr] = useState("24");
-  const [qnameInput, setQnameInput] = useState("");
+
+  // Filters live in the URL (not useState) so a filtered view is shareable,
+  // survives reload, and undoes with the back button.
+  const [filters, setFilters] = useUrlFilters({
+    decision: "",
+    hours: "24",
+    qname: "",
+    client_ip: "",
+    qtype: "",
+    category: "",
+    offset: "0",
+  });
+
+  const [qnameInput, setQnameInput] = useState(filters.qname);
   const [debouncedQname] = useDebouncedValue(qnameInput, 400);
-  const [clientIpInput, setClientIpInput] = useState("");
+  const [clientIpInput, setClientIpInput] = useState(filters.client_ip);
   const [debouncedClientIp] = useDebouncedValue(clientIpInput, 400);
-  const [qtype, setQtype] = useState<string | null>(null);
-  const [category, setCategory] = useState<string | null>(null);
-  const [offset, setOffset] = useState(0);
 
   const { data: categories } = useCategories();
 
-  const hours = hoursStr ? Number(hoursStr) : undefined;
+  const hours = filters.hours ? Number(filters.hours) : undefined;
+  const offset = Number(filters.offset || 0);
 
   const { data, isLoading, error } = useQueryLog({
     offset,
-    decision: decision || undefined,
+    decision: (filters.decision || undefined) as "allow" | "block" | undefined,
     qname: debouncedQname || undefined,
     client_ip: debouncedClientIp || undefined,
-    qtype: qtype || undefined,
-    matched_category: category || undefined,
+    qtype: filters.qtype || undefined,
+    matched_category: filters.category || undefined,
     hours,
   });
 
+  // Debounced text filters sync into the URL once typing settles; offset
+  // resets happen immediately in the input's onChange, not here, so this
+  // effect firing on mount (debounced value === URL value) can't clobber a
+  // shared deep link's offset.
+  useEffect(() => {
+    setFilters({ qname: debouncedQname });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedQname]);
+
+  useEffect(() => {
+    setFilters({ client_ip: debouncedClientIp });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedClientIp]);
+
   function handleDecisionChange(v: string) {
-    setDecision(v as "" | "allow" | "block");
-    setOffset(0);
+    setFilters({ decision: v, offset: "0" });
   }
 
   function handleHoursChange(v: string) {
-    setHoursStr(v);
-    setOffset(0);
+    setFilters({ hours: v, offset: "0" });
   }
 
   function handleQnameChange(e: React.ChangeEvent<HTMLInputElement>) {
     setQnameInput(e.currentTarget.value);
-    setOffset(0);
+    setFilters({ offset: "0" });
   }
 
   function handleClientIpChange(e: React.ChangeEvent<HTMLInputElement>) {
     setClientIpInput(e.currentTarget.value);
-    setOffset(0);
+    setFilters({ offset: "0" });
   }
 
   function handleQtypeChange(v: string | null) {
-    setQtype(v);
-    setOffset(0);
+    setFilters({ qtype: v ?? "", offset: "0" });
   }
 
   function handleCategoryChange(v: string | null) {
-    setCategory(v);
-    setOffset(0);
+    setFilters({ category: v ?? "", offset: "0" });
   }
 
   const page = Math.floor(offset / QUERY_LOG_PAGE_SIZE) + 1;
@@ -124,7 +140,7 @@ export function QueryLogPage() {
 
       <Group wrap="wrap" gap="sm">
         <SegmentedControl
-          value={decision}
+          value={filters.decision}
           onChange={handleDecisionChange}
           data={[
             { label: t("queryLog.decision.all"), value: "" },
@@ -134,7 +150,7 @@ export function QueryLogPage() {
           size="xs"
         />
         <SegmentedControl
-          value={hoursStr}
+          value={filters.hours}
           onChange={handleHoursChange}
           data={HOURS_OPTIONS}
           size="xs"
@@ -161,7 +177,7 @@ export function QueryLogPage() {
           placeholder={t("queryLog.filters.qtypeAll")}
           aria-label={t("queryLog.filters.qtypeLabel")}
           data={QTYPE_OPTIONS}
-          value={qtype}
+          value={filters.qtype || null}
           onChange={(v) => handleQtypeChange(v)}
           clearable
           size="xs"
@@ -171,7 +187,7 @@ export function QueryLogPage() {
           placeholder={t("queryLog.filters.categoryAll")}
           aria-label={t("queryLog.filters.categoryLabel")}
           data={(categories ?? []).map((c) => ({ value: c.id, label: c.label }))}
-          value={category}
+          value={filters.category || null}
           onChange={(v) => handleCategoryChange(v)}
           clearable
           searchable
@@ -185,7 +201,7 @@ export function QueryLogPage() {
           <Loader role="status" aria-label={t("common.loading")} />
         </Center>
       )}
-      {error && <Text c="red" role="alert">{String(error)}</Text>}
+      {error && <Text c="red" role="alert">{formatError(error)}</Text>}
 
       {!isLoading && data && data.length === 0 && (
         <Card withBorder padding="xl">
@@ -196,6 +212,7 @@ export function QueryLogPage() {
       )}
 
       {data && data.length > 0 && (
+        <Table.ScrollContainer minWidth={640}>
         <Table striped highlightOnHover>
           <Table.Thead>
             <Table.Tr>
@@ -247,13 +264,14 @@ export function QueryLogPage() {
                 </Table.Td>
                 <Table.Td>
                   <Text size="xs" c="dimmed">
-                    {latencyLabel(entry.latency_us)}
+                    {formatLatency(entry.latency_us)}
                   </Text>
                 </Table.Td>
               </Table.Tr>
             ))}
           </Table.Tbody>
         </Table>
+        </Table.ScrollContainer>
       )}
 
       <Group justify="center" gap="sm">
@@ -261,7 +279,7 @@ export function QueryLogPage() {
           variant="default"
           size="xs"
           disabled={!hasPrev || isLoading}
-          onClick={() => setOffset(Math.max(0, offset - QUERY_LOG_PAGE_SIZE))}
+          onClick={() => setFilters({ offset: String(Math.max(0, offset - QUERY_LOG_PAGE_SIZE)) })}
         >
           {t("queryLog.pagination.previous")}
         </Button>
@@ -272,7 +290,7 @@ export function QueryLogPage() {
           variant="default"
           size="xs"
           disabled={!hasNext || isLoading}
-          onClick={() => setOffset(offset + QUERY_LOG_PAGE_SIZE)}
+          onClick={() => setFilters({ offset: String(offset + QUERY_LOG_PAGE_SIZE) })}
         >
           {t("queryLog.pagination.next")}
         </Button>

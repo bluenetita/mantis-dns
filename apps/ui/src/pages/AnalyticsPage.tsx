@@ -36,6 +36,8 @@ import {
 import { IconRefresh } from "@tabler/icons-react";
 import { useState } from "react";
 import { useAnalyticsByGroup, useAnalyticsSummary, useAnalyticsTimeseries } from "../api/hooks";
+import { KpiCard } from "../components/KpiCard";
+import { formatError } from "../api/errors";
 
 // ─── Time range options ───────────────────────────────────────────────────────
 
@@ -46,43 +48,6 @@ const TIME_RANGES = [
   { label: "7d",  hours: 168 },
   { label: "30d", hours: 720 },
 ] as const;
-
-// ─── KPI card ─────────────────────────────────────────────────────────────────
-
-function KpiCard({
-  label,
-  value,
-  sub,
-  accent = "blue",
-  bar,
-}: {
-  label: string;
-  value: string | number;
-  sub?: string;
-  accent?: string;
-  bar?: number;
-}) {
-  return (
-    <Card withBorder padding="md">
-      <Stack gap={6}>
-        <Text size="xs" c="dimmed" tt="uppercase" fw={600} style={{ letterSpacing: "0.05em" }}>
-          {label}
-        </Text>
-        <Text size="xl" fw={700} lh={1}>
-          {value}
-        </Text>
-        {bar !== undefined && (
-          <Progress value={bar} color={accent} size="xs" radius="xs" />
-        )}
-        {sub && (
-          <Text size="xs" c="dimmed">
-            {sub}
-          </Text>
-        )}
-      </Stack>
-    </Card>
-  );
-}
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
@@ -105,7 +70,7 @@ export function AnalyticsPage() {
         <Loader />
       </Center>
     );
-  if (error || !data) return <Text c="red">{error ? String(error) : "No data available"}</Text>;
+  if (error || !data) return <Text c="red">{error ? formatError(error) : "No data available"}</Text>;
 
   // ── Derived values ──────────────────────────────────────────────────────────
 

@@ -42,6 +42,7 @@ import { useState } from "react";
 import { useCreateUser, useDeleteUser, useUpdateUser, useUsers, useTenants } from "../api/hooks";
 import type { components } from "../api/schema";
 import { useAuth } from "../auth/AuthContext";
+import { formatError } from "../api/errors";
 
 type User = components["schemas"]["UserOut"];
 
@@ -92,7 +93,7 @@ function AddUserModal({ opened, onClose }: { opened: boolean; onClose: () => voi
               notifications.show({ message: `User "${values.email}" created`, color: "green" });
               handleClose();
             },
-            onError: (e) => notifications.show({ message: String(e), color: "red" }),
+            onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
           });
         })}
       >
@@ -164,7 +165,7 @@ function EditUserModal({ user, onClose }: { user: User | null; onClose: () => vo
                 notifications.show({ message: `User ${user.email} updated`, color: "green" });
                 handleClose();
               },
-              onError: (e) => notifications.show({ message: String(e), color: "red" }),
+              onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
             }
           );
         })}
@@ -215,7 +216,7 @@ export function UsersPage() {
       onConfirm: () =>
         deleteUser.mutate(u.id, {
           onSuccess: () => notifications.show({ message: `User "${u.email}" deleted`, color: "green" }),
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }),
     });
   }
@@ -253,6 +254,7 @@ export function UsersPage() {
         ))}
       </SimpleGrid>
 
+      <Table.ScrollContainer minWidth={520}>
       <Table striped highlightOnHover withTableBorder withColumnBorders>
         <Table.Thead>
           <Table.Tr>
@@ -322,6 +324,7 @@ export function UsersPage() {
           })}
         </Table.Tbody>
       </Table>
+      </Table.ScrollContainer>
 
       <Text size="xs" c="dimmed" ta="right">{users.length} user{users.length !== 1 ? "s" : ""}</Text>
 

@@ -36,6 +36,7 @@ import { notifications } from "@mantine/notifications";
 import { useEffect, useRef, useState } from "react";
 import { useBlockPageTemplate, useCompileBundle, useUpsertBlockPageTemplate } from "../api/hooks";
 import type { components } from "../api/schema";
+import { formatError } from "../api/errors";
 
 const LOGO_MAX_BYTES = 200 * 1024; // server caps the stored data URI at ~220KB post-base64
 const LOGO_MIME_RE = /^image\/(png|jpeg|gif|webp|svg\+xml)$/;
@@ -196,7 +197,7 @@ export function BlockPageCard({
     try {
       set("logo_url", await readFileAsDataUrl(file));
     } catch (e) {
-      notifications.show({ message: String(e), color: "red" });
+      notifications.show({ message: formatError(e), color: "red" });
     } finally {
       setLogoUploading(false);
       resetLogoPicker.current?.();
@@ -214,12 +215,12 @@ export function BlockPageCard({
             notifications.show({ message: "Block page saved and published", color: "green" }),
           onError: (e) =>
             notifications.show({
-              message: `Block page saved, but publishing the bundle failed: ${String(e)}`,
+              message: `Block page saved, but publishing the bundle failed: ${formatError(e)}`,
               color: "red",
             }),
         });
       },
-      onError: (e) => notifications.show({ message: String(e), color: "red" }),
+      onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
     });
   }
 

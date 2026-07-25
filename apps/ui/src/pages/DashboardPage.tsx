@@ -17,11 +17,11 @@
 
 import {
   ActionIcon,
+  Alert,
   Badge,
   Grid,
   Group,
   SegmentedControl,
-  Select,
   SimpleGrid,
   Stack,
   Title,
@@ -30,6 +30,7 @@ import {
 import { useDisclosure } from "@mantine/hooks";
 import {
   IconActivity,
+  IconAlertTriangle,
   IconBolt,
   IconDevices,
   IconLayoutDashboard,
@@ -39,7 +40,8 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { rawGet } from "../api/client";
-import { useFeeds, useSiemWebhooks, useTenants } from "../api/hooks";
+import { formatError } from "../api/errors";
+import { useFeeds, useSiemWebhooks } from "../api/hooks";
 import { CustomizeDrawer } from "./dashboard/CustomizeDrawer";
 import type {
   CategoryBreakdown,
@@ -75,55 +77,53 @@ import {
 
 export function DashboardPage() {
   const [hours, setHours] = useState(24);
-  const [tenantFilter, setTenantFilter] = useState<string>("");
   const REFRESH = 30_000;
   const [widgetConfig, setWidgetConfig] = useState<WidgetConfig[]>(loadWidgetConfig);
   const [customizeOpened, { open: openCustomize, close: closeCustomize }] = useDisclosure(false);
 
-  const { data: tenants } = useTenants();
   const { data: feeds } = useFeeds();
   const { data: webhooks } = useSiemWebhooks();
 
-  const { data: summary, isLoading: summaryLoading } = useQuery({
+  const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery({
     queryKey: ["dashboard-summary", hours],
     queryFn: () => rawGet<DashboardSummary>("/api/v1/analytics/summary", { hours }),
     refetchInterval: REFRESH,
   });
 
-  const { data: timeseries, isLoading: tsLoading } = useQuery({
+  const { data: timeseries, isLoading: tsLoading, error: tsError } = useQuery({
     queryKey: ["dashboard-timeseries", hours],
     queryFn: () => rawGet<TimeseriesPoint[]>("/api/v1/analytics/timeseries", { hours }),
     refetchInterval: REFRESH,
   });
 
-  const { data: byGroup, isLoading: groupLoading } = useQuery({
+  const { data: byGroup, isLoading: groupLoading, error: groupError } = useQuery({
     queryKey: ["dashboard-by-group", hours],
     queryFn: () => rawGet<GroupBreakdown[]>("/api/v1/analytics/by-group", { hours }),
     refetchInterval: REFRESH,
   });
 
-  const { data: topClients, isLoading: clientsLoading } = useQuery({
+  const { data: topClients, isLoading: clientsLoading, error: clientsError } = useQuery({
     queryKey: ["dashboard-top-clients", hours],
     queryFn: () => rawGet<TopClient[]>("/api/v1/analytics/top-clients", { hours, limit: 10 }),
     refetchInterval: REFRESH,
   });
 
-  const { data: categories, isLoading: catsLoading } = useQuery({
+  const { data: categories, isLoading: catsLoading, error: catsError } = useQuery({
     queryKey: ["dashboard-categories", hours],
     queryFn: () => rawGet<CategoryBreakdown[]>("/api/v1/analytics/top-categories", { hours }),
     refetchInterval: REFRESH,
   });
 
-  const { data: recentBlocks, isLoading: recentLoading } = useQuery({
+  const { data: recentBlocks, isLoading: recentLoading, error: recentError } = useQuery({
     queryKey: ["dashboard-recent-blocks"],
     queryFn: () => rawGet<RecentEvent[]>("/api/v1/analytics/recent-events", { decision: "block", limit: 25 }),
     refetchInterval: 10_000,
   });
 
-  const tenantOptions = [
-    { value: "", label: "All tenants" },
-    ...(tenants ?? []).map((t) => ({ value: t.id, label: t.name })),
-  ];
+  // Surfaced as a banner, and used to blank the KPI strip instead of showing
+  // "0" for numbers we actually failed to fetch — a false "0 blocked" reads
+  // as "all clear" on a DNS filtering dashboard, which is the wrong failure mode.
+  const dashboardError = summaryError ?? tsError ?? groupError ?? clientsError ?? catsError ?? recentError;
 
   function updateConfig(next: WidgetConfig[]) {
     setWidgetConfig(next);
@@ -168,7 +168,6 @@ export function DashboardPage() {
       <Group justify="space-between" wrap="wrap" gap="sm">
         <Title order={2}>Dashboard</Title>
         <Group gap="sm" wrap="wrap">
-          <Select size="xs" data={tenantOptions} value={tenantFilter} onChange={(v) => setTenantFilter(v ?? "")} w={160} aria-label="Filter by tenant" />
           <SegmentedControl
             size="xs"
             value={String(hours)}
@@ -184,13 +183,19 @@ export function DashboardPage() {
         </Group>
       </Group>
 
+      {dashboardError && (
+        <Alert color="red" icon={<IconAlertTriangle size={16} />} title="Some dashboard data failed to load">
+          {formatError(dashboardError)}
+        </Alert>
+      )}
+
       {/* KPI strip */}
       <SimpleGrid cols={{ base: 2, sm: 3, md: 5 }} spacing="sm">
-        <KpiCard label="Total queries" value={summaryLoading ? "…" : (summary?.total_queries ?? 0).toLocaleString()} icon={IconActivity} />
-        <KpiCard label="Block ratio" value={summaryLoading ? "…" : `${((summary?.block_ratio ?? 0) * 100).toFixed(1)}%`} icon={IconShieldOff} />
-        <KpiCard label="Cache hit" value={summaryLoading ? "…" : `${((summary?.cache_hit_ratio ?? 0) * 100).toFixed(1)}%`} icon={IconBolt} />
-        <KpiCard label="Active clients" value={summaryLoading ? "…" : (summary?.unique_clients ?? 0).toLocaleString()} icon={IconDevices} />
-        <KpiCard label="Tenants" value={summaryLoading ? "…" : (summary?.tenant_count ?? 0).toLocaleString()} sub={`${summary?.group_count ?? 0} groups`} icon={IconUsers} />
+        <KpiCard label="Total queries" value={summaryLoading ? "…" : summaryError ? "—" : (summary?.total_queries ?? 0).toLocaleString()} icon={IconActivity} />
+        <KpiCard label="Block ratio" value={summaryLoading ? "…" : summaryError ? "—" : `${((summary?.block_ratio ?? 0) * 100).toFixed(1)}%`} icon={IconShieldOff} />
+        <KpiCard label="Cache hit" value={summaryLoading ? "…" : summaryError ? "—" : `${((summary?.cache_hit_ratio ?? 0) * 100).toFixed(1)}%`} icon={IconBolt} />
+        <KpiCard label="Active clients" value={summaryLoading ? "…" : summaryError ? "—" : (summary?.unique_clients ?? 0).toLocaleString()} icon={IconDevices} />
+        <KpiCard label="Tenants" value={summaryLoading ? "…" : summaryError ? "—" : (summary?.tenant_count ?? 0).toLocaleString()} sub={summaryError ? undefined : `${summary?.group_count ?? 0} groups`} icon={IconUsers} />
       </SimpleGrid>
 
       {/* Configurable widget grid */}

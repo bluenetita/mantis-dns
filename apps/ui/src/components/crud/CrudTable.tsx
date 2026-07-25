@@ -75,48 +75,50 @@ export function CrudTable<T>({
   const showActionsColumn = !!(onEdit || onDelete || renderRowActions);
 
   return (
-    <Table
-      striped={striped}
-      highlightOnHover={highlightOnHover}
-      withTableBorder={withTableBorder}
-      withColumnBorders={withColumnBorders}
-    >
-      <Table.Thead>
-        <Table.Tr>
-          {columns.map((col) => (
-            <Table.Th key={col.key} w={col.width}>
-              {col.header}
-            </Table.Th>
-          ))}
-          {showActionsColumn && <Table.Th w={actionsWidth} />}
-        </Table.Tr>
-      </Table.Thead>
-      <Table.Tbody>
-        {data.map((row, index) => (
-          <Table.Tr key={getRowKey(row, index)}>
+    <Table.ScrollContainer minWidth={520}>
+      <Table
+        striped={striped}
+        highlightOnHover={highlightOnHover}
+        withTableBorder={withTableBorder}
+        withColumnBorders={withColumnBorders}
+      >
+        <Table.Thead>
+          <Table.Tr>
             {columns.map((col) => (
-              <Table.Td key={col.key}>{col.render(row)}</Table.Td>
+              <Table.Th key={col.key} w={col.width}>
+                {col.header}
+              </Table.Th>
             ))}
-            {showActionsColumn && (
-              <Table.Td>
-                <Group gap={4} wrap="nowrap" justify="flex-end">
-                  {renderRowActions?.(row)}
-                  {onEdit && (
-                    <ActionIcon aria-label="Edit" size="sm" variant="subtle" onClick={() => onEdit(row)}>
-                      <IconEdit size={14} />
-                    </ActionIcon>
-                  )}
-                  {onDelete && (
-                    <ActionIcon aria-label="Delete" size="sm" variant="subtle" color="red" onClick={() => onDelete(row)}>
-                      <IconTrash size={14} />
-                    </ActionIcon>
-                  )}
-                </Group>
-              </Table.Td>
-            )}
+            {showActionsColumn && <Table.Th w={actionsWidth} />}
           </Table.Tr>
-        ))}
-      </Table.Tbody>
-    </Table>
+        </Table.Thead>
+        <Table.Tbody>
+          {data.map((row, index) => (
+            <Table.Tr key={getRowKey(row, index)}>
+              {columns.map((col) => (
+                <Table.Td key={col.key}>{col.render(row)}</Table.Td>
+              ))}
+              {showActionsColumn && (
+                <Table.Td>
+                  <Group gap={4} wrap="nowrap" justify="flex-end">
+                    {renderRowActions?.(row)}
+                    {onEdit && (
+                      <ActionIcon aria-label="Edit" size="sm" variant="subtle" onClick={() => onEdit(row)}>
+                        <IconEdit size={14} />
+                      </ActionIcon>
+                    )}
+                    {onDelete && (
+                      <ActionIcon aria-label="Delete" size="sm" variant="subtle" color="red" onClick={() => onDelete(row)}>
+                        <IconTrash size={14} />
+                      </ActionIcon>
+                    )}
+                  </Group>
+                </Table.Td>
+              )}
+            </Table.Tr>
+          ))}
+        </Table.Tbody>
+      </Table>
+    </Table.ScrollContainer>
   );
 }

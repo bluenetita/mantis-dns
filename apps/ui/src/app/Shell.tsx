@@ -37,6 +37,8 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { type Role, useAuth } from "../auth/AuthContext";
 import { BrandMark } from "../components/BrandMark";
+import { confirmNavigation, isNavigationBlocked } from "../hooks/useUnsavedChangesGuard";
+import { ErrorBoundary } from "./ErrorBoundary";
 
 const NAV_ITEMS: { to: string; labelKey: string; icon: typeof IconRss; minRole?: Role }[] = [
   { to: "/dashboard", labelKey: "nav.dashboard", icon: IconLayoutDashboard },
@@ -138,8 +140,10 @@ export function Shell() {
                     color="red"
                     leftSection={<IconLogout size={14} />}
                     onClick={() => {
-                      logout();
-                      navigate("/login", { replace: true });
+                      confirmNavigation(() => {
+                        logout();
+                        navigate("/login", { replace: true });
+                      });
                     }}
                   >
                     {t("common.signOut")}
@@ -160,12 +164,21 @@ export function Shell() {
             label={t(item.labelKey)}
             leftSection={<item.icon size={18} aria-hidden="true" />}
             active={location.pathname.startsWith(item.to)}
+            onClick={(e) => {
+              if (!isNavigationBlocked()) return;
+              e.preventDefault();
+              confirmNavigation(() => navigate(item.to));
+            }}
           />
         ))}
       </AppShell.Navbar>
 
       <AppShell.Main id="main-content">
-        <Outlet />
+        {/* Keyed on path so navigating away from a broken route clears the
+            caught error instead of the boundary showing it forever. */}
+        <ErrorBoundary key={location.pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </AppShell.Main>
     </AppShell>
   );

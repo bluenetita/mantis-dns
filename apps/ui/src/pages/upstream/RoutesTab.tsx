@@ -33,6 +33,7 @@ import {
 } from "../../api/hooks";
 import { CrudTable, EntityModal, type CrudColumn } from "../../components/crud";
 import { MATCH_TYPE_OPTIONS, STRATEGY_LABELS } from "./constants";
+import { formatError } from "../../api/errors";
 
 function RouteForm({
   initial,
@@ -129,7 +130,7 @@ export function RoutesTab() {
             notifications.show({ message: "Route updated", color: "green" });
             close();
           },
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }
       );
     } else {
@@ -138,7 +139,7 @@ export function RoutesTab() {
           notifications.show({ message: "Route created", color: "green" });
           close();
         },
-        onError: (e) => notifications.show({ message: String(e), color: "red" }),
+        onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
       });
     }
   };
@@ -151,7 +152,7 @@ export function RoutesTab() {
       confirmProps: { color: "red" },
       onConfirm: () =>
         deleteRoute.mutate(r.id, {
-          onError: (e) => notifications.show({ message: String(e), color: "red" }),
+          onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
         }),
     });
   }
@@ -201,7 +202,7 @@ export function RoutesTab() {
           onChange={() =>
             updateRoute.mutate(
               { id: rt.id, body: { enabled: !rt.enabled } },
-              { onError: (e) => notifications.show({ message: String(e), color: "red" }) }
+              { onError: (e) => notifications.show({ message: formatError(e), color: "red" }) }
             )
           }
         />

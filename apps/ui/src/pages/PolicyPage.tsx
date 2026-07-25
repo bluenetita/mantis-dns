@@ -40,8 +40,8 @@ import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
 import { IconCopy, IconPlus, IconX } from "@tabler/icons-react";
-import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { useCategories, useCompileBundle, useTopDomains, usePolicy, useUpsertPolicy, useTestPolicy } from "../api/hooks";
 import type { Category } from "../api/hooks";
 import { categoryIcon, CATEGORY_GROUP_LABEL } from "../categoryIcons";
@@ -49,6 +49,8 @@ import { BlockPageCard } from "./BlockPageCard";
 import { DuplicatePolicyModal } from "./DuplicatePolicyModal";
 import type { components } from "../api/schema";
 import { useAuth } from "../auth/AuthContext";
+import { confirmNavigation, useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
+import { formatError } from "../api/errors";
 
 type CategoryToggle = components["schemas"]["CategoryToggleIn"];
 type Override = components["schemas"]["OverrideIn"];
@@ -136,8 +138,19 @@ function AddOverrideForm({ onAdd }: { onAdd: (o: Override) => void }) {
   );
 }
 
+/** Order-independent snapshot so re-adding a category/override in a different
+ * position doesn't read as a change. */
+function normalizePolicyState(toggles: CategoryToggle[], overrides: Override[], failure: string): string {
+  return JSON.stringify({
+    toggles: [...toggles].sort((a, b) => a.category_id.localeCompare(b.category_id)),
+    overrides: [...overrides].sort((a, b) => a.domain.localeCompare(b.domain)),
+    failure,
+  });
+}
+
 export function PolicyPage() {
   const { tenantId, groupId } = useParams<{ tenantId: string; groupId: string }>();
+  const navigate = useNavigate();
   const { data: policy, isLoading } = usePolicy(groupId);
   const { data: categories } = useCategories();
   const upsertPolicy = useUpsertPolicy(groupId);
@@ -152,13 +165,21 @@ export function PolicyPage() {
   const [categoryToggles, setCategoryToggles] = useState<CategoryToggle[]>([]);
   const [overrides, setOverrides] = useState<Override[]>([]);
   const [onLoadFailure, setOnLoadFailure] = useState<"FAIL_OPEN" | "FAIL_CLOSED">("FAIL_OPEN");
+  const baselineRef = useRef("");
 
   useEffect(() => {
-    setCategoryToggles((policy?.category_toggles ?? []) as CategoryToggle[]);
-    setOverrides((policy?.overrides ?? []) as Override[]);
-    setOnLoadFailure((policy?.on_load_failure ?? "FAIL_OPEN") as "FAIL_OPEN" | "FAIL_CLOSED");
+    const toggles = (policy?.category_toggles ?? []) as CategoryToggle[];
+    const overs = (policy?.overrides ?? []) as Override[];
+    const failure = (policy?.on_load_failure ?? "FAIL_OPEN") as "FAIL_OPEN" | "FAIL_CLOSED";
+    setCategoryToggles(toggles);
+    setOverrides(overs);
+    setOnLoadFailure(failure);
+    baselineRef.current = normalizePolicyState(toggles, overs, failure);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [policy?.id]);
+
+  const isDirty = normalizePolicyState(categoryToggles, overrides, onLoadFailure) !== baselineRef.current;
+  useUnsavedChangesGuard(isDirty);
 
   function setCategoryAction(categoryId: string, action: string) {
     setCategoryToggles((prev) => {
@@ -180,11 +201,17 @@ export function PolicyPage() {
 
   function save() {
     if (!groupId) return;
+    const savedToggles = categoryToggles;
+    const savedOverrides = overrides;
+    const savedFailure = onLoadFailure;
     upsertPolicy.mutate(
       { on_load_failure: onLoadFailure, category_toggles: categoryToggles, overrides },
       {
-        onSuccess: () => notifications.show({ message: "Policy saved", color: "green" }),
-        onError: (e) => notifications.show({ message: String(e), color: "red" }),
+        onSuccess: () => {
+          baselineRef.current = normalizePolicyState(savedToggles, savedOverrides, savedFailure);
+          notifications.show({ message: "Policy saved", color: "green" });
+        },
+        onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
       }
     );
   }
@@ -193,7 +220,7 @@ export function PolicyPage() {
     if (!groupId) return;
     compileBundle.mutate(groupId, {
       onSuccess: () => notifications.show({ message: "Bundle compiled and published", color: "green" }),
-      onError: (e) => notifications.show({ message: String(e), color: "red" }),
+      onError: (e) => notifications.show({ message: formatError(e), color: "red" }),
     });
   }
 
@@ -214,16 +241,59 @@ export function PolicyPage() {
   return (
     <Stack>
       <Breadcrumbs>
-        <Anchor component={Link} to="/tenants">
+        <Anchor
+          href="/tenants"
+          onClick={(e) => {
+            e.preventDefault();
+            confirmNavigation(() => navigate("/tenants"));
+          }}
+        >
           Tenants
         </Anchor>
-        <Anchor component={Link} to={`/tenants/${tenantId}`}>
+        <Anchor
+          href={`/tenants/${tenantId}`}
+          onClick={(e) => {
+            e.preventDefault();
+            confirmNavigation(() => navigate(`/tenants/${tenantId}`));
+          }}
+        >
           Groups
         </Anchor>
         <Text>Policy</Text>
       </Breadcrumbs>
 
       <Title order={2}>Policy</Title>
+
+      {hasRole("operator") && (
+        <Paper
+          withBorder
+          p="sm"
+          radius="md"
+          style={{ position: "sticky", top: 0, zIndex: 10, backgroundColor: "var(--mantine-color-body)" }}
+        >
+          <Group justify="space-between" wrap="wrap">
+            <Text size="sm" fw={500} c={isDirty ? "orange" : "green"}>
+              {isDirty ? "Unsaved changes" : "All changes saved"}
+            </Text>
+            <Group gap="xs">
+              <Button onClick={save} loading={upsertPolicy.isPending} disabled={!isDirty}>
+                Save policy
+              </Button>
+              <Button variant="default" onClick={compile} loading={compileBundle.isPending} disabled={isDirty}>
+                Compile & publish bundle
+              </Button>
+              {isDirty && (
+                <Text size="xs" c="dimmed">
+                  Save first
+                </Text>
+              )}
+              <Button variant="default" leftSection={<IconCopy size={14} />} onClick={openDuplicate}>
+                Duplicate from group...
+              </Button>
+            </Group>
+          </Group>
+        </Paper>
+      )}
 
       <Card withBorder>
         <Title order={4} mb="sm">
@@ -301,8 +371,10 @@ export function PolicyPage() {
         <Title order={4} mb="sm">
           Test a domain
         </Title>
-        <Text size="sm" c="dimmed" mb="sm">
-          Checks the saved policy (overrides + category feeds) without requiring a compiled bundle.
+        <Text size="sm" c={isDirty ? "orange" : "dimmed"} mb="sm">
+          {isDirty
+            ? "You have unsaved changes — this tests the last saved policy, not your edits below."
+            : "Checks the saved policy (overrides + category feeds) without requiring a compiled bundle."}
         </Text>
         <form
           onSubmit={(e) => {
@@ -352,20 +424,6 @@ export function PolicyPage() {
           </Text>
         )}
       </Card>
-
-      {hasRole("operator") && (
-        <Group>
-          <Button onClick={save} loading={upsertPolicy.isPending}>
-            Save policy
-          </Button>
-          <Button variant="default" onClick={compile} loading={compileBundle.isPending}>
-            Compile & publish bundle
-          </Button>
-          <Button variant="default" leftSection={<IconCopy size={14} />} onClick={openDuplicate}>
-            Duplicate from group...
-          </Button>
-        </Group>
-      )}
 
       {groupId && (
         <DuplicatePolicyModal
