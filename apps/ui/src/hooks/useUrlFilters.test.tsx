@@ -17,7 +17,7 @@
 
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { MemoryRouter, useSearchParams } from "react-router-dom";
+import { MemoryRouter, useSearchParams } from "react-router";
 import { useUrlFilters } from "./useUrlFilters";
 
 function wrapper({ children }: { children: ReactNode }) {

@@ -18,7 +18,7 @@
 import { Badge, Group, SegmentedControl, Stack, Tabs, Title } from "@mantine/core";
 import { IconWifi } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router";
 import { useDhcpHealth, useDhcpScopes, useDhcpScopes6, useTenants, useZones } from "../api/hooks";
 import { LeasesTab, ReservationsTab, ScopesTab, StatusTab, type ReservePrefill } from "./dhcp";
 import { Leases6Tab, Reservation6sTab, Scope6sTab } from "./dhcp/dhcpv6";

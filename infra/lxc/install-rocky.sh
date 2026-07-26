@@ -307,7 +307,7 @@ dnf -y install dnf-plugins-core epel-release
 dnf config-manager --set-enabled crb 2>/dev/null || dnf config-manager --set-enabled powertools 2>/dev/null || true
 
 echo "==> Installing packages (postgresql, python3, nodejs, nginx$( { [ "$INSTALL_FILTER" = "1" ] || [ "$INSTALL_DHCP" = "1" ] || [ "$INSTALL_DHCP6" = "1" ]; } && echo ', cargo' ))..."
-dnf -y module enable nodejs:20 2>/dev/null || true
+dnf -y module enable nodejs:22 2>/dev/null || true
 PKGS="postgresql-server postgresql-contrib python3 python3-pip nodejs nginx gettext openssl ca-certificates curl jq policycoreutils-python-utils firewalld libcap"
 if [ "$INSTALL_FILTER" = "1" ] || [ "$INSTALL_DHCP" = "1" ] || [ "$INSTALL_DHCP6" = "1" ]; then
   PKGS="$PKGS cargo"

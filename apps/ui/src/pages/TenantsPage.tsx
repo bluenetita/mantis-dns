@@ -22,7 +22,7 @@ import { modals } from "@mantine/modals";
 import { notifications } from "@mantine/notifications";
 import { TextInput } from "@mantine/core";
 import { IconPlus, IconTrash } from "@tabler/icons-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import { useCreateTenant, useDeleteTenant, useTenants } from "../api/hooks";
 import { useAuth } from "../auth/AuthContext";
 import { formatError } from "../api/errors";

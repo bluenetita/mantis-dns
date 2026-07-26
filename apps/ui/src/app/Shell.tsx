@@ -33,7 +33,7 @@ import {
   IconNetwork,
   IconList,
 } from "@tabler/icons-react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
 import { type Role, useAuth } from "../auth/AuthContext";
 import { BrandMark } from "../components/BrandMark";

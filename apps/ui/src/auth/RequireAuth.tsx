@@ -16,7 +16,7 @@
  */
 
 import { Center, Loader } from "@mantine/core";
-import { Navigate, Outlet, useLocation } from "react-router-dom";
+import { Navigate, Outlet, useLocation } from "react-router";
 import { useAuth } from "./AuthContext";
 
 export function RequireAuth() {

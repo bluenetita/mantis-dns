@@ -40,7 +40,7 @@ import { modals } from "@mantine/modals";
 import { notifications } from "@mantine/notifications";
 import { IconEdit, IconTrash } from "@tabler/icons-react";
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router";
 import { useClients, useDeleteClient, useRegisterClient, useTenants } from "../api/hooks";
 import { useAuth } from "../auth/AuthContext";
 import type { components } from "../api/schema";

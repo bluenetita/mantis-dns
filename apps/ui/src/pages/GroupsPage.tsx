@@ -22,7 +22,7 @@ import { useDisclosure } from "@mantine/hooks";
 import { modals } from "@mantine/modals";
 import { notifications } from "@mantine/notifications";
 import { IconPencil, IconPlus, IconTrash, IconUsers } from "@tabler/icons-react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router";
 import { useCreateGroup, useDeleteGroup, useGroups, useRenameGroup, useTenants } from "../api/hooks";
 import { useAuth } from "../auth/AuthContext";
 import { formatError } from "../api/errors";
