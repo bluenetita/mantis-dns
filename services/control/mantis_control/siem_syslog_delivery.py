@@ -80,6 +80,7 @@ def _build_test_event(tenant_id: str | None) -> SiemEvent:
         id="00000000-0000-0000-0000-000000000000",
         seq=0,
         occurred_at=now,
+        ingested_at=now,
         tenant_id=tenant_id,
         group_id="test",
         client_ip="203.0.113.1",
@@ -171,9 +172,10 @@ async def _process_delivery_sink(
     now = datetime.now(timezone.utc)
 
     # Re-fetch with lock to ensure only one runner processes this sink concurrently.
-    sink = db.get(models.SiemSyslog, sink.id, with_for_update=True)
-    if sink is None or not sink.enabled:
+    locked = db.get(models.SiemSyslog, sink.id, with_for_update=True)
+    if locked is None or not locked.enabled:
         return
+    sink = locked
 
     if sink.next_retry_at is not None:
         if sink.next_retry_at.tzinfo is None:

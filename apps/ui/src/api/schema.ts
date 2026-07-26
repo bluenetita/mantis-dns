@@ -3142,6 +3142,8 @@ export interface components {
              * @enum {string}
              */
             filter_decision: "all" | "block" | "allow";
+            /** Ca Cert Pem */
+            ca_cert_pem?: string | null;
             /**
              * Enabled
              * @default true
@@ -3174,6 +3176,8 @@ export interface components {
             flush_interval_s: number;
             /** Filter Decision */
             filter_decision: string;
+            /** Ca Cert Pem */
+            ca_cert_pem: string | null;
             /** Enabled */
             enabled: boolean;
             /** Last Delivered At */
@@ -3210,6 +3214,8 @@ export interface components {
             flush_interval_s?: number | null;
             /** Filter Decision */
             filter_decision?: ("all" | "block" | "allow") | null;
+            /** Ca Cert Pem */
+            ca_cert_pem?: string | null;
             /** Enabled */
             enabled?: boolean | null;
         };
