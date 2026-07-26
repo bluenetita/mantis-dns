@@ -13,17 +13,16 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""dhcp ddns retry queue
+"""baseline
 
-mantis-dhcp's own delivery-reliability table for /internal/dhcp-event POSTs
-that failed (control plane down, network blip). Not part of the Python
-domain model — no SQLAlchemy model or API surface — mantis-dhcp (Rust) is
-the only reader/writer, same as it owns dhcp_leases. Still goes through
-Alembic because every schema change does, per this project's convention.
+Product has not shipped yet, so the prior 16-migration history (one per
+schema change since the real baseline) carried no upgrade path anyone
+depended on. Folded into a single migration that creates the schema
+straight from the current ORM metadata instead of replaying history.
 
-Revision ID: a3d7e91c4f56
-Revises: f4a9c1d3e8b2
-Create Date: 2026-07-24 00:00:00.000000
+Revision ID: cc2a9802b8b7
+Revises:
+Create Date: 2026-07-26 00:00:00.000000
 
 """
 from typing import Sequence, Union
@@ -31,16 +30,19 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
+from mantis_control.db.models import Base
 
 # revision identifiers, used by Alembic.
-revision: str = 'a3d7e91c4f56'
-down_revision: Union[str, Sequence[str], None] = 'f4a9c1d3e8b2'
+revision: str = 'cc2a9802b8b7'
+down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
     """Upgrade schema."""
+    Base.metadata.create_all(bind=op.get_bind())
+    # mantis-dhcp DDNS retry queue — owned by Rust service, not in ORM.
     op.create_table(
         'dhcp_ddns_retries',
         sa.Column('id', sa.String(length=36), nullable=False),
@@ -66,3 +68,4 @@ def downgrade() -> None:
     """Downgrade schema."""
     op.drop_index(op.f('ix_dhcp_ddns_retries_next_attempt_at'), table_name='dhcp_ddns_retries')
     op.drop_table('dhcp_ddns_retries')
+    Base.metadata.drop_all(bind=op.get_bind())
