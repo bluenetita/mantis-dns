@@ -193,7 +193,15 @@ class QueryEvent(Base):
     response_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
     cache_hit: Mapped[bool | None] = mapped_column(nullable=True)
     latency_us: Mapped[int | None] = mapped_column(nullable=True)
+    # Client-reported query time (see QueryEventIn.occurred_at_ms) — falls
+    # back to ingest time for older filter-node builds that don't send it.
     occurred_at: Mapped[datetime] = mapped_column(default=_now, index=True)
+    # Always server-set at INSERT, unlike occurred_at above — this is what
+    # the SIEM delivery cursor's DELIVERY_LAG_SECONDS safety window gates on
+    # (siem_common.py), since it needs a timestamp that actually correlates
+    # with `seq` commit order. occurred_at can't be used for that once a
+    # filter node supplies its own (client-clock, possibly skewed) value.
+    ingested_at: Mapped[datetime] = mapped_column(default=_now, index=True)
 
 
 class SiemSyslog(Base):

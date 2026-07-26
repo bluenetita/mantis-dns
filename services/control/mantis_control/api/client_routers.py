@@ -25,7 +25,7 @@ import ipaddress
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
 from mantis_control.audit import write_audit_log
@@ -53,10 +53,24 @@ class ClientOut(BaseModel):
 
 
 class ClientUpsert(BaseModel):
-    hostname: str | None = None
-    owner: str | None = None
-    device_type: str | None = None
-    tags: list[str] = []
+    # max_length values match the ClientEntry columns they're written to
+    # (models.py) — enforcing here at the trust boundary turns a Postgres
+    # "value too long" error into a 422, and caps tags/tag length so this
+    # field (copied verbatim into every SIEM export — see build_siem_events)
+    # can't grow large enough to wedge a syslog sink's delivery (see
+    # _MAX_LINE_BYTES in siem_syslog_delivery.py).
+    hostname: str | None = Field(None, max_length=255)
+    owner: str | None = Field(None, max_length=255)
+    device_type: str | None = Field(None, max_length=32)
+    tags: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator("tags")
+    @classmethod
+    def _tags_bounded(cls, tags: list[str]) -> list[str]:
+        for tag in tags:
+            if len(tag) > 64:
+                raise ValueError("each tag must be 64 characters or fewer")
+        return tags
 
 
 @router.get("/tenants/{tenant_id}/clients", response_model=list[ClientOut])

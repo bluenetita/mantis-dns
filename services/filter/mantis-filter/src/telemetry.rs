@@ -23,11 +23,24 @@
 //! category/feed, latency, cache hit) for the control plane's SIEM export API
 //! to hand a consuming SIEM actionable data without post-processing.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tracing::warn;
+
+/// Wall-clock time of the DNS decision, as Unix epoch milliseconds — plain
+/// `u64` rather than pulling in a datetime crate for one timestamp field.
+/// Without this, the control plane stamped `occurred_at` at ingest time
+/// (flush_loop batches every 2s, longer under backpressure), so a SIEM
+/// correlating a DNS event against firewall/EDR timelines was working off
+/// "when we got around to telling you" instead of "when the query happened".
+pub fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 /// Everything the control plane's `QueryEvent` row wants, gathered by the
 /// caller at the point of decision (see `build_response_inner` in lib.rs).
@@ -43,6 +56,7 @@ pub struct QueryEventInput {
     pub response_code: String,
     pub cache_hit: Option<bool>,
     pub latency_us: u32,
+    pub occurred_at_ms: u64,
 }
 
 pub struct TelemetryEmitter {
@@ -129,6 +143,7 @@ async fn flush(client: &reqwest::Client, control_url: &str, batch: Vec<QueryEven
                 "response_code": r.response_code,
                 "cache_hit": r.cache_hit,
                 "latency_us": r.latency_us,
+                "occurred_at_ms": r.occurred_at_ms,
             })
         })
         .collect();

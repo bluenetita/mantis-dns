@@ -24,7 +24,7 @@ alert. `build_siem_events` is shared with the syslog delivery engine
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -92,7 +92,12 @@ def build_siem_events(db: Session, rows: list[models.QueryEvent]) -> list[SiemEv
             SiemEvent(
                 id=r.id,
                 seq=r.seq,
-                occurred_at=r.occurred_at,
+                # occurred_at column has no timezone(True) — Postgres hands
+                # back a naive datetime, and downstream consumers
+                # (_to_cef's start=, syslog's RFC 5424 timestamp) would
+                # otherwise treat it as host-local time via .astimezone().
+                # Fixed once here rather than in each consumer.
+                occurred_at=r.occurred_at if r.occurred_at.tzinfo else r.occurred_at.replace(tzinfo=timezone.utc),
                 tenant_id=r.tenant_id,
                 group_id=r.group_id,
                 client_ip=r.client_ip,

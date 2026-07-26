@@ -55,6 +55,18 @@ _CONNECT_TIMEOUT_S = 10.0
 _SEVERITY = {"block": 4, "allow": 6}  # Warning / Informational
 _DEFAULT_SEVERITY = 6
 
+# A single oversized event (e.g. an operator-set client tags list, or any
+# future unbounded field) would otherwise wedge a sink forever: the cursor
+# only advances on whole-batch success, so a batch containing one message
+# too large for the collector (rsyslog's default maxMessageSize is 8KB;
+# UDP's hard ceiling is 65507 bytes) fails every retry, backs off, and
+# auto-disables — re-enabling replays the exact same poison message. This is
+# a conservative shared cap well under typical collector limits — truncating
+# the offending message (with a marker) keeps the batch, and every message
+# after it, flowing instead of retrying the same line forever.
+_MAX_LINE_BYTES = 32_768
+_TRUNCATION_SUFFIX = b"...[truncated]"
+
 
 def _to_syslog_line(sink: models.SiemSyslog, e: SiemEvent) -> str:
     """RFC 5424 message: `<PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID
@@ -67,7 +79,16 @@ def _to_syslog_line(sink: models.SiemSyslog, e: SiemEvent) -> str:
     timestamp = e.occurred_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     msg = _to_cef(e) if sink.format == "cef" else e.model_dump_json()
     app_name = sink.app_name or "mantis-dns"
-    return f"<{pri}>1 {timestamp} - {app_name} - - - {msg}"
+    header = f"<{pri}>1 {timestamp} - {app_name} - - - "
+
+    msg_bytes = msg.encode("utf-8")
+    header_bytes = header.encode("utf-8")
+    if len(header_bytes) + len(msg_bytes) > _MAX_LINE_BYTES:
+        keep = max(_MAX_LINE_BYTES - len(header_bytes) - len(_TRUNCATION_SUFFIX), 0)
+        # errors="ignore" drops a multi-byte UTF-8 char split by the cut.
+        msg = msg_bytes[:keep].decode("utf-8", errors="ignore") + _TRUNCATION_SUFFIX.decode()
+
+    return header + msg
 
 
 async def _send_tcp(ip: str, port: int, lines: list[str], *, tls: bool, original_host: str) -> None:

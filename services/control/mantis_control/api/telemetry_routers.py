@@ -49,6 +49,15 @@ class QueryEventIn(BaseModel):
     response_code: str | None = Field(None, max_length=16)
     cache_hit: bool | None = None
     latency_us: int | None = None
+    # Unix epoch milliseconds at the moment of the DNS decision (see
+    # telemetry.rs::now_ms on the filter node) — None on older filter
+    # builds that don't send it yet, in which case QueryEvent.occurred_at
+    # falls back to its ingest-time default, same as before this field
+    # existed. A plain int (not a datetime) so an older/newer filter build
+    # can't desync from whatever ISO-8601 quirks a datetime field would
+    # invite; the filter node has no clock-sync concept to get wrong here
+    # beyond its own system clock.
+    occurred_at_ms: int | None = None
 
 
 class QueryEventBatch(BaseModel):
@@ -243,22 +252,26 @@ def ingest_query_events(
     )
 
     for event in payload.events:
-        db.add(
-            models.QueryEvent(
-                group_id=event.group_id,
-                tenant_id=tenant_by_group.get(event.group_id),
-                qname=event.qname,
-                decision=event.decision,
-                client_ip=event.client_ip,
-                qtype=event.qtype,
-                matched_rule=event.matched_rule,
-                matched_category=event.matched_category,
-                matched_feed_id=event.matched_feed_id,
-                response_code=event.response_code,
-                cache_hit=event.cache_hit,
-                latency_us=event.latency_us,
-            )
+        row = models.QueryEvent(
+            group_id=event.group_id,
+            tenant_id=tenant_by_group.get(event.group_id),
+            qname=event.qname,
+            decision=event.decision,
+            client_ip=event.client_ip,
+            qtype=event.qtype,
+            matched_rule=event.matched_rule,
+            matched_category=event.matched_category,
+            matched_feed_id=event.matched_feed_id,
+            response_code=event.response_code,
+            cache_hit=event.cache_hit,
+            latency_us=event.latency_us,
         )
+        if event.occurred_at_ms is not None:
+            # Older filter-node builds don't send this — leave occurred_at
+            # unset so the column's own ingest-time default applies, same
+            # as before this field existed.
+            row.occurred_at = datetime.fromtimestamp(event.occurred_at_ms / 1000, tz=timezone.utc)
+        db.add(row)
     # Sprint 16 (design.md §20.6) auto-discovery: touch/create a stub
     # ClientEntry for every unique (tenant_id, ip) seen in this batch, so
     # unregistered clients surface in the UI without the DNS hot path ever

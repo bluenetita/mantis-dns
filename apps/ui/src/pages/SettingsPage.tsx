@@ -100,6 +100,7 @@ function AddSyslogForm({ onDone }: { onDone: () => void }) {
       name: (v) => (v.trim().length < 2 ? "Required" : null),
       host: (v) => (v.trim().length === 0 ? "Required" : null),
       port: (v) => (v < 1 || v > 65535 ? "Must be 1–65535" : null),
+      app_name: (v) => (/^[!-~]+$/.test(v) ? null : "No spaces or control characters"),
     },
   });
 
@@ -135,7 +136,7 @@ function AddSyslogForm({ onDone }: { onDone: () => void }) {
         </SimpleGrid>
         <SimpleGrid cols={2}>
           <NumberInput label="Facility" description="RFC 5424, default local0" min={0} max={23} {...form.getInputProps("facility")} />
-          <TextInput label="APP-NAME" description="RFC 5424 header field" {...form.getInputProps("app_name")} />
+          <TextInput label="APP-NAME" description="RFC 5424 header field — no spaces" maxLength={48} {...form.getInputProps("app_name")} />
         </SimpleGrid>
         <Select
           label="Event filter"
@@ -147,8 +148,8 @@ function AddSyslogForm({ onDone }: { onDone: () => void }) {
           {...form.getInputProps("filter_decision")}
         />
         <SimpleGrid cols={2}>
-          <NumberInput label="Batch size" min={1} max={1000} {...form.getInputProps("batch_size")} />
-          <NumberInput label="Flush interval (s)" min={5} {...form.getInputProps("flush_interval_s")} />
+          <NumberInput label="Batch size" min={1} max={10_000} {...form.getInputProps("batch_size")} />
+          <NumberInput label="Flush interval (s)" min={10} max={86_400} {...form.getInputProps("flush_interval_s")} />
         </SimpleGrid>
         <Group justify="flex-end">
           <Button variant="default" onClick={onDone}>Cancel</Button>
@@ -221,7 +222,13 @@ function SiemSyslogSection() {
     testSyslog.mutate(s.id, {
       onSuccess: (r) =>
         notifications.show({
-          message: r.success ? `${s.name}: sent` : `${s.name}: failed — ${r.error}`,
+          // UDP has no delivery acknowledgment — a successful send only means
+          // the datagram left this host, not that the collector received it.
+          message: r.success
+            ? s.transport === "udp"
+              ? `${s.name}: sent (UDP — delivery not confirmed)`
+              : `${s.name}: sent`
+            : `${s.name}: failed — ${r.error}`,
           color: r.success ? "green" : "red",
         }),
       onError: (e) => notifications.show({ message: formatError(e), color: "red" }),

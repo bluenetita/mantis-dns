@@ -104,11 +104,8 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     finally:
         db.close()
 
-    async def _run_siem_delivery_cycles() -> None:
-        await run_syslog_delivery_cycle()
-
     scheduler.add_job(
-        _run_siem_delivery_cycles,
+        run_syslog_delivery_cycle,
         "interval",
         seconds=10,
         id="siem-delivery",

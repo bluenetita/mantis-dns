@@ -348,6 +348,7 @@ fn emit_zone_telemetry(
         response_code: format!("{:?}", response.response_code()),
         cache_hit: None,
         latency_us: start.elapsed().as_micros().min(u32::MAX as u128) as u32,
+        occurred_at_ms: crate::telemetry::now_ms(),
     });
 }
 
@@ -817,6 +818,7 @@ pub(crate) async fn build_response(
         response_code: format!("{:?}", response.response_code()),
         cache_hit,
         latency_us: start.elapsed().as_micros().min(u32::MAX as u128) as u32,
+        occurred_at_ms: crate::telemetry::now_ms(),
     });
 
     response

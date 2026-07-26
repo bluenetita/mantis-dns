@@ -48,7 +48,10 @@ class SiemSyslogCreate(BaseModel):
     transport: Literal["tcp", "tls", "udp"] = "tls"
     format: Literal["json", "cef"] = "cef"
     facility: int = Field(16, ge=0, le=23)
-    app_name: str = Field("mantis-dns", max_length=48)
+    # RFC 5424 APP-NAME is PRINTUSASCII (no space, no control chars) — a
+    # value outside that shifts every header field after it for the
+    # receiver (see _to_syslog_line's fixed "- APP-NAME - - -" framing).
+    app_name: str = Field("mantis-dns", max_length=48, pattern=r"^[!-~]+$")
     batch_size: int = Field(200, ge=1, le=10_000)
     flush_interval_s: int = Field(30, ge=10, le=86_400)
     filter_decision: Literal["all", "block", "allow"] = "all"
@@ -62,7 +65,7 @@ class SiemSyslogUpdate(BaseModel):
     transport: Literal["tcp", "tls", "udp"] | None = None
     format: Literal["json", "cef"] | None = None
     facility: int | None = Field(None, ge=0, le=23)
-    app_name: str | None = Field(None, max_length=48)
+    app_name: str | None = Field(None, max_length=48, pattern=r"^[!-~]+$")
     batch_size: int | None = Field(None, ge=1, le=10_000)
     flush_interval_s: int | None = Field(None, ge=10, le=86_400)
     filter_decision: Literal["all", "block", "allow"] | None = None

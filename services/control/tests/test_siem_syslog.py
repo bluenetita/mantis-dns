@@ -144,7 +144,18 @@ def db():
 
 
 def _query_event(db, seq: int, decision: str = "block") -> QueryEvent:
-    e = QueryEvent(seq=seq, group_id="g1", qname=f"q{seq}.example", decision=decision)
+    # ingested_at must clear DELIVERY_LAG_SECONDS (siem_common.py) or
+    # process_delivery_sink's safe_cutoff will withhold it as "too recent to
+    # be sure no earlier-seq transaction is still in flight" — a real fixture
+    # would never be inserted at exactly the query moment.
+    e = QueryEvent(
+        seq=seq,
+        group_id="g1",
+        qname=f"q{seq}.example",
+        decision=decision,
+        occurred_at=datetime.now(timezone.utc) - timedelta(seconds=30),
+        ingested_at=datetime.now(timezone.utc) - timedelta(seconds=30),
+    )
     db.add(e)
     return e
 
