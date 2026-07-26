@@ -150,6 +150,13 @@ def _to_cef(e: SiemEvent) -> str:
         parts.append(f"cs2={_cef_ext(e.matched_feed_id)} cs2Label=matchedFeed")
     if e.qtype:
         parts.append(f"cs3={_cef_ext(e.qtype)} cs3Label=queryType")
+    if e.owner:
+        parts.append(f"cs4={_cef_ext(e.owner)} cs4Label=clientOwner")
+    if e.device_type:
+        parts.append(f"cs5={_cef_ext(e.device_type)} cs5Label=clientDeviceType")
+    if e.tags:
+        tags_str = ",".join(e.tags)
+        parts.append(f"cs6={_cef_ext(tags_str)} cs6Label=clientTags")
     if e.latency_us is not None:
         parts.append(f"cn1={e.latency_us} cn1Label=latencyMicros")
     if e.cache_hit is not None:

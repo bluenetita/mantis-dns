@@ -1671,11 +1671,8 @@ export interface components {
             owner?: string | null;
             /** Device Type */
             device_type?: string | null;
-            /**
-             * Tags
-             * @default []
-             */
-            tags: string[];
+            /** Tags */
+            tags?: string[];
         };
         /** DaemonHeartbeatOut */
         DaemonHeartbeatOut: {
@@ -2226,6 +2223,8 @@ export interface components {
             cache_hit?: boolean | null;
             /** Latency Us */
             latency_us?: number | null;
+            /** Occurred At Ms */
+            occurred_at_ms?: number | null;
         };
         /** QueryLogEntry */
         QueryLogEntry: {

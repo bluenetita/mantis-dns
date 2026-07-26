@@ -34,8 +34,7 @@ from mantis_control.api.siem_syslog_routers import (
     update_syslog,
 )
 from mantis_control.db.models import AuditLog, Base, QueryEvent, SiemSyslog
-from mantis_control.siem_common import describe_error
-from mantis_control.siem_syslog_delivery import _process_syslog, _to_syslog_line
+from mantis_control.siem_syslog_delivery import _process_syslog, _to_syslog_line, describe_error
 
 
 def _event(**overrides) -> SiemEvent:

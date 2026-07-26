@@ -29,15 +29,27 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from fastapi import HTTPException
 from mantis_control.audit import write_audit_log
-from mantis_control.auth import require_role, user_tenant_filter
+from mantis_control.auth import require_role
 from mantis_control.db import models
 from mantis_control.db.session import get_db
-from mantis_control.siem_common import describe_error, get_sink_or_404
 from mantis_control.siem_syslog_delivery import deliver_test_event
 from mantis_control.ssrf_guard import check_probe_target_safe
 
 router = APIRouter()
+
+
+def _describe_error(e: Exception) -> str:
+    return str(e) or type(e).__name__
+
+
+def _get_sink_or_404(db: Session, sink_id: str, _admin: models.User) -> models.SiemSyslog:
+    """404 if missing. (Tenant checks not needed — all routes require admin role.)"""
+    sink = db.get(models.SiemSyslog, sink_id)
+    if sink is None:
+        raise HTTPException(404, "syslog sink not found")
+    return sink
 
 
 class SiemSyslogCreate(BaseModel):
@@ -133,11 +145,7 @@ def create_syslog(
 
 @router.get("/siem/syslog", response_model=list[SiemSyslogOut])
 def list_syslog(db: Session = Depends(get_db), _admin: models.User = Depends(require_role("admin"))) -> list[models.SiemSyslog]:
-    scope = user_tenant_filter(_admin)
-    q = db.query(models.SiemSyslog)
-    if scope is not None:
-        q = q.filter(models.SiemSyslog.tenant_id == scope)
-    return list(q.all())
+    return list(db.query(models.SiemSyslog).all())
 
 
 @router.patch("/siem/syslog/{syslog_id}", response_model=SiemSyslogOut)
@@ -147,7 +155,7 @@ def update_syslog(
     db: Session = Depends(get_db),
     admin: models.User = Depends(require_role("admin")),
 ) -> models.SiemSyslog:
-    sink = get_sink_or_404(db, models.SiemSyslog, syslog_id, admin, not_found_msg="syslog sink not found")
+    sink = _get_sink_or_404(db, syslog_id, admin)
 
     changes = payload.model_dump(exclude_unset=True)
     if "host" in changes:
@@ -158,9 +166,9 @@ def update_syslog(
     for field, value in changes.items():
         setattr(sink, field, value)
     if payload.enabled is True or ("host" in changes and sink.enabled):
-        # Re-enabling or fixing the host clears the failure backoff so delivery resumes immediately.
         sink.consecutive_failures = 0
         sink.next_retry_at = None
+        sink.last_error = None
 
     write_audit_log(db, "siem_syslog.update", "siem_syslog", sink.id, detail=str(changes), actor=admin.email, tenant_id=sink.tenant_id)
     db.commit()
@@ -174,7 +182,7 @@ def delete_syslog(
     db: Session = Depends(get_db),
     admin: models.User = Depends(require_role("admin")),
 ) -> None:
-    sink = get_sink_or_404(db, models.SiemSyslog, syslog_id, admin, not_found_msg="syslog sink not found")
+    sink = _get_sink_or_404(db, syslog_id, admin)
     write_audit_log(db, "siem_syslog.delete", "siem_syslog", sink.id, detail=f"name={sink.name}", actor=admin.email, tenant_id=sink.tenant_id)
     db.delete(sink)
     db.commit()
@@ -188,7 +196,7 @@ async def test_syslog(
 ) -> SyslogTestResult:
     """Sends one synthetic event to the configured host, framed the same way
     real batches are, without touching the sink's delivery cursor."""
-    sink = get_sink_or_404(db, models.SiemSyslog, syslog_id, admin, not_found_msg="syslog sink not found")
+    sink = _get_sink_or_404(db, syslog_id, admin)
 
     try:
         await deliver_test_event(sink)
@@ -196,7 +204,7 @@ async def test_syslog(
         db.commit()
         return SyslogTestResult(success=True, error=None)
     except Exception as e:
-        error = describe_error(e)
+        error = _describe_error(e)
         write_audit_log(db, "siem_syslog.test", "siem_syslog", sink.id, detail=f"failed: {error}", actor=admin.email, tenant_id=sink.tenant_id)
         db.commit()
         return SyslogTestResult(success=False, error=error)
