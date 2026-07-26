@@ -29,7 +29,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from fastapi import HTTPException
 from mantis_control.audit import write_audit_log
 from mantis_control.auth import require_role
 from mantis_control.db import models
