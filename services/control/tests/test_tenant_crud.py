@@ -28,6 +28,7 @@ from mantis_control.api.routers import delete_tenant
 from mantis_control.db.models import (
     AuditLog,
     Base,
+    BlockPageTemplate,
     DhcpScope,
     DhcpScope6,
     DnsRecord,
@@ -52,6 +53,7 @@ _TABLES = [
     DnsRecord.__table__,
     DhcpScope.__table__,
     DhcpScope6.__table__,
+    BlockPageTemplate.__table__,
     AuditLog.__table__,
 ]
 
@@ -118,6 +120,22 @@ def test_delete_tenant_cascades_zone_records(db, tenant):
     delete_tenant(tenant.id, db, _Admin())
 
     assert db.get(DnsRecord, record_id) is None
+
+
+def test_delete_tenant_removes_tenant_default_block_template(db, tenant):
+    template = BlockPageTemplate(
+        tenant_id=tenant.id,
+        group_id=None,
+        title="Tenant default",
+    )
+    db.add(template)
+    db.commit()
+    template_id = template.id
+
+    delete_tenant(tenant.id, db, _Admin())
+
+    assert db.get(Tenant, tenant.id) is None
+    assert db.get(BlockPageTemplate, template_id) is None
 
 
 # No populated-DhcpScope/DhcpScope6 regression test: both carry a postgres

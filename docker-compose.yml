@@ -72,7 +72,10 @@ services:
       - MANTIS_NODE_NAME=${MANTIS_NODE_NAME:-dev}
       - MANTIS_NODE_TOKEN=${MANTIS_NODE_TOKEN:-dev-insecure-node-token}
       - MANTIS_CONTROL_PUBLIC_KEY_SHA256=${MANTIS_CONTROL_PUBLIC_KEY_SHA256:-}
-      - UPSTREAM_BUNDLE_TENANT=${UPSTREAM_BUNDLE_TENANT:-*}
+      # Blank means derive the tenant from GROUP_ID's verified policy bundle.
+      # Set "*" explicitly only for a legacy single-group deployment that
+      # deliberately wants the global upstream policy.
+      - UPSTREAM_BUNDLE_TENANT=${UPSTREAM_BUNDLE_TENANT:-}
       # Co-hosted block-page HTTP listener (docs/design-block-page.md). Only
       # started when set (blank = disabled, matching mantis-filter's own
       # opt-in default); a policy using BLOCK_MODE_REDIRECT should point its

@@ -85,7 +85,7 @@ class IngestOut(BaseModel):
 def create_feed(
     payload: FeedCreate,
     db: Session = Depends(get_db),
-    user: models.User = Depends(require_role("admin", "operator")),
+    user: models.User = Depends(require_role("admin")),
 ) -> models.Feed:
     import re
     if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", payload.id):
@@ -116,7 +116,7 @@ def update_feed(
     feed_id: str,
     payload: FeedUpdate,
     db: Session = Depends(get_db),
-    user: models.User = Depends(require_role("admin", "operator")),
+    user: models.User = Depends(require_role("admin")),
 ) -> models.Feed:
     """Toggle enabled, change interval/url/etc — the UI's main feed-config
     surface. Catalog feeds can be edited/disabled here too; only their
@@ -145,7 +145,7 @@ def update_feed(
 def delete_feed(
     feed_id: str,
     db: Session = Depends(get_db),
-    user: models.User = Depends(require_role("admin", "operator")),
+    user: models.User = Depends(require_role("admin")),
 ) -> None:
     feed = db.get(models.Feed, feed_id)
     if feed is None:
@@ -160,7 +160,7 @@ def delete_feed(
 async def ingest_feed(
     feed_id: str,
     db: Session = Depends(get_db),
-    _user: models.User = Depends(require_role("admin", "operator")),
+    _user: models.User = Depends(require_role("admin")),
 ) -> IngestOut:
     # Serializes this "sync now" against the feed's own recurring scheduler
     # job (scheduler.run_ingest) — without it, both can fetch/write the same

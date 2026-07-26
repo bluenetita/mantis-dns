@@ -39,6 +39,7 @@ from mantis_control.db.models import (
     BlockPageTemplate,
     Feed,
     Group,
+    NodeCredential,
     Policy,
     PolicyCategoryToggle,
     PolicyOverride,
@@ -206,7 +207,13 @@ def test_upsert_then_resolve_via_service_endpoint(db, group):
     )
     upsert_group_block_template(group_id=group.id, payload=payload, db=db, user=_User())
 
-    out = get_effective_block_template(group_id=group.id, db=db, _=None)
+    node = NodeCredential(
+        node_name="test",
+        token_hash="x",
+        created_by="test",
+        allow_all=True,
+    )
+    out = get_effective_block_template(group_id=group.id, db=db, node=node)
     assert out.block_mode == "BLOCK_MODE_REDIRECT"
     assert out.redirect_ipv4 == "10.0.0.53"
     assert out.title == "Blocked by Acme"

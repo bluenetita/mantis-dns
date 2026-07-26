@@ -108,6 +108,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 node_name="dev",
                 token_hash=hash_node_token(settings.MANTIS_DEV_NODE_TOKEN),
                 created_by="system",
+                allow_all=True,
             ))
             db.commit()
             logging.getLogger(__name__).warning(

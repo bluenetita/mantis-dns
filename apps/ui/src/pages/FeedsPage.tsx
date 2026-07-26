@@ -361,7 +361,9 @@ export function FeedsPage() {
   const { search, category: categoryFilter, status: statusFilter } = filters;
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const { hasRole } = useAuth();
-  const canWrite = hasRole("operator");
+  // Feeds are global control-plane resources, so only fleet admins may
+  // mutate them. Tenant operators retain a read-only view.
+  const canWrite = hasRole("admin");
 
   // Derived stats
   const totalDomains = feeds.reduce((s, f) => s + (f.last_domain_count ?? 0), 0);

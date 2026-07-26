@@ -16,6 +16,11 @@
  */
 
 fn main() {
+    // The protobuf source lives outside this crate. Cargo otherwise only
+    // watches the crate directory and can reuse stale generated Rust after
+    // bundle.proto changes (notably in release/benchmark builds).
+    println!("cargo:rerun-if-changed=../../../proto/bundle.proto");
+
     let file_descriptor_set =
         protox::compile(["../../../proto/bundle.proto"], ["../../../proto"])
             .expect("failed to parse bundle.proto via protox");

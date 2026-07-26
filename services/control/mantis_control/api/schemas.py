@@ -59,6 +59,7 @@ class GroupSubnetUpdate(BaseModel):
 class RoutingTableEntry(BaseModel):
     cidr: str
     group_id: str
+    tenant_id: str
 
 
 class LocalZoneRecord(BaseModel):

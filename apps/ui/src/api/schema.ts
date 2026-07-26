@@ -1066,10 +1066,9 @@ export interface paths {
          *
          *     Response body: canonical JSON bundle payload (sort_keys, no whitespace).
          *     X-Mantis-Signature header: hex-encoded ed25519 signature over the body bytes.
-         *     X-Mantis-Bundle-Version: content-derived version (max `updated_at` across every
-         *     route/pool/resolver/tenant-policy row feeding this bundle, in ms since epoch) —
-         *     NOT a fetch-time timestamp, so it stays stable across repeated polls when
-         *     nothing changed (see `_bundle_version`).
+         *     X-Mantis-Bundle-Version: persisted monotonic revision shared by all tenant
+         *     bundles. It advances transactionally on every upstream mutation and stays
+         *     stable across repeated polls when nothing changed.
          */
         get: operations["get_upstream_bundle_api_v1_upstream_bundle__tenant_id__get"];
         put?: never;
@@ -1997,6 +1996,15 @@ export interface components {
         NodeCredentialCreate: {
             /** Node Name */
             node_name: string;
+            /**
+             * Allow All
+             * @default false
+             */
+            allow_all: boolean;
+            /** Allowed Tenant Ids */
+            allowed_tenant_ids?: string[];
+            /** Allowed Group Ids */
+            allowed_group_ids?: string[];
         };
         /** NodeCredentialIssued */
         NodeCredentialIssued: {
@@ -2016,6 +2024,12 @@ export interface components {
              * Format: date-time
              */
             last_seen_at: string;
+            /** Allow All */
+            allow_all: boolean;
+            /** Allowed Tenant Ids */
+            allowed_tenant_ids: string[];
+            /** Allowed Group Ids */
+            allowed_group_ids: string[];
             /** Token */
             token: string;
         };
@@ -2037,6 +2051,12 @@ export interface components {
              * Format: date-time
              */
             last_seen_at: string;
+            /** Allow All */
+            allow_all: boolean;
+            /** Allowed Tenant Ids */
+            allowed_tenant_ids: string[];
+            /** Allowed Group Ids */
+            allowed_group_ids: string[];
         };
         /** OptionCreate */
         OptionCreate: {
@@ -2870,6 +2890,8 @@ export interface components {
             cidr: string;
             /** Group Id */
             group_id: string;
+            /** Tenant Id */
+            tenant_id: string;
         };
         /** Scope6Create */
         Scope6Create: {

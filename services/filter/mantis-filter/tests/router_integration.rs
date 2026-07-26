@@ -52,9 +52,39 @@ impl Forwarder for MockForwarder {
     }
 }
 
+struct FixedForwarder(Ipv4Addr);
+
+#[async_trait::async_trait]
+impl Forwarder for FixedForwarder {
+    async fn lookup(
+        &self,
+        qname: &str,
+        qtype: RecordType,
+        _categories: &[String],
+    ) -> anyhow::Result<Vec<Record>> {
+        if qtype != RecordType::A {
+            return Ok(vec![]);
+        }
+        Ok(vec![Record::from_rdata(
+            qname.parse()?,
+            60,
+            RData::A(A(self.0)),
+        )])
+    }
+}
+
 fn signed_bundle(signing_key: &SigningKey, group_id: &str, deny_domain: &str) -> Bundle {
+    signed_bundle_for_tenant(signing_key, "t", group_id, deny_domain)
+}
+
+fn signed_bundle_for_tenant(
+    signing_key: &SigningKey,
+    tenant_id: &str,
+    group_id: &str,
+    deny_domain: &str,
+) -> Bundle {
     let mut bundle = Bundle {
-        tenant_id: "t".into(),
+        tenant_id: tenant_id.into(),
         group_id: group_id.into(),
         version: 1,
         deny_overrides: vec![deny_domain.into()],
@@ -66,6 +96,31 @@ fn signed_bundle(signing_key: &SigningKey, group_id: &str, deny_domain: &str) ->
     let sig = signing_key.sign(&bytes);
     bundle.signature = sig.to_bytes().to_vec();
     bundle
+}
+
+async fn query_a(
+    client_addr: &str,
+    server: std::net::SocketAddr,
+    domain: &str,
+) -> Ipv4Addr {
+    let client = UdpSocket::bind(client_addr).await.unwrap();
+    let mut msg = Message::new();
+    msg.set_id(8);
+    msg.set_message_type(MessageType::Query);
+    msg.set_op_code(OpCode::Query);
+    msg.set_recursion_desired(true);
+    msg.add_query(Query::query(
+        Name::from_ascii(domain).unwrap(),
+        RecordType::A,
+    ));
+    client.send_to(&msg.to_bytes().unwrap(), server).await.unwrap();
+    let mut buf = [0u8; 4096];
+    let (len, _) = client.recv_from(&mut buf).await.unwrap();
+    let response = Message::from_bytes(&buf[..len]).unwrap();
+    match response.answers()[0].data() {
+        RData::A(address) => address.0,
+        other => panic!("expected A answer, got {other:?}"),
+    }
 }
 
 async fn query_from(client_addr: &str, server: std::net::SocketAddr, domain: &str) -> ResponseCode {
@@ -155,5 +210,46 @@ async fn unmatched_source_ip_fails_open_to_servfail() {
     assert_eq!(
         query_from("127.0.0.4:0", server_addr, "anything.example").await,
         ResponseCode::ServFail
+    );
+}
+
+#[tokio::test]
+async fn tenant_routes_isolate_upstream_forwarders_and_caches() {
+    let signing_key = SigningKey::from_bytes(&[13u8; 32]);
+    let public_key = signing_key.verifying_key();
+    let router = Arc::new(TenantRouter::new(public_key, Box::new(MockForwarder)));
+
+    mantis_filter::test_support::inject_route_with_forwarder(
+        &router,
+        "127.0.0.5/32".parse().unwrap(),
+        "group-a",
+        signed_bundle_for_tenant(&signing_key, "tenant-a", "group-a", "never.invalid"),
+        &public_key,
+        Arc::new(FixedForwarder(Ipv4Addr::new(192, 0, 2, 10))),
+    );
+    mantis_filter::test_support::inject_route_with_forwarder(
+        &router,
+        "127.0.0.6/32".parse().unwrap(),
+        "group-b",
+        signed_bundle_for_tenant(&signing_key, "tenant-b", "group-b", "never.invalid"),
+        &public_key,
+        Arc::new(FixedForwarder(Ipv4Addr::new(192, 0, 2, 20))),
+    );
+
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let server_addr = socket.local_addr().unwrap();
+    tokio::spawn(async move {
+        run_router_udp_server(socket, router).await.ok();
+    });
+
+    // Query the exact same cache key from both tenants. A shared cache or
+    // shared forwarder would make the second answer equal the first.
+    assert_eq!(
+        query_a("127.0.0.5:0", server_addr, "same.example").await,
+        Ipv4Addr::new(192, 0, 2, 10)
+    );
+    assert_eq!(
+        query_a("127.0.0.6:0", server_addr, "same.example").await,
+        Ipv4Addr::new(192, 0, 2, 20)
     );
 }

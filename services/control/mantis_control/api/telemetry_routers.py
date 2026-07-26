@@ -19,14 +19,20 @@ from datetime import datetime, timedelta, timezone
 
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from mantis_control.auth import get_current_user, get_group_or_403, require_node_token, user_tenant_filter
+from mantis_control.auth import (
+    get_current_user,
+    get_group_or_403,
+    require_node_group_access,
+    require_node_token,
+    user_tenant_filter,
+)
 from mantis_control.db import models
 from mantis_control.db.session import get_db
 
@@ -237,18 +243,24 @@ def query_log(
 def ingest_query_events(
     payload: QueryEventBatch,
     db: Session = Depends(get_db),
-    _: None = Depends(require_node_token),
+    node: models.NodeCredential = Depends(require_node_token),
 ) -> dict[str, int]:
     """Fire-and-forget sink for filter-node query telemetry. Best-effort by
     design — the hot DNS path never blocks on this succeeding. Guarded by
     require_node_token like /routing-table and /public-key: this is
     filter-node-to-control-plane traffic, not a user-facing endpoint."""
     group_ids = {event.group_id for event in payload.events}
+    groups = {
+        group.id: group
+        for group in db.query(models.Group).filter(models.Group.id.in_(group_ids)).all()
+    } if group_ids else {}
+    unknown_groups = sorted(group_ids - groups.keys())
+    if unknown_groups:
+        raise HTTPException(422, f"unknown group ids: {unknown_groups}")
+    for group in groups.values():
+        require_node_group_access(node, group)
     tenant_by_group: dict[str, str] = (
-        {str(r[0]): str(r[1]) for r in db.execute(
-            select(models.Group.id, models.Group.tenant_id).where(models.Group.id.in_(group_ids))
-        ).all()}
-        if group_ids else {}
+        {group.id: group.tenant_id for group in groups.values()}
     )
 
     for event in payload.events:

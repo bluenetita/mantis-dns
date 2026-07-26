@@ -97,7 +97,7 @@ def require_node_token(
     authorization: str | None = Header(None),
     x_mantis_node: str | None = Header(None, alias="X-Mantis-Node"),
     db: Session = Depends(get_db),
-) -> None:
+) -> models.NodeCredential:
     token = authorization.removeprefix("Bearer ") if authorization else None
     if not token or not x_mantis_node:
         raise HTTPException(403, "invalid or missing node credential")
@@ -110,6 +110,46 @@ def require_node_token(
         raise HTTPException(403, "invalid or missing node credential")
     node.last_seen_at = datetime.now(timezone.utc)
     db.commit()
+    return node
+
+
+def node_can_access_group(node: models.NodeCredential, group: models.Group) -> bool:
+    return (
+        node.allow_all
+        or group.id in (node.allowed_group_ids or [])
+        or group.tenant_id in (node.allowed_tenant_ids or [])
+    )
+
+
+def require_node_group_access(node: models.NodeCredential, group: models.Group) -> None:
+    if not node_can_access_group(node, group):
+        raise HTTPException(403, "node credential is not authorized for this group")
+
+
+def node_can_access_tenant(
+    db: Session, node: models.NodeCredential, tenant_id: str
+) -> bool:
+    if node.allow_all or tenant_id in (node.allowed_tenant_ids or []):
+        return True
+    allowed_groups = node.allowed_group_ids or []
+    if not allowed_groups:
+        return False
+    return (
+        db.query(models.Group.id)
+        .filter(
+            models.Group.id.in_(allowed_groups),
+            models.Group.tenant_id == tenant_id,
+        )
+        .first()
+        is not None
+    )
+
+
+def require_node_tenant_access(
+    db: Session, node: models.NodeCredential, tenant_id: str
+) -> None:
+    if not node_can_access_tenant(db, node, tenant_id):
+        raise HTTPException(403, "node credential is not authorized for this tenant")
 
 
 def hash_node_token(token: str) -> str:

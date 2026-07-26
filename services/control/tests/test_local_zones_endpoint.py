@@ -22,7 +22,16 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from mantis_control.api.routers import get_local_zone_records
-from mantis_control.db.models import Base, DnsRecord, DnsZone, Group, Tenant
+from mantis_control.db.models import Base, DnsRecord, DnsZone, Group, NodeCredential, Tenant
+
+
+def _node() -> NodeCredential:
+    return NodeCredential(
+        node_name="test",
+        token_hash="x",
+        created_by="test",
+        allow_all=True,
+    )
 
 
 @pytest.fixture
@@ -55,7 +64,7 @@ def test_returns_records_for_apex_and_subdomain(db, tenant_and_group):
     db.add(DnsRecord(zone_id=zone.id, name="passbolt", record_type="A", data="10.0.0.2", enabled=True))
     db.commit()
 
-    out = get_local_zone_records(group_id=tenant_and_group.id, db=db)
+    out = get_local_zone_records(group_id=tenant_and_group.id, db=db, node=_node())
 
     names = {r.name for r in out}
     assert names == {"bluenetworks.lab", "passbolt.bluenetworks.lab"}
@@ -68,7 +77,7 @@ def test_disabled_record_is_excluded(db, tenant_and_group):
     db.add(DnsRecord(zone_id=zone.id, name="old", record_type="A", data="10.0.0.9", enabled=False))
     db.commit()
 
-    assert get_local_zone_records(group_id=tenant_and_group.id, db=db) == []
+    assert get_local_zone_records(group_id=tenant_and_group.id, db=db, node=_node()) == []
 
 
 def test_disabled_zone_is_excluded(db, tenant_and_group):
@@ -78,7 +87,7 @@ def test_disabled_zone_is_excluded(db, tenant_and_group):
     db.add(DnsRecord(zone_id=zone.id, name="www", record_type="A", data="10.0.0.9", enabled=True))
     db.commit()
 
-    assert get_local_zone_records(group_id=tenant_and_group.id, db=db) == []
+    assert get_local_zone_records(group_id=tenant_and_group.id, db=db, node=_node()) == []
 
 
 def test_forward_and_passthrough_zones_are_excluded(db, tenant_and_group):
@@ -90,7 +99,7 @@ def test_forward_and_passthrough_zones_are_excluded(db, tenant_and_group):
     db.add(DnsRecord(zone_id=zone.id, name="www", record_type="A", data="10.0.0.9", enabled=True))
     db.commit()
 
-    assert get_local_zone_records(group_id=tenant_and_group.id, db=db) == []
+    assert get_local_zone_records(group_id=tenant_and_group.id, db=db, node=_node()) == []
 
 
 def test_record_ttl_falls_back_to_zone_default(db, tenant_and_group):
@@ -103,7 +112,12 @@ def test_record_ttl_falls_back_to_zone_default(db, tenant_and_group):
     db.add(DnsRecord(zone_id=zone.id, name="b", record_type="A", data="10.0.0.2", ttl=60, enabled=True))
     db.commit()
 
-    out = {r.name: r.ttl for r in get_local_zone_records(group_id=tenant_and_group.id, db=db)}
+    out = {
+        r.name: r.ttl
+        for r in get_local_zone_records(
+            group_id=tenant_and_group.id, db=db, node=_node()
+        )
+    }
     assert out["a.lab"] == 600
     assert out["b.lab"] == 60
 
@@ -112,7 +126,7 @@ def test_unknown_group_returns_404(db):
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as exc:
-        get_local_zone_records(group_id="does-not-exist", db=db)
+        get_local_zone_records(group_id="does-not-exist", db=db, node=_node())
     assert exc.value.status_code == 404
 
 
@@ -126,4 +140,4 @@ def test_zones_from_other_tenant_are_excluded(db, tenant_and_group):
     db.add(DnsRecord(zone_id=zone.id, name="www", record_type="A", data="10.0.0.9", enabled=True))
     db.commit()
 
-    assert get_local_zone_records(group_id=tenant_and_group.id, db=db) == []
+    assert get_local_zone_records(group_id=tenant_and_group.id, db=db, node=_node()) == []

@@ -18,9 +18,8 @@
 //! Multi-tenant source-IP routing (design.md §7.3 option 2, "pattern A" from
 //! the OpenVPN AS/CE integration discussion). One shared UDP listener; the
 //! peer's source IP is matched against a routing table (fetched from the
-//! control plane) to pick which tenant's `BundleStore` answers the query.
-//! Cache and forwarder are shared across all tenants — only the block
-//! decision differs per tenant, not upstream resolution.
+//! control plane) to pick which tenant's policy, local zones, upstream
+//! configuration, health state, and DNS cache answer the query.
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -40,28 +39,46 @@ use tracing::{debug, info, warn};
 
 use crate::zone_store::fetch_and_publish_zone;
 use crate::{
-    build_response, cache::DnsCache, fetch_and_publish_bundle, refresh_public_key, Forwarder,
-    PublicKeyStore, TelemetryEmitter, ZoneStore,
+    build_response, cache::DnsCache, fetch_and_publish_bundle, fetch_upstream_bundle,
+    refresh_public_key, run_health_monitor, Forwarder, HealthStore, PublicKeyStore,
+    TelemetryEmitter, UpstreamBundleForwarder, UpstreamBundleStore, ZoneStore,
 };
 
 #[derive(Deserialize)]
 struct RoutingTableEntry {
     cidr: String,
     group_id: String,
+    tenant_id: String,
+}
+
+struct HealthMonitorGuard(tokio::task::AbortHandle);
+
+impl Drop for HealthMonitorGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+struct TenantUpstreamRuntime {
+    store: Option<Arc<UpstreamBundleStore>>,
+    cache: Arc<DnsCache>,
+    forwarder: Arc<dyn Forwarder>,
+    _health_monitor: Option<HealthMonitorGuard>,
 }
 
 #[derive(Clone)]
 struct RouteEntry {
     net: IpNet,
     group_id: String,
+    tenant_id: String,
     store: Arc<BundleStore>,
     zones: Arc<ZoneStore>,
+    upstream: Arc<TenantUpstreamRuntime>,
 }
 
 pub struct TenantRouter {
     public_key: PublicKeyStore,
-    cache: DnsCache,
-    forwarder: Box<dyn Forwarder>,
+    fallback_upstream: Arc<TenantUpstreamRuntime>,
     routes: ArcSwap<Vec<RouteEntry>>,
     telemetry: TelemetryEmitter,
 }
@@ -70,8 +87,12 @@ impl TenantRouter {
     pub fn new(public_key: VerifyingKey, forwarder: Box<dyn Forwarder>) -> Self {
         Self {
             public_key: PublicKeyStore::new(public_key),
-            cache: DnsCache::new(10_000),
-            forwarder,
+            fallback_upstream: Arc::new(TenantUpstreamRuntime {
+                store: None,
+                cache: Arc::new(DnsCache::new(10_000)),
+                forwarder: Arc::from(forwarder),
+                _health_monitor: None,
+            }),
             routes: ArcSwap::from_pointee(Vec::new()),
             telemetry: TelemetryEmitter::noop(),
         }
@@ -85,13 +106,13 @@ impl TenantRouter {
     /// Longest-prefix match: the most specific matching subnet wins, so a
     /// /24 override inside a routed /16 (if that ever happens) behaves as
     /// expected rather than being order-dependent.
-    fn match_route(&self, ip: IpAddr) -> Option<(Arc<BundleStore>, Arc<ZoneStore>)> {
+    fn match_route(&self, ip: IpAddr) -> Option<RouteEntry> {
         let routes = self.routes.load();
         routes
             .iter()
             .filter(|r| r.net.contains(&ip))
             .max_by_key(|r| r.net.prefix_len())
-            .map(|r| (r.store.clone(), r.zones.clone()))
+            .cloned()
     }
 
     pub fn route_count(&self) -> usize {
@@ -102,12 +123,29 @@ impl TenantRouter {
     /// path does (longest-prefix source-IP match). Used by the co-hosted
     /// block-page listener so a redirected client sees its own tenant's policy.
     pub fn bundle_for(&self, ip: IpAddr) -> Option<Arc<mantis_bundle::Bundle>> {
-        self.match_route(ip).and_then(|(store, _)| store.current())
+        self.match_route(ip).and_then(|route| route.store.current())
     }
 
     pub fn purge_cache(&self) {
-        self.cache.purge_expired();
+        self.fallback_upstream.cache.purge_expired();
+        for route in self.routes.load().iter() {
+            route.upstream.cache.purge_expired();
+        }
     }
+}
+
+fn new_tenant_upstream_runtime() -> Arc<TenantUpstreamRuntime> {
+    let store = Arc::new(UpstreamBundleStore::empty());
+    let health = HealthStore::empty();
+    let forwarder: Arc<dyn Forwarder> =
+        Arc::new(UpstreamBundleForwarder::new(store.clone(), health.clone()));
+    let task = tokio::spawn(run_health_monitor(store.clone(), health));
+    Arc::new(TenantUpstreamRuntime {
+        store: Some(store),
+        cache: Arc::new(DnsCache::new(10_000)),
+        forwarder,
+        _health_monitor: Some(HealthMonitorGuard(task.abort_handle())),
+    })
 }
 
 async fn fetch_routing_table(control_url: &str) -> Result<Vec<RoutingTableEntry>> {
@@ -120,9 +158,10 @@ async fn fetch_routing_table(control_url: &str) -> Result<Vec<RoutingTableEntry>
 }
 
 /// Refreshes the routing table and, for every routed group, fetches its
-/// latest bundle. Existing `BundleStore`s are reused across refreshes so a
-/// group's policy history (version monotonicity) survives a routing-table
-/// reload — only genuinely new groups get a fresh empty store.
+/// latest policy and upstream bundles. Existing stores are reused across
+/// refreshes so version monotonicity survives a routing-table reload. Groups
+/// in one tenant share that tenant's upstream store, health state, forwarder,
+/// and DNS cache; different tenants never do.
 pub async fn refresh_routes(router: &TenantRouter, control_url: &str) -> Result<()> {
     if let Err(e) = refresh_public_key(&router.public_key, control_url).await {
         warn!("public key refresh failed (keeping last known good key): {e}");
@@ -151,11 +190,24 @@ pub async fn refresh_routes(router: &TenantRouter, control_url: &str) -> Result<
             .find(|r| r.group_id == entry.group_id)
             .map(|r| r.zones.clone())
             .unwrap_or_else(|| Arc::new(ZoneStore::empty()));
+        let upstream = existing
+            .iter()
+            .find(|r| r.tenant_id == entry.tenant_id)
+            .map(|r| r.upstream.clone())
+            .or_else(|| {
+                new_routes
+                    .iter()
+                    .find(|r: &&RouteEntry| r.tenant_id == entry.tenant_id)
+                    .map(|r| r.upstream.clone())
+            })
+            .unwrap_or_else(new_tenant_upstream_runtime);
         new_routes.push(RouteEntry {
             net,
             group_id: entry.group_id.clone(),
+            tenant_id: entry.tenant_id.clone(),
             store,
             zones,
+            upstream,
         });
     }
 
@@ -163,10 +215,11 @@ pub async fn refresh_routes(router: &TenantRouter, control_url: &str) -> Result<
     router.routes.store(Arc::new(new_routes));
     debug!("routing table refreshed: {route_count} routes");
 
-    // Fetch all groups' bundles and local-zone records concurrently —
-    // independent HTTP round-trips.
+    // Fetch all groups' policy bundles and local-zone records, plus exactly
+    // one upstream bundle per tenant, concurrently.
     let routes = router.routes.load();
     let mut set = tokio::task::JoinSet::new();
+    let mut upstream_tenants = std::collections::HashSet::new();
     for route in routes.iter() {
         let store = route.store.clone();
         let key = router.public_key.current();
@@ -186,6 +239,22 @@ pub async fn refresh_routes(router: &TenantRouter, control_url: &str) -> Result<
                 warn!("local zone refresh failed for group {gid}: {e}");
             }
         });
+
+        if upstream_tenants.insert(route.tenant_id.clone()) {
+            let upstream = route.upstream.clone();
+            let key = router.public_key.current();
+            let url = control_url.to_string();
+            let tenant_id = route.tenant_id.clone();
+            set.spawn(async move {
+                let Some(store) = &upstream.store else {
+                    return;
+                };
+                match fetch_upstream_bundle(&url, &tenant_id, &key).await {
+                    Ok(bundle) => store.publish(bundle),
+                    Err(e) => warn!("upstream bundle refresh failed for tenant {tenant_id}: {e}"),
+                }
+            });
+        }
     }
     while let Some(res) = set.join_next().await {
         if let Err(e) = res {
@@ -223,6 +292,7 @@ pub mod test_support {
         public_key: &VerifyingKey,
     ) {
         let store = Arc::new(BundleStore::empty());
+        let tenant_id = bundle.tenant_id.clone();
         store
             .try_publish(bundle, public_key)
             .expect("test bundle must verify");
@@ -230,8 +300,41 @@ pub mod test_support {
         routes.push(RouteEntry {
             net,
             group_id: group_id.to_string(),
+            tenant_id,
             store,
             zones: Arc::new(ZoneStore::empty()),
+            upstream: router.fallback_upstream.clone(),
+        });
+        router.routes.store(Arc::new(routes));
+    }
+
+    pub fn inject_route_with_forwarder(
+        router: &TenantRouter,
+        net: IpNet,
+        group_id: &str,
+        bundle: mantis_bundle::Bundle,
+        public_key: &VerifyingKey,
+        forwarder: Arc<dyn Forwarder>,
+    ) {
+        let store = Arc::new(BundleStore::empty());
+        let tenant_id = bundle.tenant_id.clone();
+        store
+            .try_publish(bundle, public_key)
+            .expect("test bundle must verify");
+        let upstream = Arc::new(TenantUpstreamRuntime {
+            store: None,
+            cache: Arc::new(DnsCache::new(10_000)),
+            forwarder,
+            _health_monitor: None,
+        });
+        let mut routes: Vec<RouteEntry> = (**router.routes.load()).clone();
+        routes.push(RouteEntry {
+            net,
+            group_id: group_id.to_string(),
+            tenant_id,
+            store,
+            zones: Arc::new(ZoneStore::empty()),
+            upstream,
         });
         router.routes.store(Arc::new(routes));
     }
@@ -298,17 +401,24 @@ pub async fn run_router_tcp_server(listener: TcpListener, router: Arc<TenantRout
                 if unmatched_route {
                     debug!("no tenant route matched source IP {}", peer.ip());
                 }
-                let bundle = matched.as_ref().and_then(|(s, _)| s.current());
+                let bundle = matched.as_ref().and_then(|route| route.store.current());
                 let empty_zones = ZoneStore::empty();
-                let zones = matched.as_ref().map(|(_, z)| z.as_ref()).unwrap_or(&empty_zones);
+                let zones = matched
+                    .as_ref()
+                    .map(|route| route.zones.as_ref())
+                    .unwrap_or(&empty_zones);
+                let upstream = matched
+                    .as_ref()
+                    .map(|route| route.upstream.as_ref())
+                    .unwrap_or(router.fallback_upstream.as_ref());
 
                 let response = build_response(
                     &query,
                     bundle.as_deref(),
                     zones,
                     peer.ip(),
-                    &router.cache,
-                    router.forwarder.as_ref(),
+                    upstream.cache.as_ref(),
+                    upstream.forwarder.as_ref(),
                     &router.telemetry,
                     unmatched_route,
                 )
@@ -372,8 +482,15 @@ pub async fn run_router_udp_server(socket: UdpSocket, router: Arc<TenantRouter>)
         if unmatched_route {
             debug!("no tenant route matched source IP {}", peer.ip());
         }
-        let bundle = matched.as_ref().and_then(|(s, _)| s.current());
-        let zones = matched.map(|(_, z)| z).unwrap_or_else(|| empty_zones.clone());
+        let bundle = matched.as_ref().and_then(|route| route.store.current());
+        let zones = matched
+            .as_ref()
+            .map(|route| route.zones.clone())
+            .unwrap_or_else(|| empty_zones.clone());
+        let upstream = matched
+            .as_ref()
+            .map(|route| route.upstream.clone())
+            .unwrap_or_else(|| router.fallback_upstream.clone());
         let router = router.clone();
         let socket = socket.clone();
         tokio::spawn(async move {
@@ -383,8 +500,8 @@ pub async fn run_router_udp_server(socket: UdpSocket, router: Arc<TenantRouter>)
                 bundle.as_deref(),
                 &zones,
                 peer.ip(),
-                &router.cache,
-                router.forwarder.as_ref(),
+                upstream.cache.as_ref(),
+                upstream.forwarder.as_ref(),
                 &router.telemetry,
                 unmatched_route,
             )

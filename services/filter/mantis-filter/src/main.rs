@@ -24,8 +24,8 @@ use mantis_filter::{
     bundle_refresh_loop, fetch_and_publish_zone, fetch_public_key, fetch_upstream_bundle,
     refresh_bundle, run_block_page_server, run_health_monitor, run_router_tcp_server,
     run_router_udp_server, run_tcp_server, run_udp_server, upstream_bundle_refresh_loop,
-    zone_refresh_loop, AppState, BlockPageBundles, HealthStore, PublicKeyStore, TelemetryEmitter,
-    TenantRouter, UpstreamBundleForwarder, UpstreamBundleStore,
+    zone_refresh_loop, AppState, BlockPageBundles, DotForwarder, HealthStore, PublicKeyStore,
+    TelemetryEmitter, TenantRouter, UpstreamBundleForwarder, UpstreamBundleStore,
 };
 use tokio::net::{TcpListener, UdpSocket};
 use tracing::{error, info, warn};
@@ -137,49 +137,16 @@ async fn main() -> anyhow::Result<()> {
 
     const CACHE_PURGE_INTERVAL: Duration = Duration::from_secs(60);
 
-    // Build an upstream bundle store shared across both single-tenant and
-    // multi-tenant modes. The bundle refreshes on the same poll interval as
-    // policy bundles. In multi-tenant mode there is no tenant-specific upstream
-    // bundle yet — we use a global default bundle (tenant_id="*") which the
-    // control plane generates from global routes. Sprint 18 will make this
-    // per-tenant by fetching one bundle per routed tenant.
-    let upstream_store = Arc::new(UpstreamBundleStore::empty());
-    let upstream_tenant = env::var("UPSTREAM_BUNDLE_TENANT").unwrap_or_else(|_| "*".to_string());
-
-    // Attempt an initial upstream bundle fetch (non-fatal; falls back to
-    // UPSTREAM_FALLBACK_ADDRESS env var while the bundle is unavailable).
-    match fetch_upstream_bundle(&control_url, &upstream_tenant, &public_key).await {
-        Ok(bundle) => upstream_store.publish(bundle),
-        Err(e) => warn!("initial upstream bundle fetch failed (will use fallback): {e}"),
-    }
-    // Own PublicKeyStore for this loop (independent of AppState's/TenantRouter's,
-    // which don't exist yet at this point in startup) so a control-plane
-    // signing-key rotation doesn't permanently break upstream-bundle
-    // verification the way a `VerifyingKey` captured once at startup would —
-    // see upstream_bundle_refresh_loop's doc comment.
-    let upstream_public_key = Arc::new(PublicKeyStore::new(public_key));
-    tokio::spawn(upstream_bundle_refresh_loop(
-        upstream_store.clone(),
-        control_url.clone(),
-        upstream_tenant,
-        upstream_public_key,
-        Duration::from_secs(poll_secs),
-    ));
-
-    // Health monitor: probes each pool member, drives the healthy-member set
-    // consumed by UpstreamBundleForwarder when picking a resolver per query.
-    let health_store = HealthStore::empty();
-    tokio::spawn(run_health_monitor(
-        upstream_store.clone(),
-        health_store.clone(),
-    ));
-
-    let forwarder = Box::new(UpstreamBundleForwarder::new(upstream_store, health_store));
-
     if !group_id.is_empty() {
         // Legacy single-tenant mode: one GROUP_ID, one bundle. Kept for
         // back-compat with existing deployments; new multi-tenant deployments
         // should leave GROUP_ID unset to use the source-IP router below.
+        let upstream_store = Arc::new(UpstreamBundleStore::empty());
+        let health_store = HealthStore::empty();
+        let forwarder = Box::new(UpstreamBundleForwarder::new(
+            upstream_store.clone(),
+            health_store.clone(),
+        ));
         let telemetry = TelemetryEmitter::start(control_url.clone(), 10_000);
         let state = Arc::new(
             AppState::with_forwarder(public_key, forwarder).with_telemetry(telemetry),
@@ -190,6 +157,29 @@ async fn main() -> anyhow::Result<()> {
         if let Err(e) = fetch_and_publish_zone(&state.zones, &control_url, &group_id).await {
             warn!("initial local zone fetch failed (will retry on poll loop): {e}");
         }
+
+        // Default to the tenant carried by the verified policy bundle. The
+        // environment override remains available for legacy deployments that
+        // deliberately use the global ("*") upstream policy.
+        let upstream_tenant = env::var("UPSTREAM_BUNDLE_TENANT")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| state.store.current().map(|bundle| bundle.tenant_id.clone()))
+            .unwrap_or_else(|| "*".to_string());
+        match fetch_upstream_bundle(&control_url, &upstream_tenant, &public_key).await {
+            Ok(bundle) => upstream_store.publish(bundle),
+            Err(e) => warn!("initial upstream bundle fetch failed (will use fallback): {e}"),
+        }
+        let upstream_public_key = Arc::new(PublicKeyStore::new(public_key));
+        tokio::spawn(upstream_bundle_refresh_loop(
+            upstream_store.clone(),
+            control_url.clone(),
+            upstream_tenant,
+            upstream_public_key,
+            Duration::from_secs(poll_secs),
+        ));
+        tokio::spawn(run_health_monitor(upstream_store, health_store));
+
         if let Some(addr) = &block_page_addr {
             spawn_block_page(addr, BlockPageBundles::Single(state.clone()), control_url.clone())
                 .await;
@@ -227,7 +217,8 @@ async fn main() -> anyhow::Result<()> {
         info!("GROUP_ID not set — running in multi-tenant source-IP routing mode");
         let telemetry = TelemetryEmitter::start(control_url.clone(), 10_000);
         let router = Arc::new(
-            TenantRouter::new(public_key, forwarder).with_telemetry(telemetry),
+            TenantRouter::new(public_key, Box::new(DotForwarder::new_default()))
+                .with_telemetry(telemetry),
         );
         if let Err(e) = mantis_filter::refresh_routes(&router, &control_url).await {
             warn!("initial routing table fetch failed (will retry on poll loop): {e}");

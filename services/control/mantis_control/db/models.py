@@ -25,6 +25,7 @@ from sqlalchemy import (
     ForeignKey,
     Identity,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -470,6 +471,22 @@ class UpstreamTenantPolicy(Base):
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
 
+class UpstreamBundleRevision(Base):
+    """Single monotonic revision for every signed upstream bundle.
+
+    Upstream resolvers and pools are global while routes/policies are
+    tenant-scoped, so any mutation can affect one or many tenant bundles.
+    A global counter deliberately favors a harmless fleet-wide refresh over
+    trying to infer the exact affected tenant set and accidentally leaving a
+    filter node on stale configuration.
+    """
+
+    __tablename__ = "upstream_bundle_revision"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    version: Mapped[int] = mapped_column(BigInteger, default=0)
+
+
 class Feed(Base):
     """Declarative feed registry — see design doc §18.6."""
 
@@ -762,3 +779,9 @@ class NodeCredential(Base):
     created_by: Mapped[str] = mapped_column(String(255))
     revoked_at: Mapped[datetime | None] = mapped_column(nullable=True)
     last_seen_at: Mapped[datetime] = mapped_column(default=_now)
+    # Existing credentials are migrated with allow_all=true for a
+    # compatibility-safe rollout. Newly issued credentials default to scoped
+    # access and must name at least one tenant or group.
+    allow_all: Mapped[bool] = mapped_column(Boolean, default=False)
+    allowed_tenant_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    allowed_group_ids: Mapped[list[str]] = mapped_column(JSON, default=list)

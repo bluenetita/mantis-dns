@@ -43,10 +43,17 @@ from typing import Any, Literal, cast
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import update
 from sqlalchemy.orm import Session, selectinload
 
 from mantis_control.audit import write_audit_log
-from mantis_control.auth import check_tenant_access, get_current_user, require_node_token, require_role
+from mantis_control.auth import (
+    check_tenant_access,
+    get_current_user,
+    require_node_tenant_access,
+    require_node_token,
+    require_role,
+)
 from mantis_control.compiler.keys import load_or_create_signing_key
 from mantis_control.db import models
 from mantis_control.db.session import get_db
@@ -382,35 +389,32 @@ async def _probe_doh(
                            dnssec_ad=False, tls_subject=None, error=str(e))
 
 
-def _as_aware(dt: datetime) -> datetime:
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+def _bump_bundle_version(db: Session) -> int:
+    """Atomically increments the revision shared by all upstream bundles.
 
-
-def _bundle_version(
-    routes: list[models.UpstreamRoute],
-    pools: list[models.UpstreamPool],
-    resolvers: list[models.UpstreamResolver],
-    policy: models.UpstreamTenantPolicy | None,
-) -> int:
-    """Monotonic version derived from the latest `updated_at` among every row
-    that feeds the bundle, in milliseconds since epoch. Deliberately NOT
-    wall-clock-at-fetch-time: the Rust filter node polls this endpoint every
-    ~10s and treats any version increase as a real change — UpstreamBundleForwarder
-    rebuilds its whole resolver set (including live DoT/DoH connections) and
-    run_health_monitor aborts and respawns every probe loop whenever
-    bundle.version changes (both re-key on it). A wall-clock version bumped
-    that cache/probe churn on every single poll even when nothing was ever
-    edited. Deriving from content instead means the version — and therefore
-    the published bundle — only changes when something in it actually did.
+    Timestamp-derived versions were not monotonic: deleting/disabling the
+    newest object made the next version go backwards, and membership rows
+    had no timestamp at all. Filter nodes correctly reject stale versions,
+    which meant those changes could be ignored indefinitely. A persisted
+    counter makes every bundle-affecting transaction advance exactly once.
     """
-    timestamps = [rt.updated_at for rt in routes]
-    timestamps += [p.updated_at for p in pools]
-    timestamps += [r.updated_at for r in resolvers]
-    if policy is not None:
-        timestamps.append(policy.updated_at)
-    if not timestamps:
-        return 0
-    return int(_as_aware(max(timestamps)).timestamp() * 1000)
+    version = db.execute(
+        update(models.UpstreamBundleRevision)
+        .where(models.UpstreamBundleRevision.id == 1)
+        .values(version=models.UpstreamBundleRevision.version + 1)
+        .returning(models.UpstreamBundleRevision.version)
+    ).scalar_one_or_none()
+    if version is None:
+        revision = models.UpstreamBundleRevision(id=1, version=1)
+        db.add(revision)
+        db.flush()
+        return 1
+    return int(version)
+
+
+def _bundle_version(db: Session) -> int:
+    revision = db.get(models.UpstreamBundleRevision, 1)
+    return int(revision.version) if revision is not None else 0
 
 
 def _sign_bundle_body(payload: dict[str, Any]) -> tuple[bytes, str]:
@@ -458,6 +462,7 @@ def create_resolver(
     write_audit_log(db, "upstream_resolver.create", "upstream_resolver", r.id,
                     detail=f"name={r.name} proto={r.protocol} addr={r.address}:{r.port}",
                     actor=admin.email)
+    _bump_bundle_version(db)
     db.commit()
     db.refresh(r)
     return r
@@ -475,6 +480,7 @@ def update_resolver(
         setattr(r, field, value)
     write_audit_log(db, "upstream_resolver.update", "upstream_resolver", r.id,
                     detail=str(payload.model_dump(exclude_unset=True)), actor=admin.email)
+    _bump_bundle_version(db)
     db.commit()
     db.refresh(r)
     return r
@@ -490,6 +496,7 @@ def delete_resolver(
     write_audit_log(db, "upstream_resolver.delete", "upstream_resolver", r.id,
                     detail=f"name={r.name}", actor=admin.email)
     db.delete(r)
+    _bump_bundle_version(db)
     db.commit()
 
 
@@ -554,6 +561,7 @@ def create_pool(
         db.add(models.UpstreamPoolMember(pool_id=pool.id, **m.model_dump()))
     write_audit_log(db, "upstream_pool.create", "upstream_pool", pool.id,
                     detail=f"name={pool.name} strategy={pool.strategy}", actor=admin.email)
+    _bump_bundle_version(db)
     db.commit()
     return _get_pool_or_404(db, pool.id)
 
@@ -570,6 +578,7 @@ def update_pool(
         setattr(pool, field, value)
     write_audit_log(db, "upstream_pool.update", "upstream_pool", pool.id,
                     detail=str(payload.model_dump(exclude_unset=True)), actor=admin.email)
+    _bump_bundle_version(db)
     db.commit()
     return _get_pool_or_404(db, pool_id)
 
@@ -584,6 +593,7 @@ def delete_pool(
     write_audit_log(db, "upstream_pool.delete", "upstream_pool", pool.id,
                     detail=f"name={pool.name}", actor=admin.email)
     db.delete(pool)
+    _bump_bundle_version(db)
     db.commit()
 
 
@@ -608,6 +618,15 @@ def upsert_pool_member(
         db.add(member)
     member.weight = payload.weight
     member.priority = payload.priority
+    write_audit_log(
+        db,
+        "upstream_pool_member.upsert",
+        "upstream_pool_member",
+        f"{pool_id}:{resolver_id}",
+        detail=f"weight={member.weight} priority={member.priority}",
+        actor=admin.email,
+    )
+    _bump_bundle_version(db)
     db.commit()
     db.refresh(member)
     return member
@@ -618,7 +637,7 @@ def remove_pool_member(
     pool_id: str,
     resolver_id: str,
     db: Session = Depends(get_db),
-    _admin: models.User = Depends(require_role("admin")),
+    admin: models.User = Depends(require_role("admin")),
 ) -> None:
     member = (
         db.query(models.UpstreamPoolMember)
@@ -627,7 +646,15 @@ def remove_pool_member(
     )
     if member is None:
         raise HTTPException(404, "member not found")
+    write_audit_log(
+        db,
+        "upstream_pool_member.delete",
+        "upstream_pool_member",
+        f"{pool_id}:{resolver_id}",
+        actor=admin.email,
+    )
     db.delete(member)
+    _bump_bundle_version(db)
     db.commit()
 
 
@@ -664,6 +691,7 @@ def create_route(
     write_audit_log(db, "upstream_route.create", "upstream_route", route.id,
                     detail=f"tenant={tenant_id} match={route.match_type}:{route.match_value}",
                     actor=admin.email, tenant_id=tenant_id)
+    _bump_bundle_version(db)
     db.commit()
     db.refresh(route)
     return route
@@ -688,6 +716,7 @@ def update_route(
         setattr(route, field, value)
     write_audit_log(db, "upstream_route.update", "upstream_route", route.id,
                     detail=str(changes), actor=admin.email, tenant_id=tenant_id)
+    _bump_bundle_version(db)
     db.commit()
     db.refresh(route)
     return route
@@ -707,6 +736,7 @@ def delete_route(
     write_audit_log(db, "upstream_route.delete", "upstream_route", route.id,
                     detail=f"tenant={tenant_id}", actor=admin.email, tenant_id=tenant_id)
     db.delete(route)
+    _bump_bundle_version(db)
     db.commit()
 
 
@@ -757,6 +787,7 @@ def upsert_tenant_policy(
             setattr(policy, field, value)
     write_audit_log(db, "upstream_policy.upsert", "upstream_tenant_policy", tenant_id,
                     detail=str(payload.model_dump()), actor=admin.email, tenant_id=tenant_id)
+    _bump_bundle_version(db)
     db.commit()
     db.refresh(policy)
     return policy
@@ -766,7 +797,9 @@ def upsert_tenant_policy(
 
 @router.get("/upstream-bundle/{tenant_id}")
 def get_upstream_bundle(
-    tenant_id: str, db: Session = Depends(get_db), _: None = Depends(require_node_token)
+    tenant_id: str,
+    db: Session = Depends(get_db),
+    node: models.NodeCredential = Depends(require_node_token),
 ) -> Response:
     """
     Compiles a signed upstream config bundle for the given tenant.
@@ -775,11 +808,11 @@ def get_upstream_bundle(
 
     Response body: canonical JSON bundle payload (sort_keys, no whitespace).
     X-Mantis-Signature header: hex-encoded ed25519 signature over the body bytes.
-    X-Mantis-Bundle-Version: content-derived version (max `updated_at` across every
-    route/pool/resolver/tenant-policy row feeding this bundle, in ms since epoch) —
-    NOT a fetch-time timestamp, so it stays stable across repeated polls when
-    nothing changed (see `_bundle_version`).
+    X-Mantis-Bundle-Version: persisted monotonic revision shared by all tenant
+    bundles. It advances transactionally on every upstream mutation and stays
+    stable across repeated polls when nothing changed.
     """
+    require_node_tenant_access(db, node, tenant_id)
     # Collect routes: global (tenant_id=NULL) + tenant-specific, sorted by priority.
     routes = (
         db.query(models.UpstreamRoute)
@@ -823,7 +856,7 @@ def get_upstream_bundle(
         else _DEFAULT_POLICY.model_copy(update={"tenant_id": tenant_id})
     )
 
-    bundle_version = _bundle_version(routes, list(pools.values()), list(resolvers.values()), policy)
+    bundle_version = _bundle_version(db)
 
     # Bundle fields are the *_Out schemas minus admin-only metadata (ids the
     # filter node has no use for, audit timestamps, tags/enabled — enabled is
