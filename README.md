@@ -103,7 +103,7 @@ BIN_PATH=target/x86_64-unknown-linux-musl/release/mantis-filter VERSION=0.1.0 \
 
 ```
 sudo dpkg -i mantis-filter_0.1.0_amd64.deb
-sudo $EDITOR /etc/mantis-filter/mantis-filter.env   # set CONTROL_URL, MANTIS_SERVICE_TOKEN
+sudo $EDITOR /etc/mantis-filter/mantis-filter.env   # set CONTROL_URL, MANTIS_NODE_NAME, MANTIS_NODE_TOKEN
 sudo systemctl enable --now mantis-filter
 ```
 
@@ -113,7 +113,6 @@ sudo systemctl enable --now mantis-filter
 helm dependency update charts/mantis-dns
 kubectl create secret generic mantis-dns-secrets \
   --from-literal=MANTIS_INTERNAL_TOKEN=$(openssl rand -hex 32) \
-  --from-literal=MANTIS_SERVICE_TOKEN=$(openssl rand -hex 32) \
   --from-literal=MANTIS_JWT_SECRET=$(openssl rand -hex 32) \
   --from-literal=ADMIN_PASSWORD=$(openssl rand -hex 16)
 helm install mantis-dns charts/mantis-dns \

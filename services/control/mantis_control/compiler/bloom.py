@@ -78,6 +78,17 @@ def _bit_index(h1: int, h2: int, i: int, num_bits: int) -> int:
     return combined % num_bits
 
 
+def exact_hash(domain: str, seed: int) -> int:
+    """The h1 half of the same double-hash used to set bloom bits (design.md
+    §26 R1's exact-match confirmation tier). Reusing h1 instead of a third
+    hash function is deliberate: it's an equality check against the real
+    domain set, not a membership probe against bloom bits, so it doesn't
+    inherit bloom's false-positive mechanism (which needs *all* k probes to
+    collide, not one 64-bit value)."""
+    h1, _ = _hash_pair(domain, seed)
+    return h1
+
+
 class BloomFilterBuilder:
     """Builds a bloom filter bitset from a domain set, matching the Rust reader."""
 

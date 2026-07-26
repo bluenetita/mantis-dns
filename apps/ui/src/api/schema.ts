@@ -143,8 +143,8 @@ export interface paths {
          * Get Routing Table
          * @description Source-IP -> tenant routing table for filter nodes (design.md §7.3
          *     option 2). Polled machine-to-machine by Rust filter nodes — no user JWT
-         *     involved, so this uses the shared MANTIS_SERVICE_TOKEN instead (see
-         *     require_service_token), like /public-key and the bundle GET endpoint.
+         *     involved, so this uses a per-node credential instead (see
+         *     require_node_token), like /public-key and the bundle GET endpoint.
          */
         get: operations["get_routing_table_api_v1_routing_table_get"];
         put?: never;
@@ -206,7 +206,7 @@ export interface paths {
         /**
          * Get Public Key
          * @description Filter nodes fetch this once and pin it for bundle verification.
-         *     Machine-to-machine, guarded by MANTIS_SERVICE_TOKEN like /routing-table.
+         *     Machine-to-machine, guarded by require_node_token like /routing-table.
          */
         get: operations["get_public_key_api_v1_public_key_get"];
         put?: never;
@@ -227,7 +227,7 @@ export interface paths {
         /**
          * Get Latest Bundle
          * @description Fetched by filter nodes after they detect a new bundle_version.
-         *     Machine-to-machine traffic guarded by MANTIS_SERVICE_TOKEN like /routing-table.
+         *     Machine-to-machine traffic guarded by require_node_token like /routing-table.
          */
         get: operations["get_latest_bundle_api_v1_groups__group_id__bundle_get"];
         put?: never;
@@ -329,7 +329,7 @@ export interface paths {
          * Get Effective Block Template
          * @description Resolved (group override → tenant default) block-page template for the
          *     filter node's co-hosted block-page listener. Machine-to-machine, guarded by
-         *     MANTIS_SERVICE_TOKEN like /routing-table and the bundle GET. 404 when
+         *     require_node_token like /routing-table and the bundle GET. 404 when
          *     nothing is configured — the listener then renders built-in defaults.
          */
         get: operations["get_effective_block_template_api_v1_groups__group_id__block_template_get"];
@@ -429,7 +429,7 @@ export interface paths {
          * Ingest Query Events
          * @description Fire-and-forget sink for filter-node query telemetry. Best-effort by
          *     design — the hot DNS path never blocks on this succeeding. Guarded by
-         *     MANTIS_SERVICE_TOKEN like /routing-table and /public-key: this is
+         *     require_node_token like /routing-table and /public-key: this is
          *     filter-node-to-control-plane traffic, not a user-facing endpoint.
          */
         post: operations["ingest_query_events_api_v1_query_events_post"];
@@ -1061,7 +1061,7 @@ export interface paths {
         /**
          * Get Upstream Bundle
          * @description Compiles a signed upstream config bundle for the given tenant.
-         *     Guarded by MANTIS_SERVICE_TOKEN like /api/v1/groups/{id}/bundle; integrity
+         *     Guarded by require_node_token like /api/v1/groups/{id}/bundle; integrity
          *     is additionally provided by the ed25519 signature.
          *
          *     Response body: canonical JSON bundle payload (sort_keys, no whitespace).
@@ -1430,6 +1430,63 @@ export interface paths {
         get: operations["list_leases6_api_v1_dhcp6_leases_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Node Credentials */
+        get: operations["list_node_credentials_api_v1_nodes_credentials_get"];
+        put?: never;
+        /** Create Node Credential */
+        post: operations["create_node_credential_api_v1_nodes_credentials_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/credentials/{node_name}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate Node Credential
+         * @description Issues a fresh token for an existing node identity and clears any
+         *     prior revocation — a rotated node is trusted again under the same name,
+         *     the old token stops working the instant this commits.
+         */
+        post: operations["rotate_node_credential_api_v1_nodes_credentials__node_name__rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/credentials/{node_name}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke Node Credential */
+        post: operations["revoke_node_credential_api_v1_nodes_credentials__node_name__revoke_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1935,6 +1992,51 @@ export interface components {
             user: components["schemas"]["UserOut"];
             /** Csrf Token */
             csrf_token: string;
+        };
+        /** NodeCredentialCreate */
+        NodeCredentialCreate: {
+            /** Node Name */
+            node_name: string;
+        };
+        /** NodeCredentialIssued */
+        NodeCredentialIssued: {
+            /** Node Name */
+            node_name: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Revoked At */
+            revoked_at: string | null;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+            /** Token */
+            token: string;
+        };
+        /** NodeCredentialOut */
+        NodeCredentialOut: {
+            /** Node Name */
+            node_name: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Revoked At */
+            revoked_at: string | null;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
         };
         /** OptionCreate */
         OptionCreate: {
@@ -3786,6 +3888,7 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "X-Mantis-Node"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -3819,6 +3922,7 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
+                "X-Mantis-Node"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -3916,6 +4020,7 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "X-Mantis-Node"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -3947,6 +4052,7 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "X-Mantis-Node"?: string | null;
             };
             path: {
                 group_id: string;
@@ -4149,6 +4255,7 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "X-Mantis-Node"?: string | null;
             };
             path: {
                 group_id: string;
@@ -4369,6 +4476,7 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "X-Mantis-Node"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -6007,6 +6115,7 @@ export interface operations {
             query?: never;
             header?: {
                 authorization?: string | null;
+                "X-Mantis-Node"?: string | null;
             };
             path: {
                 tenant_id: string;
@@ -6955,6 +7064,121 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Lease6Out"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_node_credentials_api_v1_nodes_credentials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeCredentialOut"][];
+                };
+            };
+        };
+    };
+    create_node_credential_api_v1_nodes_credentials_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NodeCredentialCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeCredentialIssued"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rotate_node_credential_api_v1_nodes_credentials__node_name__rotate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                node_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeCredentialIssued"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_node_credential_api_v1_nodes_credentials__node_name__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                node_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeCredentialOut"];
                 };
             };
             /** @description Validation Error */

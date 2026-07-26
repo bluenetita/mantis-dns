@@ -33,6 +33,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 JWT_DEV_SECRET = "dev-insecure-secret-change-me"
 INTERNAL_TOKEN_DEV_DEFAULT = "dev-insecure-internal-token"
 ADMIN_PASSWORD_DEV_DEFAULT = "change-me-now"
+DEV_NODE_TOKEN_DEFAULT = "dev-insecure-node-token"
 
 # MANTIS_ENV values that opt OUT of the secure-secrets gate below. Deliberately
 # an allow-list rather than checking `MANTIS_ENV == "production"`: the old
@@ -50,7 +51,6 @@ class Settings(BaseSettings):
     MANTIS_ENV: str = ""
 
     MANTIS_JWT_SECRET: str = JWT_DEV_SECRET
-    MANTIS_SERVICE_TOKEN: str = ""
     MANTIS_INTERNAL_TOKEN: str = INTERNAL_TOKEN_DEV_DEFAULT
     MANTIS_TRUSTED_PROXY_IPS: str = ""
     MANTIS_SIGNING_KEY_PATH: Path = Path("signing_key.bin")
@@ -66,6 +66,12 @@ class Settings(BaseSettings):
 
     ADMIN_EMAIL: str = "admin@mantis.local"
     ADMIN_PASSWORD: str = ADMIN_PASSWORD_DEV_DEFAULT
+
+    # Dev/local-compose only: seeds a single node_name="dev" NodeCredential
+    # on boot (main.py's lifespan) so `docker compose up` works without a
+    # manual POST /api/v1/nodes/credentials call. Never seeded when
+    # is_production — a real deployment issues one credential per real node.
+    MANTIS_DEV_NODE_TOKEN: str = DEV_NODE_TOKEN_DEFAULT
 
     # query_events has no other bound on growth — every DNS query on every
     # filter node becomes one row forever without this (see retention.py).
@@ -113,8 +119,6 @@ def _check_production_secrets() -> None:
         errors.append("MANTIS_JWT_SECRET is too short — minimum 32 characters required")
     if settings.MANTIS_INTERNAL_TOKEN == INTERNAL_TOKEN_DEV_DEFAULT:
         errors.append("MANTIS_INTERNAL_TOKEN is the insecure dev default — set a strong random value")
-    if not settings.MANTIS_SERVICE_TOKEN:
-        errors.append("MANTIS_SERVICE_TOKEN is not set — filter-node M2M endpoints would be unauthenticated")
     if settings.ADMIN_PASSWORD == ADMIN_PASSWORD_DEV_DEFAULT:
         errors.append("ADMIN_PASSWORD is the insecure dev default — set it before first boot")
     if not settings.MANTIS_SIGNING_KEY_PATH.is_absolute():

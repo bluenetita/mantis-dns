@@ -23,7 +23,6 @@ from mantis_control import config
 def _set_all_secrets_strong(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config.settings, "MANTIS_JWT_SECRET", "x" * 32)
     monkeypatch.setattr(config.settings, "MANTIS_INTERNAL_TOKEN", "some-strong-token")
-    monkeypatch.setattr(config.settings, "MANTIS_SERVICE_TOKEN", "some-strong-service-token")
     monkeypatch.setattr(config.settings, "ADMIN_PASSWORD", "some-strong-password")
     monkeypatch.setattr(config.settings, "MANTIS_SIGNING_KEY_PATH", Path.cwd() / "signing_key.bin")
     monkeypatch.setattr(config.settings, "FEED_STORAGE_DIR", Path.cwd() / "feed_domains")
@@ -61,7 +60,6 @@ def test_production_with_all_dev_defaults_raises(monkeypatch: pytest.MonkeyPatch
     message = str(exc_info.value)
     assert "MANTIS_JWT_SECRET" in message
     assert "MANTIS_INTERNAL_TOKEN" in message
-    assert "MANTIS_SERVICE_TOKEN" in message
     assert "ADMIN_PASSWORD" in message
     assert "MANTIS_SIGNING_KEY_PATH" in message
     assert "FEED_STORAGE_DIR" in message
@@ -86,7 +84,6 @@ def test_production_with_short_jwt_secret_raises(monkeypatch: pytest.MonkeyPatch
 @pytest.mark.parametrize(
     "attr,value",
     [
-        ("MANTIS_SERVICE_TOKEN", ""),
         ("MANTIS_INTERNAL_TOKEN", config.INTERNAL_TOKEN_DEV_DEFAULT),
         ("ADMIN_PASSWORD", config.ADMIN_PASSWORD_DEV_DEFAULT),
         ("MANTIS_SIGNING_KEY_PATH", Path("signing_key.bin")),

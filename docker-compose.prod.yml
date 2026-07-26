@@ -41,7 +41,6 @@ services:
       - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-mantis}:${POSTGRES_PASSWORD:?required}@postgres:5432/${POSTGRES_DB:-mantis}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:?set to your UI origin(s), e.g. https://dns.example.com}
       - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:?required}
-      - MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN:?required}
       - MANTIS_JWT_SECRET=${MANTIS_JWT_SECRET:?required}
       - MANTIS_FILTER_NODE_IP=${MANTIS_FILTER_NODE_IP:-}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@mantis.local}
@@ -94,7 +93,11 @@ services:
       - CONTROL_URL=http://control:8000
       - GROUP_ID=${GROUP_ID:-}
       - DNS_BIND_ADDR=0.0.0.0:1053
-      - MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN:?required}
+      # Per-node credential (design.md §26 R3) — log in as admin and POST
+      # /api/v1/nodes/credentials {"node_name": "..."} to issue this node's
+      # own token; there is no fleet-wide shared-secret default in production.
+      - MANTIS_NODE_NAME=${MANTIS_NODE_NAME:?required}
+      - MANTIS_NODE_TOKEN=${MANTIS_NODE_TOKEN:?required}
       - MANTIS_CONTROL_PUBLIC_KEY_SHA256=${MANTIS_CONTROL_PUBLIC_KEY_SHA256:-}
       - BLOCKPAGE_BIND_ADDR=${BLOCKPAGE_BIND_ADDR:-}
     restart: unless-stopped

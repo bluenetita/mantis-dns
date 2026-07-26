@@ -223,6 +223,25 @@ pub struct DecisionOutcome {
     pub matched_feed_id: Option<String>,
 }
 
+/// Exact-match confirmation tier (design.md §26 R1): a bloom hit is only
+/// *possibly* in the category's domain set (no false negatives, possible
+/// false positives — `BloomFilter::might_contain`'s own doc comment). Before
+/// blocking on that alone, binary-search `exact_hashes` (sorted, one
+/// `mantis_policy::exact_hash` per real domain, populated by the Python
+/// compiler) for the query's own hash. An empty `exact_hashes` means the
+/// bundle predates this field (rolling upgrade, or a still-cached old
+/// bundle) — fall back to trusting the bloom hit rather than treating
+/// "no exact data shipped" as "confirmed absent", which would silently
+/// unblock every category on an old bundle.
+fn category_confirms_domain(category: &mantis_bundle::CategorySet, qname: &str) -> bool {
+    if category.exact_hashes.is_empty() {
+        return true;
+    }
+    let seed = category.bloom.as_ref().map_or(0, |b| b.seed);
+    let hash = mantis_policy::exact_hash(qname, seed);
+    category.exact_hashes.binary_search(&hash).is_ok()
+}
+
 /// Lookup order per design.md §18.4: allow-override beats everything;
 /// deny-override beats categories; categories beat default-allow.
 ///
@@ -259,7 +278,7 @@ pub fn decide(bundle: &Bundle, qname: &str) -> DecisionOutcome {
         let action = category.action;
         if action == mantis_bundle::Action::Block as i32 {
             if let Some(bf) = BloomFilter::from_category(category) {
-                if bf.might_contain(&qname) {
+                if bf.might_contain(&qname) && category_confirms_domain(category, &qname) {
                     return DecisionOutcome {
                         decision: Decision::Block,
                         matched_rule: "category",
@@ -677,13 +696,34 @@ fn bootstrap_fail_open() -> bool {
         .unwrap_or(false)
 }
 
-/// Adds the MANTIS_SERVICE_TOKEN bearer header to outbound M2M requests.
+/// This node's own identity for the per-node credential (design.md §26 R3)
+/// and, later, Epic O's fleet heartbeat (design.md §23) — same env var,
+/// same hostname fallback, so the two don't end up disagreeing about which
+/// name a given box reports under. A container hostname changes per
+/// restart, so MANTIS_NODE_NAME is a hard requirement for any non-host-
+/// networked install; bare-metal/host-networked nodes can rely on the
+/// fallback.
+fn node_name() -> Option<String> {
+    std::env::var("MANTIS_NODE_NAME").ok().filter(|s| !s.is_empty()).or_else(|| {
+        std::fs::read_to_string("/proc/sys/kernel/hostname")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    })
+}
+
+/// Adds this node's per-node credential (design.md §26 R3) to outbound M2M
+/// requests: X-Mantis-Node identifies which node, Authorization: Bearer
+/// carries its own token — replaces the old single fleet-wide
+/// MANTIS_SERVICE_TOKEN, so a leaked token only ever compromises the one
+/// node it belongs to. Silently sends nothing if either half is unset,
+/// same as the old function did for a missing token — the control plane
+/// rejects the request with 403, it doesn't need this side to pre-validate.
 pub fn with_service_token(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    if let Ok(tok) = std::env::var("MANTIS_SERVICE_TOKEN") {
-        rb.bearer_auth(tok)
-    } else {
-        rb
-    }
+    let (Some(name), Ok(token)) = (node_name(), std::env::var("MANTIS_NODE_TOKEN")) else {
+        return rb;
+    };
+    rb.header("X-Mantis-Node", name).bearer_auth(token)
 }
 
 // ── Core decision + response ───────────────────────────────────────────────────
@@ -1051,6 +1091,30 @@ mod tests {
     }
 
     #[test]
+    fn with_service_token_sends_per_node_credential_only_when_both_set() {
+        // Single test — MANTIS_NODE_NAME/MANTIS_NODE_TOKEN are process-global
+        // env state (see no_bundle_loaded_yet_respects_bootstrap_fail_open_env_var
+        // for why this can't be split across parallel tests).
+        std::env::remove_var("MANTIS_NODE_NAME");
+        std::env::remove_var("MANTIS_NODE_TOKEN");
+        let client = reqwest::Client::new();
+
+        // No token set: must not send Authorization, regardless of whatever
+        // this test-runner host's real hostname fallback resolves to.
+        let req = with_service_token(client.get("http://example.test")).build().unwrap();
+        assert!(req.headers().get("authorization").is_none());
+
+        std::env::set_var("MANTIS_NODE_NAME", "filter-1");
+        std::env::set_var("MANTIS_NODE_TOKEN", "s3cr3t");
+        let req = with_service_token(client.get("http://example.test")).build().unwrap();
+        assert_eq!(req.headers().get("x-mantis-node").unwrap(), "filter-1");
+        assert_eq!(req.headers().get("authorization").unwrap(), "Bearer s3cr3t");
+
+        std::env::remove_var("MANTIS_NODE_NAME");
+        std::env::remove_var("MANTIS_NODE_TOKEN");
+    }
+
+    #[test]
     fn public_key_store_returns_the_key_it_was_built_with() {
         let key = test_key(1);
         let store = PublicKeyStore::new(key);
@@ -1293,6 +1357,21 @@ mod tests {
             bloom: Some(mantis_bundle::gen::BloomParams { num_hashes: 0, num_bits: 8, seed: 0 }),
             bloom_bits: vec![0xFFu8],
             action: action as i32,
+            exact_hashes: vec![],
+        }
+    }
+
+    /// Same always-bloom-hit trick as `category`, but with a real exact-match
+    /// set so `category_confirms_domain` (design.md §26 R1) actually has
+    /// something to check against.
+    fn category_with_exact_hashes(
+        id: &str,
+        action: mantis_bundle::Action,
+        exact_hashes: Vec<u64>,
+    ) -> mantis_bundle::CategorySet {
+        mantis_bundle::CategorySet {
+            exact_hashes,
+            ..category(id, action, "")
         }
     }
 
@@ -1325,6 +1404,42 @@ mod tests {
         let outcome = decide(&bundle, "evil.example.com");
         assert_eq!(outcome.decision, Decision::Block);
         assert_eq!(outcome.matched_rule, "category");
+        assert_eq!(outcome.matched_category.as_deref(), Some("malware"));
+    }
+
+    #[test]
+    fn decide_bloom_hit_without_exact_match_does_not_block() {
+        // design.md §26 R1: a bloom hit alone must not block if the exact-match
+        // set (populated) doesn't confirm the domain — this is the false
+        // positive the review found unguarded.
+        let bundle = Bundle {
+            categories: vec![category_with_exact_hashes(
+                "malware",
+                mantis_bundle::Action::Block,
+                vec![111, 222, 333], // some other domains' hashes, not this query's
+            )],
+            ..Default::default()
+        };
+        let outcome = decide(&bundle, "innocent.example.com");
+        assert_eq!(outcome.decision, Decision::Allow, "unconfirmed bloom hit must not block");
+        assert_eq!(outcome.matched_rule, "default");
+    }
+
+    #[test]
+    fn decide_bloom_hit_confirmed_by_exact_match_blocks() {
+        let seed = 0; // matches `category()`'s BloomParams seed
+        let qname = "malware.example.com";
+        let hash = mantis_policy::exact_hash(qname, seed);
+        let bundle = Bundle {
+            categories: vec![category_with_exact_hashes(
+                "malware",
+                mantis_bundle::Action::Block,
+                vec![hash],
+            )],
+            ..Default::default()
+        };
+        let outcome = decide(&bundle, qname);
+        assert_eq!(outcome.decision, Decision::Block);
         assert_eq!(outcome.matched_category.as_deref(), Some("malware"));
     }
 

@@ -68,6 +68,15 @@ message CategorySet {
   bytes bloom_bits = 6;       // raw bloom filter bitset
 
   Action action = 7;          // block | log_only | allow
+
+  // Sorted (ascending) exact-match confirmation set (design.md §26 R1):
+  // one 64-bit hash per real domain in the category, packed instead of the
+  // domain strings themselves to keep the wire size bounded. On a bloom
+  // hit, the filter node binary-searches this before blocking — closes the
+  // bloom false-positive gap (design.md §15) without shipping the full
+  // domain list. Same hash as BloomParams' h1 (bundle.proto's Python/Rust
+  // hash contract already applies here — see compiler/bloom.py).
+  repeated fixed64 exact_hashes = 8;
 }
 
 message BloomParams {

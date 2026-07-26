@@ -34,7 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mantis_control.block_page import resolve_block_template
-from mantis_control.compiler.bloom import BloomFilterBuilder, BloomParams, recommended_params
+from mantis_control.compiler.bloom import BloomFilterBuilder, BloomParams, exact_hash, recommended_params
 from mantis_control.compiler.signing import sign_bundle
 from mantis_control.config import FEED_STORAGE_DIR
 from mantis_control.db.models import Feed, Policy
@@ -102,12 +102,17 @@ def _fetch_ingested_feeds(db: Session, category_id: str) -> list[Feed]:
     return [f for f in feeds if f.last_domain_count is not None]
 
 
-def _compile_bloom(feed_storage_dir: Path, feed_ids: list[str]) -> tuple[bytes, int, int, int]:
+def _compile_bloom(feed_storage_dir: Path, feed_ids: list[str]) -> tuple[bytes, int, int, int, list[int]]:
     """Pure CPU/IO work for one category: union the given feeds' domains and
     build the bloom filter. No DB access, no closures over module-level
     mutable state — this is the piece dispatched to worker processes, so it
     must be importable and picklable as a plain top-level function. Returns
-    a plain tuple (not BloomParams) to keep the pickled result minimal."""
+    a plain tuple (not BloomParams) to keep the pickled result minimal.
+
+    The trailing sorted hash list is the exact-match confirmation set
+    (design.md §26 R1): one exact_hash() per real domain, so a bloom hit on
+    the filter node can be confirmed against the actual category contents
+    instead of blocking on the bloom's word alone."""
     domains: set[str] = set()
     for feed_id in feed_ids:
         domains |= load_domains(feed_storage_dir, feed_id)
@@ -115,7 +120,8 @@ def _compile_bloom(feed_storage_dir: Path, feed_ids: list[str]) -> tuple[bytes, 
     bf = BloomFilterBuilder(params)
     for domain in domains:
         bf.add(domain)
-    return bf.to_bytes(), params.num_hashes, params.num_bits, params.seed
+    exact_hashes = sorted({exact_hash(domain, params.seed) for domain in domains})
+    return bf.to_bytes(), params.num_hashes, params.num_bits, params.seed, exact_hashes
 
 
 def _category_bloom(db: Session, category_id: str) -> tuple[bytes, BloomParams, list[Feed]]:
@@ -133,7 +139,7 @@ def _category_bloom(db: Session, category_id: str) -> tuple[bytes, BloomParams, 
         bf = BloomFilterBuilder(_EMPTY_CATEGORY_PARAMS)
         return bf.to_bytes(), _EMPTY_CATEGORY_PARAMS, []
 
-    bloom_bytes, num_hashes, num_bits, seed = _compile_bloom(FEED_STORAGE_DIR, [f.id for f in ingested])
+    bloom_bytes, num_hashes, num_bits, seed, _exact_hashes = _compile_bloom(FEED_STORAGE_DIR, [f.id for f in ingested])
     return bloom_bytes, BloomParams(num_hashes, num_bits, seed), ingested
 
 
@@ -170,11 +176,11 @@ def build_bundle(policy: Policy, version: int, db: Session) -> bundle_pb2.Bundle
     # Categories are independent (no shared state), so this is where the
     # actual wall-clock win is — skip the pool for 0-1 categories needing
     # real work, since process spawn/pickling overhead would eat the gain.
-    results: dict[int, tuple[bytes, BloomParams]] = {}
+    results: dict[int, tuple[bytes, BloomParams, list[int]]] = {}
     needs_compute = [(i, feeds) for i, (_, feeds) in enumerate(toggle_feeds) if feeds]
     for i, (_, feeds) in enumerate(toggle_feeds):
         if not feeds:
-            results[i] = (BloomFilterBuilder(_EMPTY_CATEGORY_PARAMS).to_bytes(), _EMPTY_CATEGORY_PARAMS)
+            results[i] = (BloomFilterBuilder(_EMPTY_CATEGORY_PARAMS).to_bytes(), _EMPTY_CATEGORY_PARAMS, [])
 
     if len(needs_compute) > 1:
         pool = _get_pool()
@@ -184,15 +190,15 @@ def build_bundle(policy: Policy, version: int, db: Session) -> bundle_pb2.Bundle
         }
         for future in as_completed(futures):
             i = futures[future]
-            bloom_bytes, num_hashes, num_bits, seed = future.result()
-            results[i] = (bloom_bytes, BloomParams(num_hashes, num_bits, seed))
+            bloom_bytes, num_hashes, num_bits, seed, exact_hashes = future.result()
+            results[i] = (bloom_bytes, BloomParams(num_hashes, num_bits, seed), exact_hashes)
     else:
         for i, feeds in needs_compute:
-            bloom_bytes, num_hashes, num_bits, seed = _compile_bloom(FEED_STORAGE_DIR, [f.id for f in feeds])
-            results[i] = (bloom_bytes, BloomParams(num_hashes, num_bits, seed))
+            bloom_bytes, num_hashes, num_bits, seed, exact_hashes = _compile_bloom(FEED_STORAGE_DIR, [f.id for f in feeds])
+            results[i] = (bloom_bytes, BloomParams(num_hashes, num_bits, seed), exact_hashes)
 
     for i, (toggle, feeds) in enumerate(toggle_feeds):
-        bloom_bytes, params = results[i]
+        bloom_bytes, params, exact_hashes = results[i]
         bundle.categories.append(
             bundle_pb2.CategorySet(
                 category_id=toggle.category_id,
@@ -206,6 +212,7 @@ def build_bundle(policy: Policy, version: int, db: Session) -> bundle_pb2.Bundle
                 ),
                 bloom_bits=bloom_bytes,
                 action=_ACTION_MAP.get(toggle.action, bundle_pb2.ACTION_BLOCK),
+                exact_hashes=exact_hashes,
             )
         )
 

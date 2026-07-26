@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from mantis_control.api import schemas
 from mantis_control.audit import write_audit_log
 from mantis_control.block_page import resolve_block_template
-from mantis_control.auth import check_tenant_access, get_current_user, get_group_or_403, require_role, require_service_token, user_tenant_filter
+from mantis_control.auth import check_tenant_access, get_current_user, get_group_or_403, require_node_token, require_role, user_tenant_filter
 from mantis_control.categories import CATEGORY_REGISTRY
 from mantis_control.compiler.build_policy_bundle import compile_and_store
 from mantis_control.compiler.keys import KEY_ID, load_or_create_signing_key, public_key_bytes_for
@@ -197,12 +197,12 @@ def delete_group(
 
 @router.get("/routing-table", response_model=list[schemas.RoutingTableEntry])
 def get_routing_table(
-    db: Session = Depends(get_db), _: None = Depends(require_service_token)
+    db: Session = Depends(get_db), _: None = Depends(require_node_token)
 ) -> list[schemas.RoutingTableEntry]:
     """Source-IP -> tenant routing table for filter nodes (design.md §7.3
     option 2). Polled machine-to-machine by Rust filter nodes — no user JWT
-    involved, so this uses the shared MANTIS_SERVICE_TOKEN instead (see
-    require_service_token), like /public-key and the bundle GET endpoint."""
+    involved, so this uses a per-node credential instead (see
+    require_node_token), like /public-key and the bundle GET endpoint."""
     groups = db.query(models.Group).filter(models.Group.vpn_subnet.is_not(None)).all()
     return [
         schemas.RoutingTableEntry(cidr=g.vpn_subnet, group_id=g.id)
@@ -213,7 +213,7 @@ def get_routing_table(
 
 @router.get("/local-zones", response_model=list[schemas.LocalZoneRecord])
 def get_local_zone_records(
-    group_id: str, db: Session = Depends(get_db), _: None = Depends(require_service_token)
+    group_id: str, db: Session = Depends(get_db), _: None = Depends(require_node_token)
 ) -> list[schemas.LocalZoneRecord]:
     """Flattened local-zone records for the group's tenant (design.md
     §DNS-Zones "stub zone" route type). Polled machine-to-machine by filter
@@ -312,9 +312,9 @@ def upsert_policy(
 
 
 @router.get("/public-key")
-def get_public_key(_: None = Depends(require_service_token)) -> Response:
+def get_public_key(_: None = Depends(require_node_token)) -> Response:
     """Filter nodes fetch this once and pin it for bundle verification.
-    Machine-to-machine, guarded by MANTIS_SERVICE_TOKEN like /routing-table."""
+    Machine-to-machine, guarded by require_node_token like /routing-table."""
     return Response(
         content=public_key_bytes_for(load_or_create_signing_key()),
         media_type="application/octet-stream",
@@ -350,10 +350,10 @@ def compile_bundle(
 
 @router.get("/groups/{group_id}/bundle")
 def get_latest_bundle(
-    group_id: str, db: Session = Depends(get_db), _: None = Depends(require_service_token)
+    group_id: str, db: Session = Depends(get_db), _: None = Depends(require_node_token)
 ) -> Response:
     """Fetched by filter nodes after they detect a new bundle_version.
-    Machine-to-machine traffic guarded by MANTIS_SERVICE_TOKEN like /routing-table."""
+    Machine-to-machine traffic guarded by require_node_token like /routing-table."""
     # Validate group_id exists in DB — prevents probing for arbitrary file paths.
     if db.get(models.Group, group_id) is None:
         raise HTTPException(404, "group not found")
@@ -572,11 +572,11 @@ def upsert_tenant_block_template(
 
 @router.get("/groups/{group_id}/block-template", response_model=schemas.BlockPageTemplateOut)
 def get_effective_block_template(
-    group_id: str, db: Session = Depends(get_db), _: None = Depends(require_service_token)
+    group_id: str, db: Session = Depends(get_db), _: None = Depends(require_node_token)
 ) -> models.BlockPageTemplate:
     """Resolved (group override → tenant default) block-page template for the
     filter node's co-hosted block-page listener. Machine-to-machine, guarded by
-    MANTIS_SERVICE_TOKEN like /routing-table and the bundle GET. 404 when
+    require_node_token like /routing-table and the bundle GET. 404 when
     nothing is configured — the listener then renders built-in defaults."""
     group = db.get(models.Group, group_id)
     if group is None:

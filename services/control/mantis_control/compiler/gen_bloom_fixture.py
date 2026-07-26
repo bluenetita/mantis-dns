@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mantis_control.compiler.bloom import BloomFilterBuilder, BloomParams
+from mantis_control.compiler.bloom import BloomFilterBuilder, BloomParams, exact_hash
 
 FIXTURE_DIR = Path(__file__).resolve().parents[3] / "filter" / "mantis-policy" / "tests" / "fixtures"
 
@@ -62,6 +62,10 @@ def main() -> None:
                 "seed": PARAMS.seed,
                 "included": INCLUDED,
                 "excluded": EXCLUDED,
+                # design.md §26 R1's exact-match tier: same cross-language
+                # contract as the bloom bits above, checked in
+                # cross_lang_fixture.rs.
+                "included_exact_hashes": [exact_hash(d, PARAMS.seed) for d in INCLUDED],
             },
             indent=2,
         )

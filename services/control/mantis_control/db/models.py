@@ -739,3 +739,26 @@ class DhcpDaemonHeartbeat(Base):
     hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
     started_at: Mapped[datetime] = mapped_column(default=_now)
     last_seen_at: Mapped[datetime] = mapped_column(default=_now)
+
+
+class NodeCredential(Base):
+    """Per-node identity for filter-node <-> control-plane M2M calls
+    (design.md §26 R3), replacing the single fleet-wide MANTIS_SERVICE_TOKEN:
+    one compromised node used to yield fleet-wide credentials, with no way
+    to revoke just that node. `node_name` is the same identity concept
+    Epic O's fleet heartbeat will key on (design.md §23, MANTIS_NODE_NAME env
+    var / hostname fallback) — reused here rather than inventing a second
+    node-identity scheme. Only `token_hash` (sha256 hex) is stored; the raw
+    token is returned once, at creation/rotation time, like any API-key
+    pattern. `revoked_at` is checked on every request rather than deleting
+    the row outright, so a revoked node's prior audit/heartbeat history
+    still resolves to a name instead of an orphaned foreign key."""
+
+    __tablename__ = "node_credentials"
+
+    node_name: Mapped[str] = mapped_column(String(255), primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    created_by: Mapped[str] = mapped_column(String(255))
+    revoked_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_seen_at: Mapped[datetime] = mapped_column(default=_now)

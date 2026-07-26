@@ -29,7 +29,7 @@ services:
       - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-mantis}:${POSTGRES_PASSWORD:-mantis}@postgres:5432/${POSTGRES_DB:-mantis}
       - CORS_ALLOW_ORIGINS=http://localhost:5173,http://localhost:5174,http://localhost:59144
       - MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN:-dev-insecure-internal-token}
-      - MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN:-}
+      - MANTIS_DEV_NODE_TOKEN=${MANTIS_DEV_NODE_TOKEN:-dev-insecure-node-token}
       - MANTIS_FILTER_NODE_IP=${MANTIS_FILTER_NODE_IP:-}
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
@@ -66,7 +66,11 @@ services:
       - CONTROL_URL=http://control:8000
       - GROUP_ID=${GROUP_ID:-}
       - DNS_BIND_ADDR=0.0.0.0:1053
-      - MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN:-}
+      # Matches the dev NodeCredential main.py seeds on control-plane boot
+      # (design.md §26 R3) — a real deployment issues its own per-node name
+      # + token via POST /api/v1/nodes/credentials instead of this default.
+      - MANTIS_NODE_NAME=${MANTIS_NODE_NAME:-dev}
+      - MANTIS_NODE_TOKEN=${MANTIS_NODE_TOKEN:-dev-insecure-node-token}
       - MANTIS_CONTROL_PUBLIC_KEY_SHA256=${MANTIS_CONTROL_PUBLIC_KEY_SHA256:-}
       - UPSTREAM_BUNDLE_TENANT=${UPSTREAM_BUNDLE_TENANT:-*}
       # Co-hosted block-page HTTP listener (docs/design-block-page.md). Only

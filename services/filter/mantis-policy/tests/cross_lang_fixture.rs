@@ -23,7 +23,7 @@
 
 use mantis_bundle::gen::BloomParams;
 use mantis_bundle::CategorySet;
-use mantis_policy::BloomFilter;
+use mantis_policy::{exact_hash, BloomFilter};
 use serde::Deserialize;
 use std::fs;
 
@@ -34,6 +34,7 @@ struct FixtureMeta {
     seed: u64,
     included: Vec<String>,
     excluded: Vec<String>,
+    included_exact_hashes: Vec<u64>,
 }
 
 #[test]
@@ -55,6 +56,7 @@ fn rust_agrees_with_python_built_filter() {
         }),
         bloom_bits: bits,
         action: 0,
+        exact_hashes: vec![],
     };
     let bf = BloomFilter::from_category(&cat).unwrap();
 
@@ -68,6 +70,17 @@ fn rust_agrees_with_python_built_filter() {
         assert!(
             !bf.might_contain(domain),
             "expected {domain} to be absent from the Python-built filter, but Rust says yes — hashing scheme drift"
+        );
+    }
+
+    // design.md §26 R1's exact-match tier: mantis_policy::exact_hash must
+    // agree with bloom.py's exact_hash() bit-for-bit, same as the bloom
+    // bits above.
+    for (domain, expected) in meta.included.iter().zip(&meta.included_exact_hashes) {
+        assert_eq!(
+            exact_hash(domain, meta.seed),
+            *expected,
+            "exact_hash({domain}) diverged between Rust and Python"
         );
     }
 }

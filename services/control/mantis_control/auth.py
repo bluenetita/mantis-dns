@@ -22,6 +22,7 @@ a real identity instead of "unauthenticated".
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -82,23 +83,41 @@ def clear_auth_cookies(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
     response.delete_cookie(CSRF_COOKIE_NAME, path="/")
 
-# Shared secret authenticating filter-node -> control-plane machine calls
-# (/public-key, /routing-table, /local-zones, /groups/{id}/bundle GET,
-# /upstream-bundle/{id}, /query-events). Fails closed when unset: an
-# unconfigured MANTIS_SERVICE_TOKEN used to be treated as "this deployment
-# hasn't turned auth on yet" and let the check pass unconditionally — any
-# install that forgot to set it (anything not labeled MANTIS_ENV=production)
-# left compiled policy bundles, zone data, the signing public key, and the
-# telemetry-ingest endpoint open to anyone on the network. Set a real token
-# (see .env.example) even for local/dev use.
-def require_service_token(authorization: str | None = Header(None)) -> None:
+# Per-node credential authenticating filter-node -> control-plane machine
+# calls (/public-key, /routing-table, /local-zones, /groups/{id}/bundle GET,
+# /upstream-bundle/{id}, /query-events) — design.md §26 R3. Replaces the old
+# single fleet-wide MANTIS_SERVICE_TOKEN: that was one static string checked
+# with hmac.compare_digest against every node in the fleet, so compromising
+# one branch-office filter node yielded fleet-wide M2M credentials with no
+# way to revoke just that node. Each node now sends its own name (X-Mantis-
+# Node) plus its own token (Authorization: Bearer); node_credentials_routers.py
+# is how an admin issues/revokes one. `node_name` is the same identity
+# Epic O's fleet heartbeat will key on (design.md §23).
+def require_node_token(
+    authorization: str | None = Header(None),
+    x_mantis_node: str | None = Header(None, alias="X-Mantis-Node"),
+    db: Session = Depends(get_db),
+) -> None:
     token = authorization.removeprefix("Bearer ") if authorization else None
+    if not token or not x_mantis_node:
+        raise HTTPException(403, "invalid or missing node credential")
+    node = db.get(models.NodeCredential, x_mantis_node)
     if (
-        not token
-        or not settings.MANTIS_SERVICE_TOKEN
-        or not hmac.compare_digest(token, settings.MANTIS_SERVICE_TOKEN)
+        node is None
+        or node.revoked_at is not None
+        or not hmac.compare_digest(hash_node_token(token), node.token_hash)
     ):
-        raise HTTPException(403, "invalid or missing service token")
+        raise HTTPException(403, "invalid or missing node credential")
+    node.last_seen_at = datetime.now(timezone.utc)
+    db.commit()
+
+
+def hash_node_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def generate_node_token() -> str:
+    return secrets.token_urlsafe(32)
 
 
 def hash_password(password: str) -> str:

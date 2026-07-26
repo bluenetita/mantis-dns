@@ -29,7 +29,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from mantis_control.compiler import build_policy_bundle
-from mantis_control.compiler.bloom import BloomFilterBuilder
+from mantis_control.compiler.bloom import BloomFilterBuilder, exact_hash
 from mantis_control.db.models import Base, Feed
 from mantis_control.feeds.ingest import _feed_path
 
@@ -106,3 +106,21 @@ def test_category_bloom_empty_when_no_feed_ingested(db, tmp_path):
 
     assert feeds == []
     assert not _contains(bloom_bytes, params, "only-in-a.example")
+
+
+def test_compile_bloom_emits_sorted_exact_hashes_for_the_real_domain_set(tmp_path):
+    """design.md §26 R1: the exact-match confirmation tier the filter node
+    checks a bloom hit against. Must be sorted (binary-searched on the Rust
+    side) and must NOT include hashes for domains outside the feed."""
+    _feed_path(tmp_path, "feed-a").write_text("only-in-a.example\nother.example")
+
+    with patch.object(build_policy_bundle, "_random_seed", return_value=0):
+        _bloom_bytes, _num_hashes, _num_bits, seed, exact_hashes = build_policy_bundle._compile_bloom(
+            tmp_path, ["feed-a"]
+        )
+
+    assert exact_hashes == sorted(exact_hashes)
+    assert exact_hash("only-in-a.example", seed) in exact_hashes
+    assert exact_hash("other.example", seed) in exact_hashes
+    assert exact_hash("neither.example", seed) not in exact_hashes
+    assert len(exact_hashes) == 2

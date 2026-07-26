@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from mantis_control.auth import get_current_user, get_group_or_403, require_service_token, user_tenant_filter
+from mantis_control.auth import get_current_user, get_group_or_403, require_node_token, user_tenant_filter
 from mantis_control.db import models
 from mantis_control.db.session import get_db
 
@@ -237,11 +237,11 @@ def query_log(
 def ingest_query_events(
     payload: QueryEventBatch,
     db: Session = Depends(get_db),
-    _: None = Depends(require_service_token),
+    _: None = Depends(require_node_token),
 ) -> dict[str, int]:
     """Fire-and-forget sink for filter-node query telemetry. Best-effort by
     design — the hot DNS path never blocks on this succeeding. Guarded by
-    MANTIS_SERVICE_TOKEN like /routing-table and /public-key: this is
+    require_node_token like /routing-table and /public-key: this is
     filter-node-to-control-plane traffic, not a user-facing endpoint."""
     group_ids = {event.group_id for event in payload.events}
     tenant_by_group: dict[str, str] = (

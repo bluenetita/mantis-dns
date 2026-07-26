@@ -77,7 +77,7 @@ class BlockResponse(_message.Message):
     def __init__(self, mode: _Optional[_Union[BlockMode, str]] = ..., redirect_ipv4: _Optional[str] = ..., redirect_ipv6: _Optional[str] = ..., ttl_seconds: _Optional[int] = ...) -> None: ...
 
 class CategorySet(_message.Message):
-    __slots__ = ("category_id", "source_feed_id", "feed_version", "license", "bloom", "bloom_bits", "action")
+    __slots__ = ("category_id", "source_feed_id", "feed_version", "license", "bloom", "bloom_bits", "action", "exact_hashes")
     CATEGORY_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_FEED_ID_FIELD_NUMBER: _ClassVar[int]
     FEED_VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -85,6 +85,7 @@ class CategorySet(_message.Message):
     BLOOM_FIELD_NUMBER: _ClassVar[int]
     BLOOM_BITS_FIELD_NUMBER: _ClassVar[int]
     ACTION_FIELD_NUMBER: _ClassVar[int]
+    EXACT_HASHES_FIELD_NUMBER: _ClassVar[int]
     category_id: str
     source_feed_id: str
     feed_version: str
@@ -92,7 +93,8 @@ class CategorySet(_message.Message):
     bloom: BloomParams
     bloom_bits: bytes
     action: Action
-    def __init__(self, category_id: _Optional[str] = ..., source_feed_id: _Optional[str] = ..., feed_version: _Optional[str] = ..., license: _Optional[str] = ..., bloom: _Optional[_Union[BloomParams, _Mapping]] = ..., bloom_bits: _Optional[bytes] = ..., action: _Optional[_Union[Action, str]] = ...) -> None: ...
+    exact_hashes: _containers.RepeatedScalarFieldContainer[int]
+    def __init__(self, category_id: _Optional[str] = ..., source_feed_id: _Optional[str] = ..., feed_version: _Optional[str] = ..., license: _Optional[str] = ..., bloom: _Optional[_Union[BloomParams, _Mapping]] = ..., bloom_bits: _Optional[bytes] = ..., action: _Optional[_Union[Action, str]] = ..., exact_hashes: _Optional[_Iterable[int]] = ...) -> None: ...
 
 class BloomParams(_message.Message):
     __slots__ = ("num_hashes", "num_bits", "seed")

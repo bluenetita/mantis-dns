@@ -34,15 +34,16 @@ from mantis_control.api.dhcp_routers import router as dhcp_router
 from mantis_control.api.dhcp_internal_routers import router as dhcp_internal_router
 from mantis_control.api.dhcp6_routers import router as dhcp6_router
 from mantis_control.api.feed_routers import router as feed_router
+from mantis_control.api.node_credentials_routers import router as node_credentials_router
 from mantis_control.api.routers import router as api_router
 from mantis_control.api.siem_routers import router as siem_router
 from mantis_control.api.siem_syslog_routers import router as siem_syslog_router
 from mantis_control.api.telemetry_routers import router as telemetry_router
-from mantis_control.auth import CsrfMiddleware, hash_password
+from mantis_control.auth import CsrfMiddleware, hash_node_token, hash_password
 from mantis_control.compiler.keys import load_or_create_signing_key
 from mantis_control.config import settings
 
-from mantis_control.db.models import Feed, User
+from mantis_control.db.models import Feed, NodeCredential, User
 from mantis_control.db.session import SessionLocal, engine
 from mantis_control.feeds.seed import seed_catalog
 from mantis_control.reindex import reindex_query_events
@@ -100,6 +101,19 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
             logging.getLogger(__name__).warning(
                 f"seeded initial admin user {settings.ADMIN_EMAIL!r} — "
                 "change ADMIN_PASSWORD / log in and rotate it"
+            )
+
+        if not settings.is_production and db.query(NodeCredential).count() == 0:
+            db.add(NodeCredential(
+                node_name="dev",
+                token_hash=hash_node_token(settings.MANTIS_DEV_NODE_TOKEN),
+                created_by="system",
+            ))
+            db.commit()
+            logging.getLogger(__name__).warning(
+                "seeded dev node credential node_name='dev' from MANTIS_DEV_NODE_TOKEN — "
+                "production deployments must issue real per-node credentials via "
+                "POST /api/v1/nodes/credentials"
             )
     finally:
         db.close()
@@ -196,6 +210,7 @@ app.include_router(upstream_router, prefix="/api/v1")
 app.include_router(dhcp_router, prefix="/api/v1")
 app.include_router(dhcp_internal_router, prefix="/api/v1")
 app.include_router(dhcp6_router, prefix="/api/v1")
+app.include_router(node_credentials_router, prefix="/api/v1")
 
 
 @app.get("/health")

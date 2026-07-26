@@ -72,6 +72,7 @@ fn signed_test_bundle(signing_key: &SigningKey) -> Bundle {
             }),
             bloom_bits: build_bloom_with("category-blocked.example"),
             action: Action::Block as i32,
+            exact_hashes: vec![],
         }],
         ..Default::default()
     };

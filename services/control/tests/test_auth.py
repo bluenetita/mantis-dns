@@ -13,11 +13,14 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from mantis_control import auth
 from mantis_control.api.auth_routers import (
@@ -29,39 +32,76 @@ from mantis_control.api.auth_routers import (
     update_user,
 )
 from mantis_control.db import models
+from mantis_control.db.models import Base, NodeCredential
 
 
-def test_require_service_token_rejects_everything_when_unset(monkeypatch):
-    """An unconfigured MANTIS_SERVICE_TOKEN must fail closed, not open — these
-    M2M endpoints (bundle/routing-table/public-key/query-events) would
-    otherwise be reachable by anyone on the network in any deployment that
-    forgot to set the token."""
-    monkeypatch.setattr(auth.settings, "MANTIS_SERVICE_TOKEN", "")
+@pytest.fixture
+def node_db():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[NodeCredential.__table__])
+    session = sessionmaker(bind=engine)()
+    yield session
+    session.close()
+
+
+def _add_node(db, node_name="filter-1", token="s3cret", revoked=False):
+    db.add(
+        NodeCredential(
+            node_name=node_name,
+            token_hash=auth.hash_node_token(token),
+            created_by="admin@mantis.local",
+            revoked_at=datetime.now(timezone.utc) if revoked else None,
+        )
+    )
+    db.commit()
+
+
+def test_require_node_token_rejects_missing_header(node_db):
+    """design.md §26 R3: per-node credential replacing the old fleet-wide
+    MANTIS_SERVICE_TOKEN — these M2M endpoints (bundle/routing-table/
+    public-key/query-events) must fail closed with no header at all."""
     with pytest.raises(HTTPException) as exc:
-        auth.require_service_token(authorization=None)
+        auth.require_node_token(authorization=None, x_mantis_node=None, db=node_db)
     assert exc.value.status_code == 403
+
+
+def test_require_node_token_rejects_unknown_node(node_db):
     with pytest.raises(HTTPException) as exc:
-        auth.require_service_token(authorization="Bearer anything")
+        auth.require_node_token(authorization="Bearer whatever", x_mantis_node="ghost", db=node_db)
     assert exc.value.status_code == 403
 
 
-def test_require_service_token_rejects_missing_header(monkeypatch):
-    monkeypatch.setattr(auth.settings, "MANTIS_SERVICE_TOKEN", "s3cret")
+def test_require_node_token_rejects_wrong_token(node_db):
+    _add_node(node_db)
     with pytest.raises(HTTPException) as exc:
-        auth.require_service_token(authorization=None)
+        auth.require_node_token(authorization="Bearer wrong", x_mantis_node="filter-1", db=node_db)
     assert exc.value.status_code == 403
 
 
-def test_require_service_token_rejects_wrong_token(monkeypatch):
-    monkeypatch.setattr(auth.settings, "MANTIS_SERVICE_TOKEN", "s3cret")
+def test_require_node_token_rejects_revoked_credential(node_db):
+    """Revoking one node must not require touching any other node's row —
+    the whole point of per-node credentials over one shared secret."""
+    _add_node(node_db, revoked=True)
     with pytest.raises(HTTPException) as exc:
-        auth.require_service_token(authorization="Bearer wrong")
+        auth.require_node_token(authorization="Bearer s3cret", x_mantis_node="filter-1", db=node_db)
     assert exc.value.status_code == 403
 
 
-def test_require_service_token_accepts_correct_token(monkeypatch):
-    monkeypatch.setattr(auth.settings, "MANTIS_SERVICE_TOKEN", "s3cret")
-    auth.require_service_token(authorization="Bearer s3cret")
+def test_require_node_token_accepts_correct_token_and_bumps_last_seen(node_db):
+    _add_node(node_db)
+    auth.require_node_token(authorization="Bearer s3cret", x_mantis_node="filter-1", db=node_db)
+    node = node_db.get(NodeCredential, "filter-1")
+    assert node.last_seen_at is not None
+
+
+def test_require_node_token_rejects_a_different_nodes_token(node_db):
+    """A leaked token for one node must not authenticate as another node —
+    this is the specific fleet-wide-forgery gap per-node credentials close."""
+    _add_node(node_db, node_name="filter-1", token="s3cret-1")
+    _add_node(node_db, node_name="filter-2", token="s3cret-2")
+    with pytest.raises(HTTPException) as exc:
+        auth.require_node_token(authorization="Bearer s3cret-1", x_mantis_node="filter-2", db=node_db)
+    assert exc.value.status_code == 403
 
 
 def test_check_tenant_access_admin_unrestricted():

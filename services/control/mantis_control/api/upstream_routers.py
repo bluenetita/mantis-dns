@@ -46,7 +46,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session, selectinload
 
 from mantis_control.audit import write_audit_log
-from mantis_control.auth import check_tenant_access, get_current_user, require_role, require_service_token
+from mantis_control.auth import check_tenant_access, get_current_user, require_node_token, require_role
 from mantis_control.compiler.keys import load_or_create_signing_key
 from mantis_control.db import models
 from mantis_control.db.session import get_db
@@ -766,11 +766,11 @@ def upsert_tenant_policy(
 
 @router.get("/upstream-bundle/{tenant_id}")
 def get_upstream_bundle(
-    tenant_id: str, db: Session = Depends(get_db), _: None = Depends(require_service_token)
+    tenant_id: str, db: Session = Depends(get_db), _: None = Depends(require_node_token)
 ) -> Response:
     """
     Compiles a signed upstream config bundle for the given tenant.
-    Guarded by MANTIS_SERVICE_TOKEN like /api/v1/groups/{id}/bundle; integrity
+    Guarded by require_node_token like /api/v1/groups/{id}/bundle; integrity
     is additionally provided by the ed25519 signature.
 
     Response body: canonical JSON bundle payload (sort_keys, no whitespace).

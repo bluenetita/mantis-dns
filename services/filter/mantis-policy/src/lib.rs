@@ -43,6 +43,21 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     hash
 }
 
+/// The h1 half of `BloomFilter`'s double hash, standalone (design.md §26
+/// R1's exact-match confirmation tier): a bloom hit is confirmed against a
+/// category's actual domain set by this same hash rather than a third hash
+/// function, since it's an equality check against real domains, not a
+/// membership probe against bloom bits — it doesn't inherit bloom's
+/// false-positive mechanism (which needs every one of k probes to collide).
+/// MUST match `exact_hash` in services/control/mantis_control/compiler/bloom.py.
+pub fn exact_hash(domain: &str, seed: u64) -> u64 {
+    let seed_bytes = seed.to_le_bytes();
+    let mut buf = Vec::with_capacity(seed_bytes.len() + domain.len());
+    buf.extend_from_slice(&seed_bytes);
+    buf.extend_from_slice(domain.as_bytes());
+    fnv1a(&buf)
+}
+
 pub struct BloomFilter<'a> {
     num_hashes: u32,
     num_bits: u64,
@@ -65,15 +80,11 @@ impl<'a> BloomFilter<'a> {
         let seed_bytes = self.seed.to_le_bytes();
         let domain_bytes = domain.as_bytes();
 
-        let mut buf1 = Vec::with_capacity(seed_bytes.len() + domain_bytes.len());
-        buf1.extend_from_slice(&seed_bytes);
-        buf1.extend_from_slice(domain_bytes);
-
         let mut buf2 = Vec::with_capacity(seed_bytes.len() + domain_bytes.len());
         buf2.extend_from_slice(domain_bytes);
         buf2.extend_from_slice(&seed_bytes);
 
-        (fnv1a(&buf1), fnv1a(&buf2))
+        (exact_hash(domain, self.seed), fnv1a(&buf2))
     }
 
     /// Returns true if `domain` is *possibly* in the set (bloom semantics: no
@@ -114,6 +125,7 @@ mod tests {
             }),
             bloom_bits: vec![0u8; 128],
             action: 0,
+            exact_hashes: vec![],
         };
         let bf = BloomFilter::from_category(&cat).unwrap();
         assert!(!bf.might_contain("example.com"));
