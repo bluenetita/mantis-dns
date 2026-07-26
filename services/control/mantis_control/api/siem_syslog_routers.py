@@ -15,10 +15,9 @@
 
 """SIEM syslog config CRUD + on-demand test delivery (design.md §20.8, Sprint 17).
 
-Admin-only, same trust tier as the webhook config (§20.4) — these configs
-name a network target the control plane will connect out to on a
-schedule, which is the same class of risk as a webhook URL even without a
-signing secret to protect.
+Admin-only: these configs name a network target the control plane will
+connect out to on a schedule, the same trust tier as user management, not
+operator-level policy edits.
 """
 
 from __future__ import annotations

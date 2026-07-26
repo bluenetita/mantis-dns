@@ -41,7 +41,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { rawGet } from "../api/client";
 import { formatError } from "../api/errors";
-import { useFeeds, useSiemWebhooks } from "../api/hooks";
+import { useFeeds } from "../api/hooks";
 import { CustomizeDrawer } from "./dashboard/CustomizeDrawer";
 import type {
   CategoryBreakdown,
@@ -51,7 +51,6 @@ import type {
   RecentEvent,
   TimeseriesPoint,
   TopClient,
-  WebhookItem,
 } from "./dashboard/types";
 import {
   DEFAULT_CONFIG,
@@ -70,7 +69,6 @@ import {
   KpiCard,
   QueryVolumeWidget,
   RecentEventsWidget,
-  SiemDeliveryWidget,
   TopClientsWidget,
   TopDomainsWidget,
 } from "./dashboard/widgets";
@@ -82,7 +80,6 @@ export function DashboardPage() {
   const [customizeOpened, { open: openCustomize, close: closeCustomize }] = useDisclosure(false);
 
   const { data: feeds } = useFeeds();
-  const { data: webhooks } = useSiemWebhooks();
 
   const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery({
     queryKey: ["dashboard-summary", hours],
@@ -157,7 +154,6 @@ export function DashboardPage() {
       case "top-clients":     return <TopClientsWidget data={topClients} loading={clientsLoading} />;
       case "group-breakdown": return <GroupBreakdownWidget data={byGroup} loading={groupLoading} />;
       case "feed-health":     return <FeedHealthWidget data={feeds as FeedItem[] | undefined} />;
-      case "siem-delivery":   return <SiemDeliveryWidget data={webhooks as WebhookItem[] | undefined} />;
       case "recent-events":   return <RecentEventsWidget data={recentBlocks} loading={recentLoading} />;
     }
   }

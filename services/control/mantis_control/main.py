@@ -37,7 +37,6 @@ from mantis_control.api.feed_routers import router as feed_router
 from mantis_control.api.routers import router as api_router
 from mantis_control.api.siem_routers import router as siem_router
 from mantis_control.api.siem_syslog_routers import router as siem_syslog_router
-from mantis_control.api.siem_webhook_routers import router as siem_webhook_router
 from mantis_control.api.telemetry_routers import router as telemetry_router
 from mantis_control.auth import CsrfMiddleware, hash_password
 from mantis_control.compiler.keys import load_or_create_signing_key
@@ -49,7 +48,6 @@ from mantis_control.feeds.seed import seed_catalog
 from mantis_control.reindex import reindex_query_events
 from mantis_control.retention import prune_query_events
 from mantis_control.scheduler import kick_feed_now, mark_shutting_down, schedule_feed, scheduler
-from mantis_control.siem_delivery import run_webhook_delivery_cycle
 from mantis_control.siem_syslog_delivery import run_syslog_delivery_cycle
 
 
@@ -107,9 +105,6 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         db.close()
 
     async def _run_siem_delivery_cycles() -> None:
-        # Both sinks poll the same QueryEvent table on the same cadence —
-        # one job for both instead of two identical scheduler entries.
-        await run_webhook_delivery_cycle()
         await run_syslog_delivery_cycle()
 
     scheduler.add_job(
@@ -197,7 +192,6 @@ app.include_router(telemetry_router, prefix="/api/v1")
 app.include_router(audit_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(siem_router, prefix="/api/v1")
-app.include_router(siem_webhook_router, prefix="/api/v1")
 app.include_router(siem_syslog_router, prefix="/api/v1")
 app.include_router(client_router, prefix="/api/v1")
 app.include_router(zone_router, prefix="/api/v1")

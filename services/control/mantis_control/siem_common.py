@@ -13,13 +13,10 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Shared plumbing for the SIEM export sinks (webhook: siem_delivery.py,
-syslog: siem_syslog_delivery.py). Both sinks poll QueryEvent on their own
-cursor and their own scheduler tick, and are otherwise identical: same
-backoff ladder, same failure-count threshold, same cursor/rate-limit/query
-shape, same test-event fixture, same CRUD 404/tenant-scope check. Only the
-actual "send these events" step differs, so that's the one thing callers
-supply.
+"""Shared plumbing for the SIEM export sinks (currently just syslog:
+siem_syslog_delivery.py). Kept as a Protocol-based abstraction — rather than
+folded directly into the syslog module — because it's designed to support
+more than one sink type sharing the same cursor/backoff/CRUD shape.
 """
 
 from __future__ import annotations
@@ -42,9 +39,8 @@ MAX_CONSECUTIVE_FAILURES = 6
 
 
 class DeliverySink(Protocol):
-    """The fields SiemWebhook and SiemSyslog rows have in common — the two
-    models aren't related by inheritance, but every field the shared
-    delivery/CRUD helpers below touch has the same name and type on both."""
+    """The fields a delivery-sink model needs for the shared delivery/CRUD
+    helpers below — currently only SiemSyslog implements this shape."""
 
     id: str
     tenant_id: str | None
@@ -106,10 +102,10 @@ async def process_delivery_sink(
     send: Callable[[list[SiemEvent]], Awaitable[None]],
     resource_type: str,
 ) -> None:
-    """Runs one delivery attempt for *sink* (a SiemWebhook or SiemSyslog row —
-    both expose the same cursor/backoff/filter fields). *send* does the
-    actual transport; everything else (cadence gating, batching, cursor
-    advance, backoff, auto-disable) is shared.
+    """Runs one delivery attempt for *sink* (a SiemSyslog row exposing the
+    DeliverySink shape). *send* does the actual transport; everything else
+    (cadence gating, batching, cursor advance, backoff, auto-disable) is
+    shared.
     """
     now = datetime.now(timezone.utc)
 

@@ -60,11 +60,6 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.existingSecret }}
                   key: MANTIS_JWT_SECRET
-            - name: MANTIS_WEBHOOK_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.secrets.existingSecret }}
-                  key: MANTIS_WEBHOOK_SECRET_KEY
             - name: ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:

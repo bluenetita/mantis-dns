@@ -115,7 +115,6 @@ kubectl create secret generic mantis-dns-secrets \
   --from-literal=MANTIS_INTERNAL_TOKEN=$(openssl rand -hex 32) \
   --from-literal=MANTIS_SERVICE_TOKEN=$(openssl rand -hex 32) \
   --from-literal=MANTIS_JWT_SECRET=$(openssl rand -hex 32) \
-  --from-literal=MANTIS_WEBHOOK_SECRET_KEY=$(openssl rand -hex 32) \
   --from-literal=ADMIN_PASSWORD=$(openssl rand -hex 16)
 helm install mantis-dns charts/mantis-dns \
   --set secrets.existingSecret=mantis-dns-secrets \

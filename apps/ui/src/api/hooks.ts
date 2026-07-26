@@ -27,8 +27,6 @@ type PolicyUpsert = components["schemas"]["PolicyUpsert"];
 type BlockPageTemplateUpsert = components["schemas"]["BlockPageTemplateUpsert"];
 type FeedCreate = components["schemas"]["FeedCreate"];
 type FeedUpdate = components["schemas"]["FeedUpdate"];
-type SiemWebhookCreate = components["schemas"]["SiemWebhookCreate"];
-type SiemWebhookUpdate = components["schemas"]["SiemWebhookUpdate"];
 type SiemSyslogCreate = components["schemas"]["SiemSyslogCreate"];
 type SiemSyslogUpdate = components["schemas"]["SiemSyslogUpdate"];
 type ClientUpsert = components["schemas"]["ClientUpsert"];
@@ -426,49 +424,6 @@ export function useQueryLog(params: {
         ...(hours ? { hours } : {}),
       }),
     refetchInterval: 30_000,
-  });
-}
-
-// --- SIEM webhooks ---
-
-export function useSiemWebhooks() {
-  return useQuery({
-    queryKey: ["siem-webhooks"],
-    queryFn: async () => unwrap(await apiClient.GET("/api/v1/siem/webhooks")),
-    refetchInterval: 15_000,
-  });
-}
-
-export function useCreateSiemWebhook() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (body: SiemWebhookCreate) => unwrap(await apiClient.POST("/api/v1/siem/webhooks", { body })),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["siem-webhooks"] }),
-  });
-}
-
-export function useUpdateSiemWebhook() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async ({ webhookId, body }: { webhookId: string; body: SiemWebhookUpdate }) =>
-      unwrap(await apiClient.PATCH("/api/v1/siem/webhooks/{webhook_id}", { params: { path: { webhook_id: webhookId } }, body })),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["siem-webhooks"] }),
-  });
-}
-
-export function useDeleteSiemWebhook() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (webhookId: string) =>
-      unwrap(await apiClient.DELETE("/api/v1/siem/webhooks/{webhook_id}", { params: { path: { webhook_id: webhookId } } })),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["siem-webhooks"] }),
-  });
-}
-
-export function useTestSiemWebhook() {
-  return useMutation({
-    mutationFn: async (webhookId: string) =>
-      unwrap(await apiClient.POST("/api/v1/siem/webhooks/{webhook_id}/test", { params: { path: { webhook_id: webhookId } } })),
   });
 }
 

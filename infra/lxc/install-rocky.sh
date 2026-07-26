@@ -31,7 +31,7 @@
 # Useful options:
 #   MANTIS_ENV=dev          First install only: skip the secure-secrets gate (see
 #                           services/control/mantis_control/config.py's
-#                           _DEV_ENV_VALUES) and boot with dev JWT/webhook/
+#                           _DEV_ENV_VALUES) and boot with dev JWT/
 #                           internal-token defaults instead of generated secrets.
 #                           mantis-control.env is reused as-is on re-runs — edit
 #                           MANTIS_ENV there by hand and restart the service to
@@ -363,7 +363,6 @@ else
   MANTIS_INTERNAL_TOKEN=$(openssl rand -hex 32)
   MANTIS_SERVICE_TOKEN=$(openssl rand -hex 32)
   MANTIS_JWT_SECRET=$(openssl rand -hex 32)
-  MANTIS_WEBHOOK_SECRET_KEY=$(openssl rand -hex 32)
   ADMIN_EMAIL=${ADMIN_EMAIL:-admin@mantis.local}
   ADMIN_PASSWORD=$(openssl rand -hex 16)
 
@@ -377,7 +376,6 @@ CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS}
 MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN}
 MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN}
 MANTIS_JWT_SECRET=${MANTIS_JWT_SECRET}
-MANTIS_WEBHOOK_SECRET_KEY=${MANTIS_WEBHOOK_SECRET_KEY}
 MANTIS_FILTER_NODE_IP=${MANTIS_FILTER_NODE_IP:-}
 ADMIN_EMAIL=${ADMIN_EMAIL}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}

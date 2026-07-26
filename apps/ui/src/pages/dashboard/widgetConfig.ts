@@ -23,7 +23,6 @@ export const WIDGET_DEFS = [
   { id: "top-clients",     label: "Top clients",           span: { base: 12 } },
   { id: "group-breakdown", label: "Group breakdown",       span: { base: 12 } },
   { id: "feed-health",     label: "Feed health",           span: { base: 12, md: 6 } },
-  { id: "siem-delivery",   label: "SIEM delivery",         span: { base: 12, md: 6 } },
   { id: "recent-events",   label: "Recent block events",   span: { base: 12 } },
 ] as const;
 

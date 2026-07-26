@@ -63,13 +63,12 @@ ingress:
   allowInsecure: false
 
 # Secret containing: MANTIS_INTERNAL_TOKEN, MANTIS_SERVICE_TOKEN,
-# MANTIS_JWT_SECRET, MANTIS_WEBHOOK_SECRET_KEY, ADMIN_PASSWORD.
+# MANTIS_JWT_SECRET, ADMIN_PASSWORD.
 # Generate with, e.g.:
 #   kubectl create secret generic mantis-dns-secrets \
 #     --from-literal=MANTIS_INTERNAL_TOKEN=$(openssl rand -hex 32) \
 #     --from-literal=MANTIS_SERVICE_TOKEN=$(openssl rand -hex 32) \
 #     --from-literal=MANTIS_JWT_SECRET=$(openssl rand -hex 32) \
-#     --from-literal=MANTIS_WEBHOOK_SECRET_KEY=$(openssl rand -hex 32) \
 #     --from-literal=ADMIN_PASSWORD=$(openssl rand -hex 16)
 secrets:
   existingSecret: ""

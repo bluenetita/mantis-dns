@@ -23,5 +23,4 @@ export { CategoriesWidget } from "./CategoriesWidget";
 export { TopClientsWidget } from "./TopClientsWidget";
 export { GroupBreakdownWidget } from "./GroupBreakdownWidget";
 export { FeedHealthWidget } from "./FeedHealthWidget";
-export { SiemDeliveryWidget } from "./SiemDeliveryWidget";
 export { RecentEventsWidget } from "./RecentEventsWidget";

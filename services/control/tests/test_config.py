@@ -22,7 +22,6 @@ from mantis_control import config
 
 def _set_all_secrets_strong(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config.settings, "MANTIS_JWT_SECRET", "x" * 32)
-    monkeypatch.setattr(config.settings, "MANTIS_WEBHOOK_SECRET_KEY", "some-strong-key")
     monkeypatch.setattr(config.settings, "MANTIS_INTERNAL_TOKEN", "some-strong-token")
     monkeypatch.setattr(config.settings, "MANTIS_SERVICE_TOKEN", "some-strong-service-token")
     monkeypatch.setattr(config.settings, "ADMIN_PASSWORD", "some-strong-password")
@@ -61,7 +60,6 @@ def test_production_with_all_dev_defaults_raises(monkeypatch: pytest.MonkeyPatch
         config._check_production_secrets()
     message = str(exc_info.value)
     assert "MANTIS_JWT_SECRET" in message
-    assert "MANTIS_WEBHOOK_SECRET_KEY" in message
     assert "MANTIS_INTERNAL_TOKEN" in message
     assert "MANTIS_SERVICE_TOKEN" in message
     assert "ADMIN_PASSWORD" in message
@@ -88,7 +86,6 @@ def test_production_with_short_jwt_secret_raises(monkeypatch: pytest.MonkeyPatch
 @pytest.mark.parametrize(
     "attr,value",
     [
-        ("MANTIS_WEBHOOK_SECRET_KEY", ""),
         ("MANTIS_SERVICE_TOKEN", ""),
         ("MANTIS_INTERNAL_TOKEN", config.INTERNAL_TOKEN_DEV_DEFAULT),
         ("ADMIN_PASSWORD", config.ADMIN_PASSWORD_DEV_DEFAULT),

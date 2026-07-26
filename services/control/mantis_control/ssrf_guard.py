@@ -193,21 +193,6 @@ def check_url_safe(url: str) -> None:
     _check_url_safe(url, _ip_is_blocked, "a private or reserved address")
 
 
-def check_webhook_url_safe(url: str) -> None:
-    """Raise ValueError if *url* is unsafe as a SIEM webhook target.
-
-    Deliberately narrower than `check_url_safe`: SIEM webhooks are an
-    admin-only, credential-bearing config (same trust tier as a DB or DHCP
-    upstream), and the target is very often a self-hosted SIEM (e.g. Wazuh)
-    on a private/RFC-1918 address on the same network as the control plane —
-    the exact case `check_url_safe` exists to reject for arbitrary
-    lower-trust fetches (see design.md §20 wazuh integration notes). Only
-    loopback and link-local/cloud-metadata addresses are blocked, matching
-    `check_probe_target_safe`'s reasoning above.
-    """
-    _check_url_safe(url, _ip_is_loopback_or_metadata, "a loopback or link-local/metadata address")
-
-
 def _resolve_pinned_url(url: str, is_blocked: Callable[[str], bool], blocked_desc: str) -> tuple[str, str]:
     parsed, host = _parse_http_url(url)
 
@@ -237,20 +222,14 @@ def _resolve_pinned_url(url: str, is_blocked: Callable[[str], bool], blocked_des
     return pinned_url, host
 
 
-def resolve_pinned_webhook_url(url: str) -> tuple[str, str]:
-    """Like `resolve_pinned_url`, but for SIEM webhook targets — see
-    `check_webhook_url_safe` for why the blocklist is narrower here."""
-    return _resolve_pinned_url(url, _ip_is_loopback_or_metadata, "a loopback or link-local/metadata address")
-
-
 def resolve_pinned_syslog_host(host: str) -> tuple[str, socket.AddressFamily, str]:
     """Validates *host* like `check_probe_target_safe` (loopback/link-local/
     metadata blocked, RFC-1918 allowed — self-hosted syslog collectors are
-    routinely on a private address, same reasoning as `check_webhook_url_safe`),
+    routinely on a private address),
     then resolves once to a single IP literal. Used for direct TCP/TLS/UDP
-    syslog sockets, which have no URL/Host-header layer to pin the way HTTP
-    webhook delivery does — resolving once here closes the same DNS-rebinding
-    TOCTOU gap `resolve_pinned_webhook_url` closes for HTTP. Returns
+    syslog sockets, which have no URL/Host-header layer to pin the way an
+    HTTP fetch does — resolving once here closes the same DNS-rebinding
+    TOCTOU gap `resolve_pinned_url` closes for HTTP. Returns
     `(ip_str, address_family, original_host)`; callers should pass
     `server_hostname=original_host` for TLS SNI/certificate verification.
     """

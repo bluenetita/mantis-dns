@@ -196,36 +196,11 @@ class QueryEvent(Base):
     occurred_at: Mapped[datetime] = mapped_column(default=_now, index=True)
 
 
-class SiemWebhook(Base):
-    """SIEM push delivery config (design.md §20.4, Sprint 15). `last_delivered_seq`
-    is this webhook's own cursor into `QueryEvent.seq` — independent per webhook
-    so one slow/misconfigured SIEM can't affect another's delivery progress."""
-
-    __tablename__ = "siem_webhooks"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    tenant_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    name: Mapped[str] = mapped_column(String(255))
-    url: Mapped[str] = mapped_column(String(1024))
-    secret_encrypted: Mapped[str] = mapped_column(String(1024))
-    format: Mapped[str] = mapped_column(String(10), default="json")  # "json" | "cef"
-    batch_size: Mapped[int] = mapped_column(default=200)
-    flush_interval_s: Mapped[int] = mapped_column(default=30)
-    filter_decision: Mapped[str] = mapped_column(String(10), default="all")  # "all" | "block" | "allow"
-    enabled: Mapped[bool] = mapped_column(default=True)
-    last_delivered_seq: Mapped[int] = mapped_column(BigInteger, default=0)
-    last_delivered_at: Mapped[datetime | None] = mapped_column(nullable=True)
-    last_error: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    consecutive_failures: Mapped[int] = mapped_column(default=0)
-    next_retry_at: Mapped[datetime | None] = mapped_column(nullable=True)
-    created_at: Mapped[datetime] = mapped_column(default=_now)
-
-
 class SiemSyslog(Base):
-    """SIEM syslog push delivery config (design.md §20.8, Sprint 17). Same
-    cursor/backoff/auto-disable shape as SiemWebhook — `last_delivered_seq`
-    is this sink's own independent cursor into `QueryEvent.seq`. No secret
-    field: syslog has no HMAC signing concept, unlike the webhook path."""
+    """SIEM syslog push delivery config (design.md §20.8, Sprint 17).
+    `last_delivered_seq` is this sink's own independent cursor into
+    `QueryEvent.seq` — independent per sink so one slow/misconfigured
+    collector can't affect another's delivery progress."""
 
     __tablename__ = "siem_syslogs"
 

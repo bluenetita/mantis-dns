@@ -117,7 +117,7 @@ This separation — rather than one process and one SQLite file — is the core 
             │ query events (async, fire-and-forget)
             ▼
    ┌─────────────────────────────────────────────────────────────────┐
-   │  QUERY EVENTS → PostgreSQL (§20) → pull API / webhook / syslog    │
+   │  QUERY EVENTS → PostgreSQL (§20) → pull API / syslog    │
    │  SIEM export. OpenTelemetry traces 🚧 · Loki/ELK operational logs 🚧│
    └─────────────────────────────────────────────────────────────────┘
 
@@ -171,7 +171,7 @@ a dedicated analytical store (ClickHouse) were both evaluated and cut
 - Query events are **enriched at the filter node** before leaving the data plane: client IP, query type, response code, matched category, matched feed ID, and resolution latency are attached at source — not inferred later from partial data.
 - Enriched events flush directly to the control plane's PostgreSQL `query_events` table (§20.2) — no intermediate bus.
 - Dashboards (in-app, off the telemetry/metrics APIs): QPS, block ratio, cache hit ratio, p50/p99 latency, upstream health, per-tenant volume.
-- **SIEM export layer** (§20): the same query-event stream exposed via pull API (cursor-based REST), push webhook, and RFC 5424 syslog, in JSON or CEF format, so any SIEM can consume without a custom connector.
+- **SIEM export layer** (§20): the same query-event stream exposed via pull API (cursor-based REST) and RFC 5424 syslog push, in JSON or CEF format, so any SIEM can consume without a custom connector.
 - **Not built, and not cut** — genuinely open: **OpenTelemetry** 🚧 traces on the resolve path; **Loki/ELK** 🚧 for operational logs. Neither is blocked on anything above.
 
 ---
@@ -189,7 +189,7 @@ unbuilt technology choice.
 | Bundle storage | S3-compatible object store | Immutable signed bundles | Multi-AZ, versioned | 🚧 filesystem instead (§17.2) |
 | Query logs | PostgreSQL | Analytics, search, retention | Single instance | ✅ built — the permanent answer, not a stepping stone to ClickHouse (§26.9) |
 | Audit | Append-only (PostgreSQL) | Compliance | Single instance | 🚧 append-only by convention only, not DB-enforced — see §26.11 |
-| SIEM config | PostgreSQL | Webhook + syslog sink endpoints, delivery state, cursor | Same as source of truth | ✅ built (§20) |
+| SIEM config | PostgreSQL | Syslog sink endpoints, delivery state, cursor | Same as source of truth | ✅ built (§20) |
 | Secrets | env vars / systemd `EnvironmentFile` (0600) | Keys, upstream creds | — | 🚧 no rotation, no KMS — kept as a real gap (§26.11), Vault itself not pursued at this scale |
 
 **Key principle:** the hot DNS path depends on *none* of these synchronously. It reads only the in-memory policy bundle and local cache. Control/management stores being down degrades management, not resolution.
@@ -347,7 +347,7 @@ Phases 6–10 were not in the original roadmap — they record work that shipped
 | Phase | Deliverable | Status |
 |-------|-------------|--------|
 | 6 | Enterprise UI rebuild on Mantine + TanStack Query + generated OpenAPI client (§19) | ✅ built — SSO, WCAG audit, E2E/visual tests still open (§19.1) |
-| 7 | SIEM integration: enriched query events, cursor pull API, HMAC webhook push, RFC 5424 syslog, client registry (§20) | ✅ built |
+| 7 | SIEM integration: enriched query events, cursor pull API, RFC 5424 syslog push, client registry (§20) | ✅ built |
 | 8 | DNS upstream configuration: resolver profiles, HA pools with health monitoring and failover, split-horizon routes, DNSSEC policy (§21) | ✅ built — upstream telemetry metrics and the health dashboard still open (§21.4) |
 | 9 | Native DHCP engine: DHCPv4 + DHCPv6, DB-coordinated HA, DDNS, relay, PXE, conflict detection, Prometheus metrics (§22) | ✅ built — replaced the ISC Kea integration entirely (§22.1) |
 | 10 | DNS zones (§24) and block page (§25) | ✅ built |
@@ -669,9 +669,9 @@ Enterprise DNS filtering produces the highest-fidelity network telemetry availab
 ### 20.1 Design principles
 
 1. **Enrich at source, not at the SIEM.** The filter node has full context (client IP, matched category, matched feed, latency) that the SIEM cannot reconstruct from raw DNS traffic. Enrichment at the SIEM requires custom parsers and is fragile; enrichment at the filter node is authoritative.
-2. **Both pull and push.** Pull (REST cursor API) works with any SIEM that has an HTTP poller — zero additional infrastructure. Push (webhook) covers real-time requirements and SIEMs that only receive. The same enriched event model feeds both.
+2. **Both pull and push.** Pull (REST cursor API) works with any SIEM that has an HTTP poller — zero additional infrastructure. Push (RFC 5424 syslog) covers real-time requirements and SIEMs that only receive via a syslog listener. The same enriched event model feeds both.
 3. **Standard formats.** JSON for API-native SIEMs (Elastic, Splunk HEC, Panther, Chronicle). CEF (Common Event Format) for legacy SIEMs (ArcSight, QRadar, many MSSPs). Format is a serialization choice, not a separate pipeline.
-4. **Delivery guarantees.** At-least-once delivery with idempotency keys. Cursor-based pull is inherently resumable. Webhook push includes retry with exponential backoff and a dead-letter log visible in the UI.
+4. **Delivery guarantees.** At-least-once delivery with idempotency keys. Cursor-based pull is inherently resumable. Syslog push includes retry with exponential backoff and a dead-letter log visible in the UI.
 5. **No performance impact on DNS path.** SIEM export is fully async and decoupled from query resolution. A SIEM outage or slow consumer cannot increase DNS latency.
 
 ---
@@ -765,53 +765,12 @@ CEF:0|MantisDNS|mantis-filter|1.0|DNS_QUERY|DNS query event|3|
 
 ---
 
-### 20.4 Webhook push
+### 20.4 *(withdrawn)*
 
-#### Configuration model
-
-```
-SiemWebhook {
-    id              UUID
-    tenant_id       UUID | null     // null = org-wide (admin only)
-    name            string          // human label, e.g. "Splunk HEC prod"
-    url             string          // HTTPS only in production
-    secret          string          // stored encrypted; used for HMAC-SHA256 signing
-    format          "json" | "cef"
-    batch_size      int             // events per POST, default 200, max 2000
-    flush_interval_s int            // max seconds between POSTs, default 30
-    enabled         bool
-    filter_decision "all" | "block" | "allow"  // only push matching decisions
-    last_delivered_at  timestamp | null
-    last_error         string | null
-    consecutive_failures int        // reset to 0 on success
-}
-```
-
-#### Delivery
-
-Each POST to the webhook URL:
-```
-POST <url>
-Content-Type: application/json          (or text/plain for CEF)
-X-Mantis-Signature: sha256=<hex>         HMAC-SHA256 of raw body, keyed on secret
-X-Mantis-Delivery-Id: <uuid>             idempotency key for this batch
-X-Mantis-Timestamp: <unix_ms>
-
-{ "events": [...], "delivery_id": "...", "cursor": "..." }
-```
-
-The receiving SIEM must return 2xx within 10 s. On failure:
-- Retry with exponential backoff: 5 s, 30 s, 2 min, 10 min, 1 h.
-- After 6 consecutive failures, mark webhook `enabled=false` and emit an alert to the Mantis audit log + (if configured) an operator notification.
-- Backlog is bounded: if the webhook is disabled or consistently failing, events are still available via the pull API.
-
-#### HMAC verification (receiver side)
-```python
-import hmac, hashlib
-expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
-received = request.headers["X-Mantis-Signature"].removeprefix("sha256=")
-assert hmac.compare_digest(expected, received)
-```
+This section previously specified `SiemWebhook`: an HMAC-signed HTTP push
+sink (config model, per-event POST contract, receiver-side verification
+snippet). Removed 2026-07-26 — the syslog sink (§20.8) and the pull API
+(§20.3) cover SIEM export; number kept as a tombstone, same convention as §7.
 
 ---
 
@@ -868,21 +827,21 @@ ClientEntry {
 
 | SIEM | Integration method | Format | Notes |
 |---|---|---|---|
-| Splunk | HTTP Event Collector (HEC) webhook | JSON | Set `url` to HEC endpoint, token in header via `secret` field; or use pull with Splunk's REST input |
-| Elastic (SIEM/Security) | Webhook → Logstash/Elastic Agent HTTP input | JSON | Or use pull with Filebeat HTTP poller |
-| Microsoft Sentinel | Webhook → Log Analytics Data Collector API | JSON (CEF optionally via AMA) | Azure Function as relay is optional |
+| Splunk | Pull API → Splunk REST input | JSON | Splunk's scripted/REST modular input polls `/api/v1/siem/events` on a schedule |
+| Elastic (SIEM/Security) | Pull API → Filebeat HTTP poller | JSON | Filebeat's `httpjson` input polls the cursor endpoint directly |
+| Microsoft Sentinel | Syslog sink (§20.8) → Azure Monitor Agent, or Pull API via a polling connector/Logic App | CEF via syslog, or JSON | No native inbound webhook receiver; AMA's syslog collection is the lower-effort path |
 | IBM QRadar | Pull API → Universal DSM, or syslog | CEF (`format=cef`) | Syslog sink (§20.8) feeds QRadar's native syslog listener directly |
-| Palo Alto Cortex XSIAM | Webhook | JSON | Native HTTP event ingestion |
-| Chronicle (Google SecOps) | Webhook | JSON (UDM mapping via ingestion API) | |
+| Palo Alto Cortex XSIAM | Pull API via a polling connector | JSON | No native inbound webhook receiver for arbitrary payloads without a custom collector |
+| Chronicle (Google SecOps) | Pull API via a polling feed/connector | JSON (UDM mapping at ingestion) | |
 | Panther | Pull API | JSON | Native REST poller |
-| Wazuh | Syslog sink (§20.8), or Pull API → `<localfile>` JSON log tailing | CEF via syslog, or JSON | Wazuh's built-in `<remote>` syslog listener consumes the syslog sink directly — no polling script needed. The pull-script bridge (`integrations/wazuh/README.md`) predates syslog support and remains for stock configs that don't want an inbound listener open. |
+| Wazuh | Syslog sink (§20.8), or Pull API → `<localfile>` JSON log tailing | CEF via syslog, or JSON | Wazuh has no inbound HTTP event receiver at all — its built-in `<remote>` syslog listener consumes the syslog sink directly, no polling script needed. The pull-script bridge (`integrations/wazuh/README.md`) predates syslog support and remains for stock configs that don't want an inbound listener open. |
 | Any MSSP | Pull API | CEF | MSSP controls polling cadence |
 
 ---
 
 ### 20.8 Syslog export
 
-**Built (Sprint 22).** RFC 5424 syslog is a thin adapter on top of the same enriched event model — iterate the event stream, serialize as CEF or JSON into the MSG field, and write to a TCP/TLS/UDP socket. The control-plane config is a `SiemSyslog` table parallel to `SiemWebhook`, with the same cursor/backoff/auto-disable delivery shape but no signing secret (syslog has no HMAC concept).
+**Built (Sprint 22).** RFC 5424 syslog is a thin adapter on top of the same enriched event model — iterate the event stream, serialize as CEF or JSON into the MSG field, and write to a TCP/TLS/UDP socket. The control-plane config is a `SiemSyslog` table with a cursor/backoff/auto-disable delivery shape; no signing secret, since syslog has no HMAC concept.
 
 ```
 SiemSyslog {
@@ -918,11 +877,11 @@ SiemSyslog {
 
 **Framing.** TCP and TLS use RFC 6587 octet-counting (`"<byte-length> <message>"` per event) so a stream receiver can split messages without a trailer scan. UDP sends one message per datagram, no framing prefix.
 
-**Transport.** TLS is the recommended default; verification uses the system CA trust store, with SNI/certificate checks against the configured hostname even though the connection itself dials a pre-resolved IP literal (closes the same DNS-rebinding TOCTOU gap `resolve_pinned_webhook_url` closes for the webhook path — see `resolve_pinned_syslog_host` in `ssrf_guard.py`). UDP is supported for collectors that only speak classic syslog, but is explicitly best-effort: no application-layer acknowledgment exists for any transport here (a TCP/TLS write success only means the collector's kernel accepted the bytes), and UDP is additionally lossy at the network layer with no delivery signal at all. The delivery cursor only advances on a successful send, so a refused/closed connection is retried like any other failure — a receiver that silently drops accepted bytes is outside what any of these transports can detect.
+**Transport.** TLS is the recommended default; verification uses the system CA trust store, with SNI/certificate checks against the configured hostname even though the connection itself dials a pre-resolved IP literal (closes the DNS-rebinding TOCTOU gap between validation and connect — see `resolve_pinned_syslog_host` in `ssrf_guard.py`). UDP is supported for collectors that only speak classic syslog, but is explicitly best-effort: no application-layer acknowledgment exists for any transport here (a TCP/TLS write success only means the collector's kernel accepted the bytes), and UDP is additionally lossy at the network layer with no delivery signal at all. The delivery cursor only advances on a successful send, so a refused/closed connection is retried like any other failure — a receiver that silently drops accepted bytes is outside what any of these transports can detect.
 
-**Host validation.** `check_probe_target_safe` (not the stricter `check_webhook_url_safe`) gates sink hosts: only loopback and link-local/cloud-metadata addresses are blocked, since self-hosted collectors are routinely on RFC-1918 addresses, same reasoning as §20.4's webhook guard.
+**Host validation.** `check_probe_target_safe` gates sink hosts: only loopback and link-local/cloud-metadata addresses are blocked, since self-hosted collectors are routinely on RFC-1918 addresses.
 
-**Retention interaction.** `prune_query_events` (§6) takes the minimum `last_delivered_seq` across every *enabled* `SiemWebhook` **and** `SiemSyslog` sink as a safety bound — a row isn't pruned until every enabled sink of either kind has delivered it, same protection extended to the new sink type.
+**Retention interaction.** `prune_query_events` (§6) takes the minimum `last_delivered_seq` across every *enabled* `SiemSyslog` sink as a safety bound — a row isn't pruned until every enabled sink has delivered it.
 
 ---
 

@@ -18,8 +18,8 @@
 Sprint 16 (§20.6): events are enriched with client registry data
 (client_name/owner/device_type/tags) where the client IP has been
 registered — this is what turns a raw client IP into an actionable SIEM
-alert. `build_siem_events` is shared with the webhook delivery engine
-(siem_delivery.py) so both export paths enrich identically.
+alert. `build_siem_events` is shared with the syslog delivery engine
+(siem_syslog_delivery.py) so both export paths enrich identically.
 """
 
 from __future__ import annotations

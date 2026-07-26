@@ -47,7 +47,6 @@ if (Test-Path .env) {
         "MANTIS_INTERNAL_TOKEN"     = New-Secret
         "MANTIS_SERVICE_TOKEN"      = New-Secret
         "MANTIS_JWT_SECRET"         = New-Secret
-        "MANTIS_WEBHOOK_SECRET_KEY" = New-Secret
         "POSTGRES_PASSWORD"        = New-Secret 16
     }
 

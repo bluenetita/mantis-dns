@@ -231,7 +231,7 @@ The DNS query stream is the most complete network telemetry source in the stack.
 
 **Exit criteria:** `curl /api/v1/siem/events?format=cef` returns valid CEF lines with all enriched fields populated from a live DNS query; cursor advances correctly across pages; format verified against CEF spec.
 
-### Sprint 15 — Webhook push + Settings UI
+### Sprint 15 — Webhook push + Settings UI (removed 2026-07-26, see design.md §20.4)
 
 - [x] **`SiemWebhook` model** (`siem_webhook_routers.py`, `db/models.py`).
 - [x] **Delivery engine** (`siem_delivery.py`, APScheduler): batching, HMAC-SHA256 `X-Mantis-Signature`, exponential backoff, auto-disable after 6 consecutive failures. Shares its delivery/backoff core with the Sprint 22 syslog path after a later dedupe pass.

@@ -1,11 +1,9 @@
 # Mantis DNS → Wazuh integration
 
-Mantis's SIEM export (`docs/design.md` §20) offers three paths: a
-cursor-based pull API, an HMAC-signed webhook push, and RFC 5424 syslog
-(§20.8). Wazuh has no generic inbound HTTP receiver that understands
-Mantis's push contract (custom `X-Mantis-Signature` header, JSON/CEF body)
-— it ingests via agent traffic, a syslog listener, or local log tailing, not
-arbitrary webhooks.
+Mantis's SIEM export (`docs/design.md` §20) offers two paths: a
+cursor-based pull API and RFC 5424 syslog push (§20.8). Wazuh has no generic
+inbound HTTP receiver — it ingests via agent traffic, a syslog listener, or
+local log tailing, not arbitrary webhooks.
 
 **Prefer the syslog sink for new setups**: Wazuh's built-in `<remote>`
 listener (UDP/TCP 514) consumes a Mantis `SiemSyslog` sink directly — add
@@ -92,20 +90,6 @@ These map directly to the example SIEM rules in `docs/design.md` §20.6.
 Extend with more `matched_category` values, `tenant_id`/`group_id` scoping,
 or additional `tags` correlation as needed — every field in the schema
 (§20.2) is available to rule authors once it lands in the JSON log line.
-
-## About webhook push and private IPs
-
-Earlier, Mantis's SSRF guard rejected *any* webhook URL pointing at a
-private/RFC-1918 address — which meant an on-prem Wazuh (the common case)
-couldn't even be configured as a push target, receiver aside. That's been
-narrowed for SIEM webhooks specifically (`check_webhook_url_safe` in
-`services/control/mantis_control/ssrf_guard.py`): private targets are now
-allowed, only loopback/link-local/cloud-metadata addresses stay blocked.
-This doesn't make push work with stock Wazuh (see above — there's still
-nothing listening for it), but it's no longer blocked at the network-policy
-layer if you build your own receiver (e.g. a small shim that verifies the
-HMAC and writes to a file Wazuh tails) or point it at a SIEM that *does*
-accept generic webhooks.
 
 ## Syslog (recommended for new setups)
 

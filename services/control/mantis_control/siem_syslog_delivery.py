@@ -16,14 +16,13 @@
 """SIEM syslog delivery engine (design.md §20.8, Sprint 17).
 
 RFC 5424 messages carrying the same enriched event payload (CEF or JSON)
-that the webhook path sends — this is a transport swap, not a new event
-model. TCP/TLS use RFC 6587 octet-counting framing so a stream receiver can
-split messages without a trailer scan; UDP sends one message per datagram
-(no framing prefix, per convention).
+that the pull API (siem_routers.py) serves — this is a transport/push
+adapter, not a new event model. TCP/TLS use RFC 6587 octet-counting framing
+so a stream receiver can split messages without a trailer scan; UDP sends
+one message per datagram (no framing prefix, per convention).
 
-Cursor/backoff/auto-disable bookkeeping is shared with the webhook sink in
-siem_common.py, run on its own scheduler tick (see main.py) so a stalled
-syslog collector can't affect webhook delivery or vice versa.
+Cursor/backoff/auto-disable bookkeeping is shared plumbing in
+siem_common.py, run on its own scheduler tick (see main.py).
 
 Delivery guarantee note: TCP/TLS write success only means the collector's
 kernel accepted the bytes — syslog has no application-layer acknowledgment,
@@ -110,8 +109,7 @@ async def _send_udp(ip: str, port: int, family: socket.AddressFamily, lines: lis
 
 async def _send(sink: models.SiemSyslog, events: list[SiemEvent]) -> None:
     # Resolve once and connect to the IP literal, not the hostname — closes
-    # the DNS-rebinding TOCTOU gap between validation and connect, same
-    # reasoning as the webhook path's resolve_pinned_webhook_url.
+    # the DNS-rebinding TOCTOU gap between validation and connect.
     ip, family, original_host = await asyncio.to_thread(resolve_pinned_syslog_host, sink.host)
     lines = [_to_syslog_line(sink, e) for e in events]
     if sink.transport == "udp":

@@ -19,7 +19,7 @@ ingest_query_events): a busy deployment accumulates millions of rows a day,
 and every analytics/query-log endpoint does unindexed-aggregate scans over
 an ever-growing table.
 
-Scheduled daily via APScheduler in main.py, same pattern as the SIEM webhook
+Scheduled daily via APScheduler in main.py, same pattern as the SIEM syslog
 delivery cycle and DHCP lease sync.
 """
 from __future__ import annotations
@@ -43,14 +43,13 @@ _BATCH_SIZE = 5_000
 
 def prune_query_events(db: Session, retention_days: int) -> int:
     """Deletes QueryEvent rows older than `retention_days`, but never a row
-    an *enabled* SIEM webhook (siem_delivery.py) or syslog sink
-    (siem_syslog_delivery.py) hasn't delivered yet — `last_delivered_seq` is
-    each sink's own cursor into QueryEvent.seq, so a row with seq <= every
-    enabled sink's cursor has already been delivered everywhere it needs to
-    be. A backlogged-but-still-enabled sink therefore delays pruning of the
-    rows it hasn't caught up to, rather than silently losing them; a sink
-    that's actually dead auto-disables itself after MAX_CONSECUTIVE_FAILURES
-    (siem_common.py) and so stops blocking retention.
+    an *enabled* syslog sink (siem_syslog_delivery.py) hasn't delivered yet —
+    `last_delivered_seq` is each sink's own cursor into QueryEvent.seq, so a
+    row with seq <= every enabled sink's cursor has already been delivered
+    everywhere it needs to be. A backlogged-but-still-enabled sink therefore
+    delays pruning of the rows it hasn't caught up to, rather than silently
+    losing them; a sink that's actually dead auto-disables itself after
+    MAX_CONSECUTIVE_FAILURES (siem_common.py) and so stops blocking retention.
 
     This does NOT protect against the separate pull-based /api/v1/siem/events
     API, which has no server-tracked per-consumer cursor to check — same as
@@ -61,15 +60,11 @@ def prune_query_events(db: Session, retention_days: int) -> int:
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
 
-    min_delivered_seqs = [
-        db.query(func.min(models.SiemWebhook.last_delivered_seq))
-        .filter(models.SiemWebhook.enabled.is_(True))
-        .scalar(),
+    min_delivered_seq = (
         db.query(func.min(models.SiemSyslog.last_delivered_seq))
         .filter(models.SiemSyslog.enabled.is_(True))
-        .scalar(),
-    ]
-    min_delivered_seq = min((s for s in min_delivered_seqs if s is not None), default=None)
+        .scalar()
+    )
 
     total_deleted = 0
     while True:

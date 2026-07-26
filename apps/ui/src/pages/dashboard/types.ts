@@ -74,13 +74,3 @@ export type RecentEvent = {
 };
 
 export type FeedItem = { id: string; provider: string; category_id: string; enabled: boolean; last_domain_count: number | null };
-
-export type WebhookItem = {
-  id: string;
-  name: string;
-  format: string;
-  enabled: boolean;
-  consecutive_failures: number;
-  last_delivered_at: string | null;
-  last_error: string | null;
-};

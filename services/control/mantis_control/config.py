@@ -31,7 +31,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Dev-only defaults. Never used outside a recognized dev environment
 # (_check_production_secrets below refuses to boot if any are still active).
 JWT_DEV_SECRET = "dev-insecure-secret-change-me"
-WEBHOOK_DEV_KEY_MATERIAL = "dev-insecure-webhook-key-change-me"
 INTERNAL_TOKEN_DEV_DEFAULT = "dev-insecure-internal-token"
 ADMIN_PASSWORD_DEV_DEFAULT = "change-me-now"
 
@@ -51,9 +50,6 @@ class Settings(BaseSettings):
     MANTIS_ENV: str = ""
 
     MANTIS_JWT_SECRET: str = JWT_DEV_SECRET
-    # Empty means "derive a deterministic dev key from WEBHOOK_DEV_KEY_MATERIAL"
-    # (see crypto.py) — that fallback only makes sense outside production.
-    MANTIS_WEBHOOK_SECRET_KEY: str = ""
     MANTIS_SERVICE_TOKEN: str = ""
     MANTIS_INTERNAL_TOKEN: str = INTERNAL_TOKEN_DEV_DEFAULT
     MANTIS_TRUSTED_PROXY_IPS: str = ""
@@ -74,7 +70,7 @@ class Settings(BaseSettings):
     # query_events has no other bound on growth — every DNS query on every
     # filter node becomes one row forever without this (see retention.py).
     # 90 days is a reasonable default log-retention window; a consuming SIEM
-    # (webhook push or the /siem/events pull API) is expected to keep up
+    # (syslog push or the /siem/events pull API) is expected to keep up
     # within it.
     QUERY_EVENT_RETENTION_DAYS: int = 90
 
@@ -115,8 +111,6 @@ def _check_production_secrets() -> None:
         errors.append("MANTIS_JWT_SECRET is the insecure dev default — set a strong random value")
     elif len(settings.MANTIS_JWT_SECRET) < 32:
         errors.append("MANTIS_JWT_SECRET is too short — minimum 32 characters required")
-    if not settings.MANTIS_WEBHOOK_SECRET_KEY:
-        errors.append("MANTIS_WEBHOOK_SECRET_KEY is not set")
     if settings.MANTIS_INTERNAL_TOKEN == INTERNAL_TOKEN_DEV_DEFAULT:
         errors.append("MANTIS_INTERNAL_TOKEN is the insecure dev default — set a strong random value")
     if not settings.MANTIS_SERVICE_TOKEN:
