@@ -41,6 +41,7 @@ import logging
 import socket
 import ssl
 import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
@@ -99,7 +100,7 @@ async def _deliver_one_batch(
     db: Session,
     sink: models.SiemSyslog,
     *,
-    send,
+    send: Callable[[list[SiemEvent]], Awaitable[None]],
     now: datetime,
 ) -> int:
     """Sends at most one batch. Returns the number of rows sent (0 means
@@ -162,7 +163,7 @@ async def _process_delivery_sink(
     db: Session,
     sink: models.SiemSyslog,
     *,
-    send,
+    send: Callable[[list[SiemEvent]], Awaitable[None]],
 ) -> None:
     """Runs one delivery attempt for the sink. Drains batches in a row while
     backlog remains, bounded by both a batch count (MAX_BATCHES_PER_TICK) and
