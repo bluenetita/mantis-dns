@@ -48,6 +48,8 @@ jobs:
       - run: cargo test --workspace
         env:
           TEST_DATABASE_URL: postgresql://test:test@localhost:15432/test
+      - name: DNS hot-path p99 regression gate (design.md §26 R7)
+        run: cargo bench -p mantis-filter --bench hot_path
 
   python:
     runs-on: ubuntu-latest

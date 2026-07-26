@@ -26,6 +26,7 @@ mod tls_pin;
 pub mod upstream_bundle;
 pub mod zone_store;
 
+pub use cache::{CacheLookup, DnsCache, NegativeKind};
 pub use telemetry::{QueryEventInput, TelemetryEmitter};
 pub use zone_store::{
     fetch_and_publish_zone, fetch_local_zone_records, LocalZoneRecordDto, ZoneLookup, ZoneStore,
@@ -37,7 +38,6 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
-use cache::DnsCache;
 use ed25519_dalek::VerifyingKey;
 use hickory_proto::op::{Edns, Message, MessageType, ResponseCode};
 use hickory_proto::rr::rdata::{A, AAAA};

@@ -71,6 +71,15 @@ fn normalize(name: &str) -> String {
     name.trim_end_matches('.').to_ascii_lowercase()
 }
 
+/// True if `qname` is `zone` or a subdomain of it. Both arguments are
+/// already normalized (lowercased, no trailing dot), so this is a plain
+/// byte-slice comparison — no `format!` allocation per zone on the hot path.
+fn is_subdomain_of(qname: &str, zone: &str) -> bool {
+    qname.len() > zone.len()
+        && qname.as_bytes()[qname.len() - zone.len() - 1] == b'.'
+        && &qname[qname.len() - zone.len()..] == zone
+}
+
 fn build_record(entry: &LocalZoneRecordDto) -> Option<Record> {
     let name: Name = match entry.name.parse() {
         Ok(n) => n,
@@ -222,10 +231,7 @@ impl ZoneStore {
         let data = self.data.load();
         let qname = normalize(qname);
 
-        let is_local = data
-            .zones
-            .iter()
-            .any(|z| qname == *z || qname.ends_with(&format!(".{z}")));
+        let is_local = data.zones.iter().any(|z| qname == *z || is_subdomain_of(&qname, z));
         if !is_local {
             return ZoneLookup::NotLocal;
         }
@@ -272,6 +278,14 @@ mod tests {
             data: data.to_string(),
             priority: None,
         }
+    }
+
+    #[test]
+    fn is_subdomain_of_requires_dot_boundary() {
+        assert!(is_subdomain_of("passbolt.bluenetworks.lab", "bluenetworks.lab"));
+        assert!(!is_subdomain_of("evilbluenetworks.lab", "bluenetworks.lab"));
+        assert!(!is_subdomain_of("bluenetworks.lab", "bluenetworks.lab"));
+        assert!(!is_subdomain_of("lab", "bluenetworks.lab"));
     }
 
     #[test]

@@ -11,6 +11,10 @@ path = "src/lib.rs"
 name = "mantis-filter"
 path = "src/main.rs"
 
+[[bench]]
+name = "hot_path"
+harness = false
+
 [dependencies]
 mantis-bundle = { path = "../mantis-bundle" }
 mantis-policy = { path = "../mantis-policy" }

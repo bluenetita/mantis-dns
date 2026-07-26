@@ -372,13 +372,13 @@ defaults it's checked against: **design.md §22.14**.
 - [x] **Client identity verified safe**: traced every use of `client_id` in `db.rs`/`server.rs` — it's stored but never used in a `WHERE` clause or identity comparison anywhere; `mac_address` is the sole key. Rules out the classic PXE dual-identity bug by construction. No code change; this was already correct.
 - [x] **Option 57/52 investigated**: neither was handled; added a log-only warning (`warn_if_reply_oversized`) when a reply exceeds the client's declared option-57 max (or the 576-byte legacy floor) — visibility for an operator's own oversized custom `dhcp_options`, not enforcement/truncation. v6 has no equivalent option to honor (RFC 8415 defines none, relying on IPv6's 1280-byte MTU floor instead).
 
-### Sprint 23 — Perf floor (**not started**)
+### Sprint 23 — Perf floor (**done**)
 
-- [ ] **Bench harness + recorded p99 baseline**, on the actual query path (cache hit, cache miss + upstream, blocked). No `benches/` directory exists today and the "Sprint 4 baseline" every regression-gate reference in this document points to was never recorded (design.md §26 R7) — this sprint is what makes every prior "10% p99 gate" claim in this document real instead of aspirational.
-- [ ] **Fix `ZoneStore::lookup`'s hot-path allocation** (`zone_store.rs`): `normalize()` and `format!(".{z}")` each allocate a `String` on *every* query, the latter once per configured zone — found during the review, unnoticed until now because nothing was measuring the hot path. Replace with `qname.strip_suffix(z)` guarded by a leading `.`, or a precomputed suffix set. This is the concrete proof the bench above needed to exist before Epic O adds more instrumentation to this exact function.
-- [ ] CI wired to fail on regression beyond the now-real 10% p99 gate.
+- [x] **Bench harness + recorded p99 baseline**, on cache-hit, cache-miss and zone-blocked lookup (`services/filter/mantis-filter/benches/hot_path.rs`). No criterion: `[[bench]] harness = false` + `std::time::Instant`, no new dependency. `cargo bench -p mantis-filter --bench hot_path --record` writes `benches/baseline.txt` (plain `name p50_ns p99_ns` lines, not actually JSON despite the filename this line originally used); without `--record` it compares against the committed baseline and exits non-zero past the gate. Upstream-forward path not benched — it's a network call, not a pure function, so it's out of scope for an allocation-focused micro-bench; cache hit/miss and zone lookup are what the review's R7 finding was actually about.
+- [x] **Fixed `ZoneStore::lookup`'s hot-path allocation** (`zone_store.rs`): the per-zone `format!(".{z}")` allocation is gone, replaced by `is_subdomain_of` — a byte-slice suffix compare with a dot-boundary guard, no allocation. `normalize(qname)` still allocates once per query (needed as the owned `HashMap` lookup key); only the O(zones) allocation was in scope per the review finding. New unit test `is_subdomain_of_requires_dot_boundary` covers the boundary case directly.
+- [x] CI wired: `cargo bench -p mantis-filter --bench hot_path` runs after `cargo test` in the `rust` job and fails the job on a >10% p99 regression against the committed baseline.
 
-**Exit criteria:** a committed baseline exists; the zone-lookup fix lands and the bench shows the improvement; CI fails a deliberately-introduced regression.
+**Exit criteria:** a committed baseline exists (`benches/baseline.txt`) — met. The zone-lookup fix lands — met (existing `suffix_match_does_not_false_positive_on_label_boundary` test still passes, plus the new boundary test). CI fails a deliberately-introduced regression — wired via the bench's own exit code, not separately re-verified against a real CI run in this pass.
 
 ### Sprint 24 — Credential and correctness hardening (**not started**)
 
@@ -464,7 +464,7 @@ This epic also unblocks the one item Epic L could not finish: `HealthTab.tsx` (S
 ## Cross-cutting (every sprint)
 
 - [x] Cross-language fixture tests (Python-built bundle → Rust-verified) run in CI (`cross_lang_fixture.rs`, `test_bloom.py`).
-- [ ] **Perf regression gate — never built, now scheduled.** There is no hot-path bench, no `benches/` directory, and no perf job in `.github/workflows/ci.yml`; the Sprint 4 baseline it would compare against was never recorded either. Until Epic P Sprint 23 lands, treat every "10% p99 gate" reference in this document as a stated intent, not an enforced check.
+- [x] **Perf regression gate** (Epic P Sprint 23): `services/filter/mantis-filter/benches/hot_path.rs` + committed `benches/baseline.txt`, run via `cargo bench -p mantis-filter --bench hot_path` in the `rust` CI job. Covers cache hit/miss and zone-blocked lookup, not the upstream-forward path (network I/O, not a pure function).
 - [x] `cargo clippy -D warnings`, `ruff` + `mypy`, `oxlint` + `tsc -b` gate merges. Also enforced: `size-limit` bundle budget and `gen:api:check` (UI schema drift vs FastAPI's OpenAPI spec). Linter note: `mypy` runs in its default mode, not `--strict`.
 
 ---
