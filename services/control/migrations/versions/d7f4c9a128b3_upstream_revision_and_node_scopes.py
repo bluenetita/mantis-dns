@@ -43,37 +43,73 @@ def upgrade() -> None:
         "ON CONFLICT (id) DO NOTHING"
     )
 
-    # Preserve connectivity for credentials issued before scopes existed.
-    # Newly issued credentials default to least privilege in the ORM/API.
-    node_columns = {
-        column["name"] for column in inspector.get_columns("node_credentials")
-    }
-    if "allow_all" not in node_columns:
-        op.add_column(
+    if "node_credentials" not in tables:
+        # NodeCredential was added immediately after the squashed baseline,
+        # but that commit did not include an Alembic revision. Databases that
+        # were already stamped at cc2a9802b8b7 therefore do not have the
+        # table, while fresh databases do because the baseline calls the
+        # current Base.metadata.create_all(). Cover the real upgrade path
+        # explicitly instead of asking operators to repair the schema by hand.
+        op.create_table(
             "node_credentials",
-            sa.Column("allow_all", sa.Boolean(), nullable=False, server_default=sa.true()),
-        )
-        op.alter_column("node_credentials", "allow_all", server_default=sa.false())
-    if "allowed_tenant_ids" not in node_columns:
-        op.add_column(
-            "node_credentials",
+            sa.Column("node_name", sa.String(length=255), nullable=False),
+            sa.Column("token_hash", sa.String(length=64), nullable=False),
+            sa.Column("created_at", sa.DateTime(), nullable=False),
+            sa.Column("created_by", sa.String(length=255), nullable=False),
+            sa.Column("revoked_at", sa.DateTime(), nullable=True),
+            sa.Column("last_seen_at", sa.DateTime(), nullable=False),
+            sa.Column(
+                "allow_all",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.false(),
+            ),
             sa.Column(
                 "allowed_tenant_ids",
                 sa.JSON(),
                 nullable=False,
                 server_default=sa.text("'[]'::json"),
             ),
-        )
-    if "allowed_group_ids" not in node_columns:
-        op.add_column(
-            "node_credentials",
             sa.Column(
                 "allowed_group_ids",
                 sa.JSON(),
                 nullable=False,
                 server_default=sa.text("'[]'::json"),
             ),
+            sa.PrimaryKeyConstraint("node_name"),
         )
+    else:
+        # Preserve connectivity for credentials issued before scopes existed.
+        # Newly issued credentials default to least privilege in the ORM/API.
+        node_columns = {
+            column["name"] for column in inspector.get_columns("node_credentials")
+        }
+        if "allow_all" not in node_columns:
+            op.add_column(
+                "node_credentials",
+                sa.Column("allow_all", sa.Boolean(), nullable=False, server_default=sa.true()),
+            )
+            op.alter_column("node_credentials", "allow_all", server_default=sa.false())
+        if "allowed_tenant_ids" not in node_columns:
+            op.add_column(
+                "node_credentials",
+                sa.Column(
+                    "allowed_tenant_ids",
+                    sa.JSON(),
+                    nullable=False,
+                    server_default=sa.text("'[]'::json"),
+                ),
+            )
+        if "allowed_group_ids" not in node_columns:
+            op.add_column(
+                "node_credentials",
+                sa.Column(
+                    "allowed_group_ids",
+                    sa.JSON(),
+                    nullable=False,
+                    server_default=sa.text("'[]'::json"),
+                ),
+            )
 
 
 def downgrade() -> None:

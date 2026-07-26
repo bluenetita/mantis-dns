@@ -145,6 +145,83 @@ set_env_var() {
   rm -f "$tmp_env"
 }
 
+set_file_env_var() {
+  file="$1"
+  key="$2"
+  value="$3"
+  tmp_env="$(mktemp)"
+  awk -v key="$key" -v value="$value" '
+    BEGIN { updated = 0 }
+    index($0, key "=") == 1 {
+      print key "=" value
+      updated = 1
+      next
+    }
+    { print }
+    END {
+      if (!updated) {
+        print key "=" value
+      }
+    }
+  ' "$file" > "$tmp_env"
+  cat "$tmp_env" > "$file"
+  rm -f "$tmp_env"
+}
+
+read_file_env_var() {
+  file="$1"
+  key="$2"
+  awk -v key="$key" '
+    index($0, key "=") == 1 {
+      print substr($0, length(key) + 2)
+      exit
+    }
+  ' "$file"
+}
+
+provision_local_filter_credential() {
+  node_name="$1"
+  node_token="$2"
+  echo "==> Provisioning per-node credential for local filter '${node_name}'..."
+  (
+    cd "$INSTALL_DIR/app"
+    MANTIS_BOOTSTRAP_NODE_NAME="$node_name" \
+    MANTIS_BOOTSTRAP_NODE_TOKEN="$node_token" \
+      runuser -u mantis --preserve-environment -- "$INSTALL_DIR/venv/bin/python" - <<'PY'
+import os
+
+from mantis_control.auth import hash_node_token
+from mantis_control.db.models import NodeCredential
+from mantis_control.db.session import SessionLocal
+
+node_name = os.environ["MANTIS_BOOTSTRAP_NODE_NAME"]
+token_hash = hash_node_token(os.environ["MANTIS_BOOTSTRAP_NODE_TOKEN"])
+
+with SessionLocal() as db:
+    node = db.get(NodeCredential, node_name)
+    if node is None:
+        db.add(
+            NodeCredential(
+                node_name=node_name,
+                token_hash=token_hash,
+                created_by="system:lxc-installer",
+                allow_all=True,
+                allowed_tenant_ids=[],
+                allowed_group_ids=[],
+            )
+        )
+        db.commit()
+    elif node.revoked_at is not None or node.token_hash != token_hash:
+        raise RuntimeError(
+            f"node credential {node_name!r} already exists but does not match "
+            "/etc/mantis-filter/mantis-filter.env; rotate it through the API "
+            "and update MANTIS_NODE_TOKEN instead of letting the installer "
+            "silently undo an operator-managed credential"
+        )
+PY
+  )
+}
+
 ensure_firewalld_service() {
   service="$1"
   if firewall-cmd --permanent --query-service="$service" >/dev/null 2>&1; then
@@ -361,7 +438,6 @@ else
   POSTGRES_USER=mantis
   POSTGRES_PASSWORD=$(openssl rand -hex 16)
   MANTIS_INTERNAL_TOKEN=$(openssl rand -hex 32)
-  MANTIS_SERVICE_TOKEN=$(openssl rand -hex 32)
   MANTIS_JWT_SECRET=$(openssl rand -hex 32)
   ADMIN_EMAIL=${ADMIN_EMAIL:-admin@mantis.local}
   ADMIN_PASSWORD=$(openssl rand -hex 16)
@@ -374,7 +450,6 @@ MANTIS_ENV=${MANTIS_ENV:-production}
 DATABASE_URL=postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB}
 CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS}
 MANTIS_INTERNAL_TOKEN=${MANTIS_INTERNAL_TOKEN}
-MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN}
 MANTIS_JWT_SECRET=${MANTIS_JWT_SECRET}
 MANTIS_FILTER_NODE_IP=${MANTIS_FILTER_NODE_IP:-}
 ADMIN_EMAIL=${ADMIN_EMAIL}
@@ -578,17 +653,24 @@ if [ "$INSTALL_FILTER" = "1" ]; then
   echo "==> Installing mantis-filter..."
   install -Dm755 target/release/mantis-filter /usr/bin/mantis-filter
   install -Dm644 packaging/filter/mantis-filter.service /etc/systemd/system/mantis-filter.service
-  if [ ! -f /etc/mantis-filter/mantis-filter.env ]; then
-    install -Dm600 packaging/filter/mantis-filter.env /etc/mantis-filter/mantis-filter.env
-    # Point the filter at this same host's control plane and matching
-    # service token by default, since it's a full-stack single-box install —
-    # override CONTROL_URL in the env file if the edge node should instead
-    # report to a different/remote control plane.
-    sed -i "s#^CONTROL_URL=.*#CONTROL_URL=http://127.0.0.1:8000#" /etc/mantis-filter/mantis-filter.env
-    sed -i "s#^MANTIS_SERVICE_TOKEN=.*#MANTIS_SERVICE_TOKEN=${MANTIS_SERVICE_TOKEN}#" /etc/mantis-filter/mantis-filter.env
+  FILTER_ENV=/etc/mantis-filter/mantis-filter.env
+  if [ ! -f "$FILTER_ENV" ]; then
+    install -Dm600 packaging/filter/mantis-filter.env "$FILTER_ENV"
   else
-    echo "    /etc/mantis-filter/mantis-filter.env exists — leaving it untouched."
+    echo "    $FILTER_ENV exists — preserving its resolver settings."
   fi
+
+  LOCAL_NODE_NAME="$(read_file_env_var "$FILTER_ENV" MANTIS_NODE_NAME)"
+  LOCAL_NODE_TOKEN="$(read_file_env_var "$FILTER_ENV" MANTIS_NODE_TOKEN)"
+  LOCAL_NODE_NAME="${LOCAL_NODE_NAME:-$(hostname)}"
+  LOCAL_NODE_TOKEN="${LOCAL_NODE_TOKEN:-$(openssl rand -hex 32)}"
+
+  set_file_env_var "$FILTER_ENV" CONTROL_URL http://127.0.0.1:8000
+  set_file_env_var "$FILTER_ENV" MANTIS_NODE_NAME "$LOCAL_NODE_NAME"
+  set_file_env_var "$FILTER_ENV" MANTIS_NODE_TOKEN "$LOCAL_NODE_TOKEN"
+  chmod 600 "$FILTER_ENV"
+  provision_local_filter_credential "$LOCAL_NODE_NAME" "$LOCAL_NODE_TOKEN"
+
   systemctl daemon-reload
   systemctl enable --now mantis-filter
   systemctl restart mantis-filter
