@@ -42,6 +42,7 @@ def _event(**overrides) -> SiemEvent:
         id="018f4a00-0000-0000-0000-000000000000",
         seq=1,
         occurred_at=datetime(2026, 7, 23, 14, 32, 1, 123456, tzinfo=timezone.utc),
+        ingested_at=datetime(2026, 7, 23, 14, 32, 2, 123456, tzinfo=timezone.utc),
         tenant_id="t1",
         group_id="g1",
         client_ip="10.8.1.47",

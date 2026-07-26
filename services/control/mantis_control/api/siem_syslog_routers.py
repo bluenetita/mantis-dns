@@ -33,6 +33,7 @@ from mantis_control.audit import write_audit_log
 from mantis_control.auth import require_role
 from mantis_control.db import models
 from mantis_control.db.session import get_db
+from mantis_control.rate_limit import syslog_test_rate_limit
 from mantis_control.siem_syslog_delivery import deliver_test_event
 from mantis_control.ssrf_guard import check_probe_target_safe
 
@@ -53,8 +54,8 @@ def _get_sink_or_404(db: Session, sink_id: str, _admin: models.User) -> models.S
 
 class SiemSyslogCreate(BaseModel):
     tenant_id: str | None = None
-    name: str
-    host: str
+    name: str = Field(max_length=255)
+    host: str = Field(max_length=255)
     port: int = Field(514, ge=1, le=65_535)
     transport: Literal["tcp", "tls", "udp"] = "tls"
     format: Literal["json", "cef"] = "cef"
@@ -63,23 +64,25 @@ class SiemSyslogCreate(BaseModel):
     # value outside that shifts every header field after it for the
     # receiver (see _to_syslog_line's fixed "- APP-NAME - - -" framing).
     app_name: str = Field("mantis-dns", max_length=48, pattern=r"^[!-~]+$")
-    batch_size: int = Field(200, ge=1, le=10_000)
+    batch_size: int = Field(200, ge=1, le=5_000)
     flush_interval_s: int = Field(30, ge=10, le=86_400)
     filter_decision: Literal["all", "block", "allow"] = "all"
+    ca_cert_pem: str | None = None
     enabled: bool = True
 
 
 class SiemSyslogUpdate(BaseModel):
-    name: str | None = None
-    host: str | None = None
+    name: str | None = Field(None, max_length=255)
+    host: str | None = Field(None, max_length=255)
     port: int | None = Field(None, ge=1, le=65_535)
     transport: Literal["tcp", "tls", "udp"] | None = None
     format: Literal["json", "cef"] | None = None
     facility: int | None = Field(None, ge=0, le=23)
     app_name: str | None = Field(None, max_length=48, pattern=r"^[!-~]+$")
-    batch_size: int | None = Field(None, ge=1, le=10_000)
+    batch_size: int | None = Field(None, ge=1, le=5_000)
     flush_interval_s: int | None = Field(None, ge=10, le=86_400)
     filter_decision: Literal["all", "block", "allow"] | None = None
+    ca_cert_pem: str | None = None
     enabled: bool | None = None
 
 
@@ -96,6 +99,7 @@ class SiemSyslogOut(BaseModel):
     batch_size: int
     flush_interval_s: int
     filter_decision: str
+    ca_cert_pem: str | None
     enabled: bool
     last_delivered_at: datetime | None
     last_error: str | None
@@ -132,6 +136,7 @@ def create_syslog(
         batch_size=payload.batch_size,
         flush_interval_s=payload.flush_interval_s,
         filter_decision=payload.filter_decision,
+        ca_cert_pem=payload.ca_cert_pem,
         enabled=payload.enabled,
     )
     db.add(sink)
@@ -192,6 +197,7 @@ async def test_syslog(
     syslog_id: str,
     db: Session = Depends(get_db),
     admin: models.User = Depends(require_role("admin")),
+    _rate_limit: None = Depends(syslog_test_rate_limit),
 ) -> SyslogTestResult:
     """Sends one synthetic event to the configured host, framed the same way
     real batches are, without touching the sink's delivery cursor."""
@@ -203,7 +209,15 @@ async def test_syslog(
         db.commit()
         return SyslogTestResult(success=True, error=None)
     except Exception as e:
-        error = _describe_error(e)
+        # Return coarse error class to avoid leaking internal details.
+        if "refused" in str(e).lower() or "connection refused" in str(e).lower():
+            error = "connection refused"
+        elif "timeout" in str(e).lower():
+            error = "connection timeout"
+        elif "host" in str(e).lower():
+            error = "invalid host or network configuration"
+        else:
+            error = "failed to deliver test event"
         write_audit_log(db, "siem_syslog.test", "siem_syslog", sink.id, detail=f"failed: {error}", actor=admin.email, tenant_id=sink.tenant_id)
         db.commit()
         return SyslogTestResult(success=False, error=error)

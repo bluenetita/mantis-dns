@@ -39,6 +39,16 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from urllib.request import HTTPRedirectHandler
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Refuses all redirects to prevent leaking bearer tokens to unexpected hosts."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(
+            req.full_url, code, f"redirect not allowed (would send credentials to {newurl})", headers, fp
+        )
 
 
 def _post_json(url: str, payload: dict) -> dict:
@@ -52,7 +62,8 @@ def _post_json(url: str, payload: dict) -> dict:
 
 def _get_json(url: str, token: str) -> dict:
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    opener = urllib.request.build_opener(_NoRedirectHandler())
+    with opener.open(req, timeout=30) as resp:
         return json.loads(resp.read())
 
 
@@ -150,12 +161,7 @@ def run(args: argparse.Namespace) -> int:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--api-url", default=os.environ.get("MANTIS_API_URL", ""),
-                    help="e.g. https://control.internal:8443/api/v1")
-    p.add_argument("--token", default=os.environ.get("MANTIS_TOKEN", ""),
-                    help="pre-issued bearer token; skips login if set")
-    p.add_argument("--email", default=os.environ.get("MANTIS_EMAIL", ""),
-                    help="operator/admin account used to obtain a bearer token")
-    p.add_argument("--password", default=os.environ.get("MANTIS_PASSWORD", ""))
+                    help="e.g. https://control.internal:8443/api/v1 (must be HTTPS)")
     p.add_argument("--state-file", default=os.environ.get(
         "MANTIS_STATE_FILE", "/var/ossec/var/mantis/cursor.txt"))
     p.add_argument("--output-file", default=os.environ.get(
@@ -166,13 +172,27 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--limit", type=int, default=500)
     p.add_argument("--max-pages", type=int, default=20,
                     help="cap pages drained per run so one invocation can't run forever on a backlog")
+    p.add_argument("--insecure", action="store_true",
+                    help="allow non-HTTPS URLs (NOT recommended for production)")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
 
     if not args.api_url:
         p.error("--api-url or MANTIS_API_URL is required")
-    if not args.token and not (args.email and args.password):
-        p.error("either --token/MANTIS_TOKEN or --email+--password/MANTIS_EMAIL+MANTIS_PASSWORD is required")
+
+    if not args.api_url.startswith("https://") and not args.insecure:
+        p.error("API URL must use https:// (use --insecure to override)")
+
+    token = os.environ.get("MANTIS_TOKEN", "")
+    email = os.environ.get("MANTIS_EMAIL", "")
+    password = os.environ.get("MANTIS_PASSWORD", "")
+
+    if not token and not (email and password):
+        p.error("either MANTIS_TOKEN or both MANTIS_EMAIL+MANTIS_PASSWORD env vars are required")
+
+    args.token = token
+    args.email = email
+    args.password = password
     return args
 
 

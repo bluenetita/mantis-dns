@@ -44,6 +44,7 @@ class SiemEvent(BaseModel):
     id: str
     seq: int
     occurred_at: datetime
+    ingested_at: datetime
     tenant_id: str | None
     group_id: str
     client_ip: str | None
@@ -98,6 +99,7 @@ def build_siem_events(db: Session, rows: list[models.QueryEvent]) -> list[SiemEv
                 # otherwise treat it as host-local time via .astimezone().
                 # Fixed once here rather than in each consumer.
                 occurred_at=r.occurred_at if r.occurred_at.tzinfo else r.occurred_at.replace(tzinfo=timezone.utc),
+                ingested_at=r.ingested_at if r.ingested_at.tzinfo else r.ingested_at.replace(tzinfo=timezone.utc),
                 tenant_id=r.tenant_id,
                 group_id=r.group_id,
                 client_ip=r.client_ip,
@@ -139,6 +141,7 @@ def _to_cef(e: SiemEvent) -> str:
     """Maps an enriched SiemEvent to a CEF:0 line per design.md §20.5."""
     severity = 7 if e.decision == "block" else 3
     parts = [f"start={int(e.occurred_at.timestamp() * 1_000)}"]
+    parts.append(f"rt={int(e.ingested_at.timestamp() * 1_000)}")
     if e.client_ip:
         parts.append(f"src={_cef_ext(e.client_ip)}")
     if e.client_name:

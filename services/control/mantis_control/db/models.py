@@ -221,6 +221,7 @@ class SiemSyslog(Base):
     format: Mapped[str] = mapped_column(String(10), default="cef")  # "cef" | "json"
     facility: Mapped[int] = mapped_column(default=16)  # local0
     app_name: Mapped[str] = mapped_column(String(48), default="mantis-dns")
+    ca_cert_pem: Mapped[str | None] = mapped_column(Text, nullable=True)
     filter_decision: Mapped[str] = mapped_column(String(10), default="all")  # "all" | "block" | "allow"
     batch_size: Mapped[int] = mapped_column(default=200)
     flush_interval_s: Mapped[int] = mapped_column(default=30)

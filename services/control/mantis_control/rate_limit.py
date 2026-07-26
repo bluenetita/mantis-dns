@@ -75,6 +75,7 @@ class _SlidingWindowLimiter:
 
 _login_limiter = _SlidingWindowLimiter(max_requests=10, window_secs=60)
 _change_password_limiter = _SlidingWindowLimiter(max_requests=5, window_secs=60)
+_syslog_test_limiter = _SlidingWindowLimiter(max_requests=10, window_secs=60)
 
 
 def change_password_rate_limit(user: models.User = Depends(get_current_user)) -> None:
@@ -99,3 +100,9 @@ def login_rate_limit(request: Request) -> None:
     else:
         ip = direct_ip
     _login_limiter.check(ip)
+
+
+def syslog_test_rate_limit(user: models.User = Depends(get_current_user)) -> None:
+    """Limits /siem/syslog/{id}/test to 10 attempts/minute per user, keyed on
+    the authenticated admin's id."""
+    _syslog_test_limiter.check(user.id)

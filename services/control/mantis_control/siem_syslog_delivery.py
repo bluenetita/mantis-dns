@@ -170,6 +170,11 @@ async def _process_delivery_sink(
     a wall-clock deadline (DRAIN_DEADLINE_SECONDS)."""
     now = datetime.now(timezone.utc)
 
+    # Re-fetch with lock to ensure only one runner processes this sink concurrently.
+    sink = db.get(models.SiemSyslog, sink.id, with_for_update=True)
+    if sink is None or not sink.enabled:
+        return
+
     if sink.next_retry_at is not None:
         if sink.next_retry_at.tzinfo is None:
             sink.next_retry_at = sink.next_retry_at.replace(tzinfo=timezone.utc)
@@ -261,8 +266,28 @@ def _to_syslog_line(sink: models.SiemSyslog, e: SiemEvent) -> str:
     return header + msg
 
 
-async def _send_tcp(ip: str, port: int, lines: list[str], *, tls: bool, original_host: str) -> None:
-    ssl_ctx = ssl.create_default_context() if tls else None
+async def _send_tcp(ip: str, port: int, lines: list[str], *, tls: bool, original_host: str, ca_cert_pem: str | None = None) -> None:
+    if tls:
+        ssl_ctx = ssl.create_default_context()
+        if ca_cert_pem:
+            # Load custom CA cert: SSLContext requires a file path, so write to a
+            # temp file during the connection only.
+            import tempfile
+            import os
+            cert_path = None
+            try:
+                fd, cert_path = tempfile.mkstemp(suffix='.pem', text=True)
+                os.write(fd, ca_cert_pem.encode('utf-8'))
+                os.close(fd)
+                ssl_ctx.load_verify_locations(cert_path)
+            finally:
+                if cert_path:
+                    try:
+                        os.unlink(cert_path)
+                    except Exception:
+                        pass
+    else:
+        ssl_ctx = None
     _reader, writer = await asyncio.wait_for(
         asyncio.open_connection(
             ip, port, ssl=ssl_ctx, server_hostname=original_host if tls else None
@@ -305,7 +330,7 @@ async def _send(sink: models.SiemSyslog, events: list[SiemEvent]) -> None:
     if sink.transport == "udp":
         await _send_udp(ip, sink.port, family, lines)
     else:
-        await _send_tcp(ip, sink.port, lines, tls=(sink.transport == "tls"), original_host=original_host)
+        await _send_tcp(ip, sink.port, lines, tls=(sink.transport == "tls"), original_host=original_host, ca_cert_pem=sink.ca_cert_pem)
 
 
 async def _process_syslog(db: Session, sink: models.SiemSyslog) -> None:
