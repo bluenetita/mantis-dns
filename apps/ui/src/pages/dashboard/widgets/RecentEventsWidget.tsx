@@ -16,10 +16,20 @@
  */
 
 import { Badge, Table, Text } from "@mantine/core";
+import { useNavigate } from "react-router";
 import type { RecentEvent } from "../types";
-import { WidgetCard } from "./shared";
+import { queryLogHref, WidgetCard } from "./shared";
 
-export function RecentEventsWidget({ data, loading }: { data: RecentEvent[] | undefined; loading: boolean }) {
+export function RecentEventsWidget({
+  data,
+  loading,
+  hours,
+}: {
+  data: RecentEvent[] | undefined;
+  loading: boolean;
+  hours: number;
+}) {
+  const navigate = useNavigate();
   return (
     <WidgetCard
       title="Recent block events"
@@ -48,7 +58,11 @@ export function RecentEventsWidget({ data, loading }: { data: RecentEvent[] | un
           </Table.Thead>
           <Table.Tbody>
             {data.map((e) => (
-              <Table.Tr key={e.id}>
+              <Table.Tr
+                key={e.id}
+                onClick={() => navigate(queryLogHref(hours, { qname: e.qname, decision: e.decision }))}
+                style={{ cursor: "pointer" }}
+              >
                 <Table.Td>
                   <Text ff="monospace" size="xs" c="dimmed">
                     {new Date(e.occurred_at).toLocaleTimeString()}

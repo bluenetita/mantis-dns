@@ -465,7 +465,11 @@ export interface paths {
         };
         /**
          * Analytics Summary
-         * @description Org-wide rollup. Optional `hours` window (None = all time).
+         * @description Org-wide rollup, or a single group's when `group_id` is given. Optional
+         *     `hours` window (None = all time). `offset_hours` shifts the whole window
+         *     back in time (window becomes [now - offset_hours - hours, now -
+         *     offset_hours)) so callers can fetch the prior equal-length period for a
+         *     period-over-period comparison with a second call to this same endpoint.
          */
         get: operations["analytics_summary_api_v1_analytics_summary_get"];
         put?: never;
@@ -485,9 +489,10 @@ export interface paths {
         };
         /**
          * Analytics Timeseries
-         * @description Hourly query volume for the last `hours` hours, org-wide. Buckets with
-         *     zero queries are included (not just present-in-DB rows) so charts don't
-         *     show misleading gaps.
+         * @description Query volume for the last `hours` hours, org-wide or scoped to a single
+         *     `group_id`, bucketed at a width that scales with the window (see
+         *     `_bucket_seconds`). Buckets with zero queries are included (not just
+         *     present-in-DB rows) so charts don't show misleading gaps.
          */
         get: operations["analytics_timeseries_api_v1_analytics_timeseries_get"];
         put?: never;
@@ -541,6 +546,51 @@ export interface paths {
         };
         /** Top Categories Analytics */
         get: operations["top_categories_analytics_api_v1_analytics_top_categories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/latency": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latency Analytics
+         * @description Resolver latency percentiles for the window — nothing else in
+         *     analytics surfaces `latency_us`, so a healthy-looking block ratio can
+         *     hide a resolver that's slowly falling over.
+         */
+        get: operations["latency_analytics_api_v1_analytics_latency_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/query-mix": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Query Mix Analytics
+         * @description Breakdown by qtype, response code, and matched-rule tier (override /
+         *     category / default / stub_zone — see mantis-filter::telemetry) — the
+         *     dimensions `QueryEvent` already stores but no analytics endpoint groups
+         *     by, so an NXDOMAIN spike or an override flood is invisible today.
+         */
+        get: operations["query_mix_analytics_api_v1_analytics_query_mix_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1922,6 +1972,17 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /** LatencyStats */
+        LatencyStats: {
+            /** P50 Us */
+            p50_us: number | null;
+            /** P95 Us */
+            p95_us: number | null;
+            /** P99 Us */
+            p99_us: number | null;
+            /** Sample Count */
+            sample_count: number;
+        };
         /** Lease6Out */
         Lease6Out: {
             /** Ip Address */
@@ -1991,6 +2052,15 @@ export interface components {
             user: components["schemas"]["UserOut"];
             /** Csrf Token */
             csrf_token: string;
+        };
+        /** MixSlice */
+        MixSlice: {
+            /** Label */
+            label: string;
+            /** Count */
+            count: number;
+            /** Pct */
+            pct: number;
         };
         /** NodeCredentialCreate */
         NodeCredentialCreate: {
@@ -2385,6 +2455,15 @@ export interface components {
             cache_hit?: boolean | null;
             /** Latency Us */
             latency_us?: number | null;
+        };
+        /** QueryMix */
+        QueryMix: {
+            /** Qtype */
+            qtype: components["schemas"]["MixSlice"][];
+            /** Response Code */
+            response_code: components["schemas"]["MixSlice"][];
+            /** Matched Rule */
+            matched_rule: components["schemas"]["MixSlice"][];
         };
         /** RecentEvent */
         RecentEvent: {
@@ -4568,6 +4647,8 @@ export interface operations {
         parameters: {
             query?: {
                 hours?: number | null;
+                offset_hours?: number;
+                group_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -4599,6 +4680,7 @@ export interface operations {
         parameters: {
             query?: {
                 hours?: number;
+                group_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -4662,6 +4744,7 @@ export interface operations {
             query?: {
                 hours?: number;
                 limit?: number;
+                group_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -4694,6 +4777,7 @@ export interface operations {
             query?: {
                 hours?: number;
                 limit?: number;
+                group_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -4721,11 +4805,77 @@ export interface operations {
             };
         };
     };
+    latency_analytics_api_v1_analytics_latency_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+                group_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LatencyStats"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    query_mix_analytics_api_v1_analytics_query_mix_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+                group_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueryMix"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     recent_events_analytics_api_v1_analytics_recent_events_get: {
         parameters: {
             query?: {
                 limit?: number;
                 decision?: ("allow" | "block") | null;
+                hours?: number | null;
+                group_id?: string | null;
             };
             header?: never;
             path?: never;

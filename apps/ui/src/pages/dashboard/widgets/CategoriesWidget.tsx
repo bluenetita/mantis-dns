@@ -15,11 +15,21 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { Group, Progress, Stack, Text } from "@mantine/core";
+import { Group, Progress, Stack, Text, UnstyledButton } from "@mantine/core";
+import { useNavigate } from "react-router";
 import type { CategoryBreakdown } from "../types";
-import { WidgetCard } from "./shared";
+import { queryLogHref, WidgetCard } from "./shared";
 
-export function CategoriesWidget({ data, loading }: { data: CategoryBreakdown[] | undefined; loading: boolean }) {
+export function CategoriesWidget({
+  data,
+  loading,
+  hours,
+}: {
+  data: CategoryBreakdown[] | undefined;
+  loading: boolean;
+  hours: number;
+}) {
+  const navigate = useNavigate();
   return (
     <WidgetCard title="Blocks by category" loading={loading}>
       {!data || data.length === 0 ? (
@@ -29,7 +39,11 @@ export function CategoriesWidget({ data, loading }: { data: CategoryBreakdown[] 
       ) : (
         <Stack gap="xs">
           {data.map((c) => (
-            <div key={c.category}>
+            <UnstyledButton
+              key={c.category}
+              onClick={() => navigate(queryLogHref(hours, { category: c.category, decision: "block" }))}
+              style={{ display: "block", width: "100%" }}
+            >
               <Group justify="space-between" mb={2}>
                 <Text size="xs" tt="capitalize">
                   {c.category}
@@ -39,7 +53,7 @@ export function CategoriesWidget({ data, loading }: { data: CategoryBreakdown[] 
                 </Text>
               </Group>
               <Progress value={c.pct} color="red" size="sm" />
-            </div>
+            </UnstyledButton>
           ))}
         </Stack>
       )}

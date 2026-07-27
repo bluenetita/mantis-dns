@@ -35,6 +35,7 @@ import {
 } from "@mantine/core";
 import { IconRefresh } from "@tabler/icons-react";
 import { useState } from "react";
+import { useNavigate } from "react-router";
 import { useAnalyticsByGroup, useAnalyticsSummary, useAnalyticsTimeseries } from "../api/hooks";
 import { KpiCard } from "../components/KpiCard";
 import { formatError } from "../api/errors";
@@ -52,6 +53,7 @@ const TIME_RANGES = [
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export function AnalyticsPage() {
+  const navigate = useNavigate();
   const [hours, setHours] = useState<number>(24);
 
   const { data, isLoading, error, refetch: refetchSummary } = useAnalyticsSummary(hours);
@@ -256,7 +258,13 @@ export function AnalyticsPage() {
               {topDomains.map((d, i) => {
                 const pct = totalBlocked > 0 ? (d.count / totalBlocked) * 100 : 0;
                 return (
-                  <Table.Tr key={d.qname}>
+                  <Table.Tr
+                    key={d.qname}
+                    onClick={() =>
+                      navigate(`/query-log?hours=${hours}&qname=${encodeURIComponent(d.qname)}&decision=${d.decision}`)
+                    }
+                    style={{ cursor: "pointer" }}
+                  >
                     <Table.Td>
                       <Text size="sm" c="dimmed">{i + 1}</Text>
                     </Table.Td>

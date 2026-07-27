@@ -15,15 +15,35 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-import { Group, Progress, Table, Text } from "@mantine/core";
+import { Badge, Group, Progress, Table, Text } from "@mantine/core";
 import type { GroupBreakdown } from "../types";
 import { WidgetCard } from "./shared";
 
-export function GroupBreakdownWidget({ data, loading }: { data: GroupBreakdown[] | undefined; loading: boolean }) {
+export function GroupBreakdownWidget({
+  data,
+  loading,
+  scopedGroupId,
+  onScope,
+}: {
+  data: GroupBreakdown[] | undefined;
+  loading: boolean;
+  scopedGroupId?: string | null;
+  onScope?: (groupId: string | null) => void;
+}) {
   const sorted = [...(data ?? [])].sort((a, b) => b.total - a.total);
 
   return (
-    <WidgetCard title="Per-group breakdown" loading={loading}>
+    <WidgetCard
+      title="Per-group breakdown"
+      loading={loading}
+      rightSection={
+        scopedGroupId ? (
+          <Badge size="xs" variant="light" color="blue" style={{ cursor: "pointer" }} onClick={() => onScope?.(null)}>
+            scoped — click to clear
+          </Badge>
+        ) : undefined
+      }
+    >
       {sorted.length === 0 ? (
         <Text c="dimmed" size="sm">
           No group telemetry yet.
@@ -41,7 +61,12 @@ export function GroupBreakdownWidget({ data, loading }: { data: GroupBreakdown[]
           </Table.Thead>
           <Table.Tbody>
             {sorted.map((g) => (
-              <Table.Tr key={g.group_id}>
+              <Table.Tr
+                key={g.group_id}
+                onClick={() => onScope?.(g.group_id === scopedGroupId ? null : g.group_id)}
+                bg={g.group_id === scopedGroupId ? "var(--mantine-color-blue-light)" : undefined}
+                style={{ cursor: onScope ? "pointer" : undefined }}
+              >
                 <Table.Td>
                   <Text size="xs" c="dimmed">
                     {g.tenant_name}

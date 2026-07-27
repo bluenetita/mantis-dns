@@ -24,6 +24,8 @@ export const WIDGET_DEFS = [
   { id: "group-breakdown", label: "Group breakdown",       span: { base: 12 } },
   { id: "feed-health",     label: "Feed health",           span: { base: 12, md: 6 } },
   { id: "recent-events",   label: "Recent block events",   span: { base: 12 } },
+  { id: "latency",         label: "Resolver latency",       span: { base: 12, md: 6 } },
+  { id: "query-mix",       label: "Query mix",              span: { base: 12, md: 6 } },
 ] as const;
 
 export type WidgetId = typeof WIDGET_DEFS[number]["id"];

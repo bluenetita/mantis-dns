@@ -16,16 +16,20 @@
  */
 
 import { Table, Text } from "@mantine/core";
+import { useNavigate } from "react-router";
 import type { DashboardSummary } from "../types";
-import { WidgetCard } from "./shared";
+import { queryLogHref, WidgetCard } from "./shared";
 
 export function TopDomainsWidget({
   data,
   loading,
+  hours,
 }: {
   data: DashboardSummary["top_blocked_domains"] | undefined;
   loading: boolean;
+  hours: number;
 }) {
+  const navigate = useNavigate();
   return (
     <WidgetCard title="Top blocked domains" loading={loading}>
       {!data || data.length === 0 ? (
@@ -43,7 +47,11 @@ export function TopDomainsWidget({
           </Table.Thead>
           <Table.Tbody>
             {data.map((d, i) => (
-              <Table.Tr key={d.qname}>
+              <Table.Tr
+                key={d.qname}
+                onClick={() => navigate(queryLogHref(hours, { qname: d.qname, decision: d.decision }))}
+                style={{ cursor: "pointer" }}
+              >
                 <Table.Td>
                   <Text c="dimmed" size="xs">
                     {i + 1}

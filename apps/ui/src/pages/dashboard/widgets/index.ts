@@ -24,3 +24,5 @@ export { TopClientsWidget } from "./TopClientsWidget";
 export { GroupBreakdownWidget } from "./GroupBreakdownWidget";
 export { FeedHealthWidget } from "./FeedHealthWidget";
 export { RecentEventsWidget } from "./RecentEventsWidget";
+export { LatencyWidget } from "./LatencyWidget";
+export { QueryMixWidget } from "./QueryMixWidget";

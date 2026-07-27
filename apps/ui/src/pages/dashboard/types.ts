@@ -74,3 +74,18 @@ export type RecentEvent = {
 };
 
 export type FeedItem = { id: string; provider: string; category_id: string; enabled: boolean; last_domain_count: number | null };
+
+export type LatencyStats = {
+  p50_us: number | null;
+  p95_us: number | null;
+  p99_us: number | null;
+  sample_count: number;
+};
+
+export type MixSlice = { label: string; count: number; pct: number };
+
+export type QueryMix = {
+  qtype: MixSlice[];
+  response_code: MixSlice[];
+  matched_rule: MixSlice[];
+};

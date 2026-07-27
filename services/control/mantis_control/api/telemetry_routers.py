@@ -125,6 +125,25 @@ class TimeseriesPoint(BaseModel):
     allowed: int
 
 
+class LatencyStats(BaseModel):
+    p50_us: float | None
+    p95_us: float | None
+    p99_us: float | None
+    sample_count: int
+
+
+class MixSlice(BaseModel):
+    label: str
+    count: int
+    pct: float
+
+
+class QueryMix(BaseModel):
+    qtype: list[MixSlice]
+    response_code: list[MixSlice]
+    matched_rule: list[MixSlice]
+
+
 class GroupBreakdown(BaseModel):
     group_id: str
     group_name: str
@@ -331,15 +350,27 @@ def top_domains(
 @router.get("/analytics/summary", response_model=AnalyticsSummary)
 def analytics_summary(
     hours: int | None = Query(None, ge=1, le=8760),
+    offset_hours: int = Query(0, ge=0, le=8760),
+    group_id: str | None = None,
     db: Session = Depends(get_db),
     _user: models.User = Depends(get_current_user),
 ) -> AnalyticsSummary:
-    """Org-wide rollup. Optional `hours` window (None = all time)."""
+    """Org-wide rollup, or a single group's when `group_id` is given. Optional
+    `hours` window (None = all time). `offset_hours` shifts the whole window
+    back in time (window becomes [now - offset_hours - hours, now -
+    offset_hours)) so callers can fetch the prior equal-length period for a
+    period-over-period comparison with a second call to this same endpoint."""
     scope = user_tenant_filter(_user)
     base_filters: list[Any] = []
     if hours:
-        since = datetime.now(timezone.utc) - timedelta(hours=hours)
+        now = datetime.now(timezone.utc)
+        until = now - timedelta(hours=offset_hours)
+        since = until - timedelta(hours=hours)
         base_filters.append(models.QueryEvent.occurred_at >= since)
+        if offset_hours:
+            base_filters.append(models.QueryEvent.occurred_at < until)
+    if group_id:
+        base_filters.append(models.QueryEvent.group_id == group_id)
     if scope is not None:
         base_filters.append(models.QueryEvent.tenant_id == scope)
 
@@ -396,18 +427,39 @@ def analytics_summary(
     )
 
 
+def _bucket_seconds(hours: int) -> int:
+    """Bucket width scales with the requested window so a 1h/6h view isn't
+    stuck with 1 hour-wide (or even single) buckets — a fixed hourly bucket
+    made the 1h and 6h dashboard ranges show essentially one flat bar."""
+    if hours <= 2:
+        return 60  # 1 minute
+    if hours <= 12:
+        return 300  # 5 minutes
+    if hours <= 72:
+        return 3600  # 1 hour
+    return 86400  # 1 day
+
+
 @router.get("/analytics/timeseries", response_model=list[TimeseriesPoint])
 def analytics_timeseries(
-    hours: int = Query(24, ge=1, le=8760), db: Session = Depends(get_db), _user: models.User = Depends(get_current_user)
+    hours: int = Query(24, ge=1, le=8760),
+    group_id: str | None = None,
+    db: Session = Depends(get_db),
+    _user: models.User = Depends(get_current_user),
 ) -> list[TimeseriesPoint]:
-    """Hourly query volume for the last `hours` hours, org-wide. Buckets with
-    zero queries are included (not just present-in-DB rows) so charts don't
-    show misleading gaps."""
+    """Query volume for the last `hours` hours, org-wide or scoped to a single
+    `group_id`, bucketed at a width that scales with the window (see
+    `_bucket_seconds`). Buckets with zero queries are included (not just
+    present-in-DB rows) so charts don't show misleading gaps."""
     scope = user_tenant_filter(_user)
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
-    bucket = func.date_trunc("hour", models.QueryEvent.occurred_at)
+    bucket_secs = _bucket_seconds(hours)
+    epoch = func.extract("epoch", models.QueryEvent.occurred_at)
+    bucket = func.to_timestamp(func.floor(epoch / bucket_secs) * bucket_secs)
 
     ts_filters: list[Any] = [models.QueryEvent.occurred_at >= since]
+    if group_id:
+        ts_filters.append(models.QueryEvent.group_id == group_id)
     if scope is not None:
         ts_filters.append(models.QueryEvent.tenant_id == scope)
 
@@ -423,10 +475,12 @@ def analytics_timeseries(
         by_bucket.setdefault(b, {"block": 0, "allow": 0})
         by_bucket[b][r.decision] = r.count  # type: ignore[assignment]
 
-    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+    now_bucket_epoch = (now_epoch // bucket_secs) * bucket_secs
+    num_buckets = (hours * 3600) // bucket_secs
     points: list[TimeseriesPoint] = []
-    for i in range(hours - 1, -1, -1):
-        b = now - timedelta(hours=i)
+    for i in range(num_buckets - 1, -1, -1):
+        b = datetime.fromtimestamp(now_bucket_epoch - i * bucket_secs, tz=timezone.utc)
         counts = by_bucket.get(b, {"block": 0, "allow": 0})
         points.append(
             TimeseriesPoint(
@@ -492,12 +546,15 @@ def analytics_by_group(
 def top_clients_analytics(
     hours: int = Query(24, ge=1, le=8760),
     limit: int = Query(10, ge=1, le=50),
+    group_id: str | None = None,
     db: Session = Depends(get_db),
     _user: models.User = Depends(get_current_user),
 ) -> list[TopClient]:
     scope = user_tenant_filter(_user)
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
     tc_filters: list[Any] = [models.QueryEvent.client_ip.isnot(None), models.QueryEvent.occurred_at >= since]
+    if group_id:
+        tc_filters.append(models.QueryEvent.group_id == group_id)
     if scope is not None:
         tc_filters.append(models.QueryEvent.tenant_id == scope)
     rows = db.execute(
@@ -551,6 +608,7 @@ def top_clients_analytics(
 def top_categories_analytics(
     hours: int = Query(24, ge=1, le=8760),
     limit: int = Query(10, ge=1, le=50),
+    group_id: str | None = None,
     db: Session = Depends(get_db),
     _user: models.User = Depends(get_current_user),
 ) -> list[CategoryBreakdown]:
@@ -561,6 +619,8 @@ def top_categories_analytics(
         models.QueryEvent.matched_category.isnot(None),
         models.QueryEvent.occurred_at >= since,
     ]
+    if group_id:
+        cat_filters.append(models.QueryEvent.group_id == group_id)
     if scope is not None:
         cat_filters.append(models.QueryEvent.tenant_id == scope)
     rows = db.execute(
@@ -584,10 +644,89 @@ def top_categories_analytics(
     ]
 
 
+@router.get("/analytics/latency", response_model=LatencyStats)
+def latency_analytics(
+    hours: int = Query(24, ge=1, le=8760),
+    group_id: str | None = None,
+    db: Session = Depends(get_db),
+    _user: models.User = Depends(get_current_user),
+) -> LatencyStats:
+    """Resolver latency percentiles for the window — nothing else in
+    analytics surfaces `latency_us`, so a healthy-looking block ratio can
+    hide a resolver that's slowly falling over."""
+    scope = user_tenant_filter(_user)
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    lat_filters: list[Any] = [
+        models.QueryEvent.occurred_at >= since,
+        models.QueryEvent.latency_us.isnot(None),
+    ]
+    if group_id:
+        lat_filters.append(models.QueryEvent.group_id == group_id)
+    if scope is not None:
+        lat_filters.append(models.QueryEvent.tenant_id == scope)
+
+    row = db.execute(
+        select(
+            func.percentile_cont(0.5).within_group(models.QueryEvent.latency_us),
+            func.percentile_cont(0.95).within_group(models.QueryEvent.latency_us),
+            func.percentile_cont(0.99).within_group(models.QueryEvent.latency_us),
+            func.count(),
+        ).where(*lat_filters)
+    ).one()
+    p50, p95, p99, count = row
+    return LatencyStats(p50_us=p50, p95_us=p95, p99_us=p99, sample_count=count or 0)
+
+
+@router.get("/analytics/query-mix", response_model=QueryMix)
+def query_mix_analytics(
+    hours: int = Query(24, ge=1, le=8760),
+    group_id: str | None = None,
+    db: Session = Depends(get_db),
+    _user: models.User = Depends(get_current_user),
+) -> QueryMix:
+    """Breakdown by qtype, response code, and matched-rule tier (override /
+    category / default / stub_zone — see mantis-filter::telemetry) — the
+    dimensions `QueryEvent` already stores but no analytics endpoint groups
+    by, so an NXDOMAIN spike or an override flood is invisible today."""
+    scope = user_tenant_filter(_user)
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    base_filters: list[Any] = [models.QueryEvent.occurred_at >= since]
+    if group_id:
+        base_filters.append(models.QueryEvent.group_id == group_id)
+    if scope is not None:
+        base_filters.append(models.QueryEvent.tenant_id == scope)
+
+    def _slices(column: Any, extra_filters: list[Any]) -> list[MixSlice]:
+        rows = db.execute(
+            select(column.label("label"), func.count().label("count"))
+            .where(*base_filters, *extra_filters)
+            .group_by(column)
+            .order_by(func.count().desc())
+            .limit(10)
+        ).all()
+        total = sum(r.count for r in rows)  # type: ignore[misc]
+        return [
+            MixSlice(
+                label=r.label,
+                count=r.count,  # type: ignore[arg-type]
+                pct=round((r.count / total) * 100, 1) if total else 0.0,  # type: ignore[operator]
+            )
+            for r in rows
+        ]
+
+    return QueryMix(
+        qtype=_slices(models.QueryEvent.qtype, [models.QueryEvent.qtype.isnot(None)]),
+        response_code=_slices(models.QueryEvent.response_code, [models.QueryEvent.response_code.isnot(None)]),
+        matched_rule=_slices(models.QueryEvent.matched_rule, [models.QueryEvent.matched_rule.isnot(None)]),
+    )
+
+
 @router.get("/analytics/recent-events", response_model=list[RecentEvent])
 def recent_events_analytics(
     limit: int = Query(25, ge=1, le=100),
     decision: Literal["allow", "block"] | None = None,
+    hours: int | None = Query(None, ge=1, le=8760),
+    group_id: str | None = None,
     db: Session = Depends(get_db),
     _user: models.User = Depends(get_current_user),
 ) -> list[RecentEvent]:
@@ -595,6 +734,11 @@ def recent_events_analytics(
     q = select(models.QueryEvent)
     if decision:
         q = q.where(models.QueryEvent.decision == decision)
+    if hours:
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
+        q = q.where(models.QueryEvent.occurred_at >= since)
+    if group_id:
+        q = q.where(models.QueryEvent.group_id == group_id)
     if scope is not None:
         q = q.where(models.QueryEvent.tenant_id == scope)
     q = q.order_by(models.QueryEvent.occurred_at.desc()).limit(limit)

@@ -16,11 +16,21 @@
  */
 
 import { DonutChart } from "@mantine/charts";
-import { Center, Group, Stack, Text } from "@mantine/core";
+import { Center, Group, Stack, Text, UnstyledButton } from "@mantine/core";
+import { useNavigate } from "react-router";
 import type { DashboardSummary } from "../types";
-import { WidgetCard } from "./shared";
+import { queryLogHref, WidgetCard } from "./shared";
 
-export function DecisionWidget({ summary, loading }: { summary: DashboardSummary | undefined; loading: boolean }) {
+export function DecisionWidget({
+  summary,
+  loading,
+  hours,
+}: {
+  summary: DashboardSummary | undefined;
+  loading: boolean;
+  hours: number;
+}) {
+  const navigate = useNavigate();
   const total = summary?.total_queries ?? 0;
   const blocked = summary?.blocked_queries ?? 0;
   const allowed = summary?.allowed_queries ?? 0;
@@ -47,24 +57,28 @@ export function DecisionWidget({ summary, loading }: { summary: DashboardSummary
       </Center>
       {total > 0 && (
         <Stack gap={4} mt="sm">
-          <Group justify="space-between">
-            <Group gap="xs">
-              <div style={{ width: 10, height: 10, borderRadius: 2, background: "var(--mantine-color-blue-5)" }} />
-              <Text size="xs">Allowed</Text>
+          <UnstyledButton onClick={() => navigate(queryLogHref(hours, { decision: "allow" }))}>
+            <Group justify="space-between">
+              <Group gap="xs">
+                <div style={{ width: 10, height: 10, borderRadius: 2, background: "var(--mantine-color-blue-5)" }} />
+                <Text size="xs">Allowed</Text>
+              </Group>
+              <Text size="xs" c="dimmed">
+                {allowed.toLocaleString()}
+              </Text>
             </Group>
-            <Text size="xs" c="dimmed">
-              {allowed.toLocaleString()}
-            </Text>
-          </Group>
-          <Group justify="space-between">
-            <Group gap="xs">
-              <div style={{ width: 10, height: 10, borderRadius: 2, background: "var(--mantine-color-red-5)" }} />
-              <Text size="xs">Blocked</Text>
+          </UnstyledButton>
+          <UnstyledButton onClick={() => navigate(queryLogHref(hours, { decision: "block" }))}>
+            <Group justify="space-between">
+              <Group gap="xs">
+                <div style={{ width: 10, height: 10, borderRadius: 2, background: "var(--mantine-color-red-5)" }} />
+                <Text size="xs">Blocked</Text>
+              </Group>
+              <Text size="xs" c="dimmed">
+                {blocked.toLocaleString()}
+              </Text>
             </Group>
-            <Text size="xs" c="dimmed">
-              {blocked.toLocaleString()}
-            </Text>
-          </Group>
+          </UnstyledButton>
         </Stack>
       )}
     </WidgetCard>

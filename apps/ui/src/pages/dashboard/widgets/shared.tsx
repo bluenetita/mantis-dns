@@ -20,6 +20,15 @@ import type React from "react";
 
 export { KpiCard } from "../../../components/KpiCard";
 
+/** Builds a /query-log href carrying the given filters plus the widget's own time window, so clicking a dashboard row drills into the matching query log rows. */
+export function queryLogHref(hours: number, params: Record<string, string | undefined>): string {
+  const search = new URLSearchParams({ hours: String(hours) });
+  for (const [k, v] of Object.entries(params)) {
+    if (v) search.set(k, v);
+  }
+  return `/query-log?${search.toString()}`;
+}
+
 export function WidgetCard({
   title,
   rightSection,

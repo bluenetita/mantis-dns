@@ -16,10 +16,12 @@
  */
 
 import { Badge, Table, Text } from "@mantine/core";
+import { useNavigate } from "react-router";
 import type { TopClient } from "../types";
-import { WidgetCard } from "./shared";
+import { queryLogHref, WidgetCard } from "./shared";
 
-export function TopClientsWidget({ data, loading }: { data: TopClient[] | undefined; loading: boolean }) {
+export function TopClientsWidget({ data, loading, hours }: { data: TopClient[] | undefined; loading: boolean; hours: number }) {
+  const navigate = useNavigate();
   return (
     <WidgetCard title="Top clients by query volume" loading={loading}>
       {!data || data.length === 0 ? (
@@ -39,7 +41,11 @@ export function TopClientsWidget({ data, loading }: { data: TopClient[] | undefi
           </Table.Thead>
           <Table.Tbody>
             {data.map((c) => (
-              <Table.Tr key={c.client_ip}>
+              <Table.Tr
+                key={c.client_ip}
+                onClick={() => navigate(queryLogHref(hours, { client_ip: c.client_ip }))}
+                style={{ cursor: "pointer" }}
+              >
                 <Table.Td>
                   <Text ff="monospace" size="xs">
                     {c.client_ip}
