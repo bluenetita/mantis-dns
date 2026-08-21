@@ -73,6 +73,7 @@ struct RouteEntry {
     tenant_id: String,
     store: Arc<BundleStore>,
     zones: Arc<ZoneStore>,
+    cache: Arc<DnsCache>,
     upstream: Arc<TenantUpstreamRuntime>,
 }
 
@@ -129,7 +130,7 @@ impl TenantRouter {
     pub fn purge_cache(&self) {
         self.fallback_upstream.cache.purge_expired();
         for route in self.routes.load().iter() {
-            route.upstream.cache.purge_expired();
+            route.cache.purge_expired();
         }
     }
 }
@@ -158,10 +159,10 @@ async fn fetch_routing_table(control_url: &str) -> Result<Vec<RoutingTableEntry>
 }
 
 /// Refreshes the routing table and, for every routed group, fetches its
-/// latest policy and upstream bundles. Existing stores are reused across
-/// refreshes so version monotonicity survives a routing-table reload. Groups
-/// in one tenant share that tenant's upstream store, health state, forwarder,
-/// and DNS cache; different tenants never do.
+/// latest policy and upstream bundles. Existing stores and per-group caches
+/// are reused across refreshes so version monotonicity and normal DNS cache
+/// lifetime survive a routing-table reload. Groups in one tenant share the
+/// upstream store/health/forwarder, but never cached answers.
 pub async fn refresh_routes(router: &TenantRouter, control_url: &str) -> Result<()> {
     if let Err(e) = refresh_public_key(&router.public_key, control_url).await {
         warn!("public key refresh failed (keeping last known good key): {e}");
@@ -190,6 +191,11 @@ pub async fn refresh_routes(router: &TenantRouter, control_url: &str) -> Result<
             .find(|r| r.group_id == entry.group_id)
             .map(|r| r.zones.clone())
             .unwrap_or_else(|| Arc::new(ZoneStore::empty()));
+        let cache = existing
+            .iter()
+            .find(|r| r.group_id == entry.group_id)
+            .map(|r| r.cache.clone())
+            .unwrap_or_else(|| Arc::new(DnsCache::new(10_000)));
         let upstream = existing
             .iter()
             .find(|r| r.tenant_id == entry.tenant_id)
@@ -207,6 +213,7 @@ pub async fn refresh_routes(router: &TenantRouter, control_url: &str) -> Result<
             tenant_id: entry.tenant_id.clone(),
             store,
             zones,
+            cache,
             upstream,
         });
     }
@@ -303,6 +310,7 @@ pub mod test_support {
             tenant_id,
             store,
             zones: Arc::new(ZoneStore::empty()),
+            cache: Arc::new(DnsCache::new(10_000)),
             upstream: router.fallback_upstream.clone(),
         });
         router.routes.store(Arc::new(routes));
@@ -334,6 +342,7 @@ pub mod test_support {
             tenant_id,
             store,
             zones: Arc::new(ZoneStore::empty()),
+            cache: Arc::new(DnsCache::new(10_000)),
             upstream,
         });
         router.routes.store(Arc::new(routes));
@@ -449,7 +458,10 @@ pub async fn run_router_tcp_server(listener: TcpListener, router: Arc<TenantRout
                         bundle.as_deref(),
                         &zones,
                         peer.ip(),
-                        upstream.cache.as_ref(),
+                        matched
+                            .as_ref()
+                            .map(|route| route.cache.as_ref())
+                            .unwrap_or(upstream.cache.as_ref()),
                         upstream.forwarder.as_ref(),
                         &router.telemetry,
                         unmatched_route,
@@ -538,7 +550,10 @@ pub async fn run_router_udp_server(socket: UdpSocket, router: Arc<TenantRouter>)
                 bundle.as_deref(),
                 &zones,
                 peer.ip(),
-                upstream.cache.as_ref(),
+                matched
+                    .as_ref()
+                    .map(|route| route.cache.as_ref())
+                    .unwrap_or(upstream.cache.as_ref()),
                 upstream.forwarder.as_ref(),
                 &router.telemetry,
                 unmatched_route,

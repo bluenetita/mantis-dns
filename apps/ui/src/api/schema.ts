@@ -2748,27 +2748,11 @@ export interface components {
              */
             doh_path: string;
             /**
-             * Doh Method
-             * @default post
-             * @enum {string}
-             */
-            doh_method: "get" | "post";
-            /**
              * Dnssec Validation
              * @default opportunistic
              * @enum {string}
              */
             dnssec_validation: "strict" | "opportunistic" | "disabled";
-            /**
-             * Qname Minimization
-             * @default true
-             */
-            qname_minimization: boolean;
-            /**
-             * Edns Client Subnet
-             * @default false
-             */
-            edns_client_subnet: boolean;
             /**
              * Timeout Ms
              * @default 5000
@@ -2779,11 +2763,6 @@ export interface components {
              * @default 2
              */
             max_retries: number;
-            /**
-             * Connect Timeout Ms
-             * @default 3000
-             */
-            connect_timeout_ms: number;
             /**
              * Tags
              * @default []
@@ -2813,20 +2792,12 @@ export interface components {
             tls_pin_sha256: string[];
             /** Doh Path */
             doh_path: string;
-            /** Doh Method */
-            doh_method: string;
             /** Dnssec Validation */
             dnssec_validation: string;
-            /** Qname Minimization */
-            qname_minimization: boolean;
-            /** Edns Client Subnet */
-            edns_client_subnet: boolean;
             /** Timeout Ms */
             timeout_ms: number;
             /** Max Retries */
             max_retries: number;
-            /** Connect Timeout Ms */
-            connect_timeout_ms: number;
             /** Tags */
             tags: string[];
             /** Enabled */
@@ -2858,20 +2829,12 @@ export interface components {
             tls_pin_sha256?: string[] | null;
             /** Doh Path */
             doh_path?: string | null;
-            /** Doh Method */
-            doh_method?: ("get" | "post") | null;
             /** Dnssec Validation */
             dnssec_validation?: ("strict" | "opportunistic" | "disabled") | null;
-            /** Qname Minimization */
-            qname_minimization?: boolean | null;
-            /** Edns Client Subnet */
-            edns_client_subnet?: boolean | null;
             /** Timeout Ms */
             timeout_ms?: number | null;
             /** Max Retries */
             max_retries?: number | null;
-            /** Connect Timeout Ms */
-            connect_timeout_ms?: number | null;
             /** Tags */
             tags?: string[] | null;
             /** Enabled */
@@ -3475,17 +3438,6 @@ export interface components {
              */
             dnssec_validation: "strict" | "opportunistic" | "disabled";
             /**
-             * Qname Minimization
-             * @default true
-             */
-            qname_minimization: boolean;
-            /**
-             * Blocked Response Type
-             * @default nxdomain
-             * @enum {string}
-             */
-            blocked_response_type: "nxdomain" | "refused" | "zero_ip";
-            /**
              * Min Ttl S
              * @default 0
              */
@@ -3509,10 +3461,6 @@ export interface components {
             require_encrypted: boolean;
             /** Dnssec Validation */
             dnssec_validation: string;
-            /** Qname Minimization */
-            qname_minimization: boolean;
-            /** Blocked Response Type */
-            blocked_response_type: string;
             /** Min Ttl S */
             min_ttl_s: number;
             /** Max Ttl S */

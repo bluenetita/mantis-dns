@@ -935,15 +935,12 @@ UpstreamResolver {
     tls_pin_sha256      string[] | null // hex SHA-256 of SubjectPublicKeyInfo;
                                         // null = trust system CA bundle
     doh_path            string          // URL path for DoH; default "/dns-query"
-    doh_method          "get" | "post"  // RFC 8484; default "post"
+    // DoH uses RFC 8484 POST; the filter's Hickory transport does not expose GET.
     dnssec_validation   "strict"        // reject unsigned / bad chains
                       | "opportunistic" // validate if AD bit set; pass through otherwise
                       | "disabled"      // pass through, do not validate
-    qname_minimization  bool            // RFC 7816; default true
-    edns_client_subnet  bool            // RFC 7871; default false (privacy)
     timeout_ms          int             // per-query timeout; default 5000
     max_retries         int             // attempts before marking failed; default 2
-    connect_timeout_ms  int             // TCP/TLS handshake timeout; default 3000
     tags                string[]        // "public", "internal", "threat-intel", "doh"
     enabled             bool
     created_at          timestamp
@@ -954,7 +951,7 @@ UpstreamResolver {
 Key invariants:
 - `do53` resolvers must not be used as the sole resolver for a tenant marked `require_encrypted_upstream = true`.
 - `tls_pin_sha256` pins are evaluated against the **leaf certificate** SPKI, not the CA. Pinning against the CA is also supported if a single CA value is provided.
-- `doh_path` supports query templates: `{?dns}` will be replaced with the base64url-encoded query for GET requests (RFC 8484 §4.1).
+- `doh_path` is the RFC 8484 POST endpoint path.
 
 #### UpstreamPool
 
@@ -1032,8 +1029,6 @@ UpstreamTenantPolicy {
     tenant_id               UUID
     require_encrypted       bool    // reject do53 resolvers in any pool used by this tenant
     dnssec_validation       "strict" | "opportunistic" | "disabled"  // tenant default
-    qname_minimization      bool    // tenant default; overrides resolver setting
-    blocked_response_type   "nxdomain" | "refused" | "zero_ip"  // how to answer blocked queries
     min_ttl_s               int     // clamp downstream TTL; default 0 (honour reply)
     max_ttl_s               int     // clamp downstream TTL; default 86400
     negative_ttl_s          int     // TTL for synthesized NXDOMAIN/REFUSED; default 300

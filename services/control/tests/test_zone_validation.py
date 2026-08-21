@@ -25,6 +25,26 @@ def test_record_in_accepts_normal_values():
     assert r.data == "10.0.0.1"
 
 
+@pytest.mark.parametrize(
+    ("record_type", "data"),
+    [
+        ("A", "not-an-ip"),
+        ("AAAA", "10.0.0.1"),
+        ("CNAME", "bad target"),
+        ("MX", "bad target"),
+        ("SRV", "weight port target"),
+    ],
+)
+def test_record_in_rejects_invalid_rdata(record_type: str, data: str):
+    with pytest.raises(ValidationError):
+        RecordIn(name="www", record_type=record_type, data=data)
+
+
+def test_record_in_accepts_service_and_wildcard_owners():
+    RecordIn(name="_ldap._tcp", record_type="SRV", data="0 389 dc.example.")
+    RecordIn(name="*.apps", record_type="CNAME", data="target.example.")
+
+
 def test_record_in_rejects_leading_dollar_in_name():
     with pytest.raises(ValidationError):
         RecordIn(name="$INCLUDE /etc/passwd", record_type="TXT", data="x")

@@ -111,7 +111,11 @@ impl DnsCache {
                 CacheLookup::Records { records, authenticated: *authenticated }
             }
             CacheEntryKind::Negative { kind, soa } => {
-                CacheLookup::Negative { kind: *kind, soa: soa.clone() }
+                let mut soa = soa.clone();
+                if let Some(record) = &mut soa {
+                    record.set_ttl(remaining_ttl);
+                }
+                CacheLookup::Negative { kind: *kind, soa }
             }
         })
     }
@@ -241,6 +245,24 @@ mod tests {
         match cache.get("doesnotexist.example", u16::from(RecordType::A)) {
             Some(CacheLookup::Negative { soa: Some(_), .. }) => {}
             _ => panic!("expected the cached SOA to survive the round trip (A4)"),
+        }
+    }
+
+    #[test]
+    fn negative_cache_hit_reports_remaining_soa_ttl() {
+        let cache = DnsCache::new(10);
+        let soa = a_record("example", Ipv4Addr::LOCALHOST);
+        cache.put_negative(
+            "missing.example".into(),
+            u16::from(RecordType::A),
+            NegativeKind::NxDomain,
+            Some(soa),
+            Duration::from_secs(2),
+        );
+        std::thread::sleep(Duration::from_millis(1100));
+        match cache.get("missing.example", u16::from(RecordType::A)) {
+            Some(CacheLookup::Negative { soa: Some(soa), .. }) => assert!(soa.ttl() <= 1),
+            _ => panic!("expected cached NXDOMAIN with SOA"),
         }
     }
 

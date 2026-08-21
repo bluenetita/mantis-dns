@@ -108,7 +108,9 @@ impl HealthStore {
     }
 
     /// Returns resolver IDs of healthy members ordered by the pool's member
-    /// list ordering. Falls back to all members if none are healthy (fail-open).
+    /// list ordering. Unknown members remain optimistically healthy, but once
+    /// every member is known unhealthy the caller must use its configured
+    /// fallback instead of retrying the same dead members.
     pub fn healthy_members(&self, pool_id: &str, members: &[PoolMember]) -> Vec<String> {
         let snap = self.inner.load();
         let healthy: Vec<String> = members
@@ -120,11 +122,7 @@ impl HealthStore {
             })
             .map(|m| m.resolver_id.clone())
             .collect();
-        if healthy.is_empty() {
-            members.iter().map(|m| m.resolver_id.clone()).collect()
-        } else {
-            healthy
-        }
+        healthy
     }
 }
 
@@ -314,5 +312,26 @@ pub async fn run_health_monitor(
         }
 
         tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_known_unhealthy_members_stay_unavailable() {
+        let store = HealthStore::empty();
+        let members = vec![PoolMember {
+            resolver_id: "r1".into(),
+            weight: 1,
+            priority: 1,
+        }];
+        store.update(
+            "p1",
+            "r1",
+            MemberHealthSnapshot { healthy: false, ..Default::default() },
+        );
+        assert!(store.healthy_members("p1", &members).is_empty());
     }
 }

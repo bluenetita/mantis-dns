@@ -62,9 +62,11 @@ pub struct ResolverConfig_ {
     pub port: u16,
     pub tls_hostname: Option<String>,
     pub doh_path: String,
-    pub doh_method: String,
+    #[serde(default = "default_dnssec_validation")]
+    pub dnssec_validation: String,
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
     pub timeout_ms: u64,
-    pub connect_timeout_ms: u64,
     /// SHA-256 digests of certificates this resolver's TLS handshake must
     /// present (see `tls_pin::PinnedCertVerifier`). `#[serde(default)]`
     /// because older control-plane builds — and the fallback resolver
@@ -103,19 +105,34 @@ pub struct PoolConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RouteConfig {
+    #[serde(default)]
+    pub group_id: Option<String>,
     pub match_type: String, // domain_suffix|domain_exact|qtype|category|default
     pub match_value: Option<String>,
     pub pool_id: String,
+    #[serde(default)]
+    pub nxdomain_ttl_override: Option<u32>,
+    #[serde(default)]
+    pub require_dnssec: Option<bool>,
     pub priority: i32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TenantPolicy {
+    #[serde(default)]
+    pub require_encrypted: bool,
     pub dnssec_validation: String, // "strict"|"opportunistic"|"disabled"
-    pub blocked_response_type: String,
     pub min_ttl_s: u32,
     pub max_ttl_s: u32,
     pub negative_ttl_s: u32,
+}
+
+fn default_max_retries() -> u32 {
+    2
+}
+
+fn default_dnssec_validation() -> String {
+    "opportunistic".into()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -216,16 +233,30 @@ fn normalize(domain: &str) -> String {
 ///
 /// `categories` is the set of policy-bundle category IDs the qname matched
 /// (computed by `matched_categories()` in lib.rs before calling the forwarder).
+#[cfg(test)]
 pub(crate) fn evaluate_routes<'a>(
     routes: &'a [RouteConfig],
     qname: &str,
     qtype: RecordType,
     categories: &[String],
 ) -> Option<&'a str> {
+    select_route(routes, qname, qtype, categories, None).map(|route| route.pool_id.as_str())
+}
+
+fn select_route<'a>(
+    routes: &'a [RouteConfig],
+    qname: &str,
+    qtype: RecordType,
+    categories: &[String],
+    group_id: Option<&str>,
+) -> Option<&'a RouteConfig> {
     let normalized = normalize(qname);
     // hickory Debug output for RecordType is the canonical uppercase string ("A", "AAAA", …).
     let qtype_str = format!("{qtype:?}").to_uppercase();
     for route in routes {
+        if route.group_id.as_deref().is_some_and(|scope| Some(scope) != group_id) {
+            continue;
+        }
         let matched = match route.match_type.as_str() {
             "domain_exact" => route
                 .match_value
@@ -254,7 +285,7 @@ pub(crate) fn evaluate_routes<'a>(
             _ => false,
         };
         if matched {
-            return Some(&route.pool_id);
+            return Some(route);
         }
     }
     None
@@ -363,7 +394,7 @@ struct BundleResolverCache {
 pub struct UpstreamBundleForwarder {
     store: Arc<UpstreamBundleStore>,
     health: Arc<HealthStore>,
-    fallback: Option<Resolver<TokioConnectionProvider>>,
+    fallback: Option<(Resolver<TokioConnectionProvider>, bool)>,
     cache: ArcSwapOption<BundleResolverCache>,
     round_robin: RoundRobinState,
 }
@@ -384,9 +415,8 @@ impl UpstreamBundleForwarder {
         &self,
         bundle: &UpstreamBundle,
         resolver_id: &str,
+        dnssec_strict: bool,
     ) -> Option<Resolver<TokioConnectionProvider>> {
-        let dnssec_strict = bundle.tenant_policy.dnssec_validation == "strict";
-
         if let Some(cached) = self.cache.load().as_ref() {
             if cached.bundle_version == bundle.version && cached.dnssec_strict == dnssec_strict {
                 return cached.resolvers.get(resolver_id).cloned();
@@ -409,9 +439,17 @@ impl UpstreamBundleForwarder {
         hit
     }
 
-    async fn lookup_via_fallback(&self, qname: &str, qtype: RecordType) -> Result<LookupOutcome> {
+    async fn lookup_via_fallback(
+        &self,
+        qname: &str,
+        qtype: RecordType,
+        require_encrypted: bool,
+    ) -> Result<LookupOutcome> {
         match &self.fallback {
-            Some(r) => do_lookup(qname, qtype, r).await,
+            Some((_, false)) if require_encrypted => {
+                bail!("tenant requires encrypted DNS and configured fallback uses do53")
+            }
+            Some((resolver, _)) => do_lookup(qname, qtype, resolver).await,
             None => bail!(
                 "no upstream resolver available (bundle not loaded, no fallback configured)"
             ),
@@ -422,40 +460,107 @@ impl UpstreamBundleForwarder {
 #[async_trait::async_trait]
 impl Forwarder for UpstreamBundleForwarder {
     async fn lookup(&self, qname: &str, qtype: RecordType, categories: &[String]) -> Result<LookupOutcome> {
+        self.lookup_scoped(qname, qtype, categories, None).await
+    }
+
+    async fn lookup_scoped(
+        &self,
+        qname: &str,
+        qtype: RecordType,
+        categories: &[String],
+        group_id: Option<&str>,
+    ) -> Result<LookupOutcome> {
         let bundle = match self.store.current() {
             Some(b) => b,
-            None => return self.lookup_via_fallback(qname, qtype).await,
+            None => return self.lookup_via_fallback(qname, qtype, false).await,
         };
 
-        let pool_id = match evaluate_routes(&bundle.routes, qname, qtype, categories) {
-            Some(id) => id.to_string(),
-            None => return self.lookup_via_fallback(qname, qtype).await,
+        let route = match select_route(&bundle.routes, qname, qtype, categories, group_id) {
+            Some(route) => route,
+            None => {
+                return self
+                    .lookup_via_fallback(qname, qtype, bundle.tenant_policy.require_encrypted)
+                    .await
+            }
         };
+        let mut pool_id = route.pool_id.clone();
 
-        let pool = match bundle.pools.get(&pool_id) {
+        let mut pool = match bundle.pools.get(&pool_id) {
             Some(p) => p,
             None => {
                 warn!("upstream route pointed to unknown pool {pool_id}, using fallback");
-                return self.lookup_via_fallback(qname, qtype).await;
+                return self
+                    .lookup_via_fallback(qname, qtype, bundle.tenant_policy.require_encrypted)
+                    .await;
             }
         };
 
-        let healthy_ids = self.health.healthy_members(&pool_id, &pool.members);
+        let encrypted_only = bundle.tenant_policy.require_encrypted;
+        let mut healthy_ids = self.health.healthy_members(&pool_id, &pool.members);
+        if encrypted_only {
+            healthy_ids.retain(|id| {
+                bundle
+                    .resolvers
+                    .get(id)
+                    .is_some_and(|cfg| matches!(cfg.protocol.as_str(), "dot" | "doh"))
+            });
+        }
+        if healthy_ids.len() < pool.min_healthy_members as usize {
+            if let Some(fallback_id) = pool.fallback_pool_id.as_deref() {
+                if let Some(fallback_pool) = bundle.pools.get(fallback_id) {
+                    pool_id = fallback_id.to_string();
+                    pool = fallback_pool;
+                    healthy_ids = self.health.healthy_members(&pool_id, &pool.members);
+                    if encrypted_only {
+                        healthy_ids.retain(|id| {
+                            bundle
+                                .resolvers
+                                .get(id)
+                                .is_some_and(|cfg| matches!(cfg.protocol.as_str(), "dot" | "doh"))
+                        });
+                    }
+                }
+            }
+        }
         let resolver_id = match pick_member(&pool_id, pool, &healthy_ids, &self.health, &self.round_robin) {
             Some(id) => id.to_string(),
             None => {
                 warn!("pool {pool_id} has no healthy members, using fallback");
-                return self.lookup_via_fallback(qname, qtype).await;
+                return self
+                    .lookup_via_fallback(qname, qtype, bundle.tenant_policy.require_encrypted)
+                    .await;
             }
         };
 
-        match self.get_resolver(&bundle, &resolver_id) {
+        let Some(resolver_cfg) = bundle.resolvers.get(&resolver_id) else {
+            warn!("resolver {resolver_id} missing from bundle, using fallback");
+            return self
+                .lookup_via_fallback(qname, qtype, bundle.tenant_policy.require_encrypted)
+                .await;
+        };
+        let dnssec_strict = route.require_dnssec.unwrap_or(
+            bundle.tenant_policy.dnssec_validation == "strict"
+                || resolver_cfg.dnssec_validation == "strict",
+        );
+
+        match self.get_resolver(&bundle, &resolver_id, dnssec_strict) {
             Some(resolver) => do_lookup(qname, qtype, &resolver).await,
             None => {
                 warn!("no resolver built for {resolver_id}, using fallback");
-                self.lookup_via_fallback(qname, qtype).await
+                self.lookup_via_fallback(qname, qtype, bundle.tenant_policy.require_encrypted).await
             }
         }
+    }
+
+    fn negative_ttl_override(
+        &self,
+        qname: &str,
+        qtype: RecordType,
+        categories: &[String],
+        group_id: Option<&str>,
+    ) -> Option<u32> {
+        let bundle = self.store.current()?;
+        select_route(&bundle.routes, qname, qtype, categories, group_id)?.nxdomain_ttl_override
     }
 
     fn ttl_policy(&self) -> TtlPolicy {
@@ -528,7 +633,7 @@ pub(crate) fn build_hickory_resolver(
 
     let mut opts = ResolverOpts::default();
     opts.timeout = Duration::from_millis(timeout_ms.max(100));
-    opts.attempts = 1;
+    opts.attempts = cfg.max_retries as usize + 1;
     opts.validate = dnssec_strict;
 
     if matches!(cfg.protocol.as_str(), "dot" | "doh") && !cfg.tls_pin_sha256.is_empty() {
@@ -584,7 +689,7 @@ fn apply_tls_pinning(opts: &mut ResolverOpts, cfg: &ResolverConfig_) {
     }
 }
 
-fn build_fallback_resolver() -> Option<Resolver<TokioConnectionProvider>> {
+fn build_fallback_resolver() -> Option<(Resolver<TokioConnectionProvider>, bool)> {
     let spec = env::var("UPSTREAM_FALLBACK_ADDRESS")
         .unwrap_or_else(|_| "dot:1.1.1.1:853:cloudflare-dns.com".to_string());
 
@@ -608,7 +713,8 @@ fn build_fallback_resolver() -> Option<Resolver<TokioConnectionProvider>> {
         }
     };
 
-    build_hickory_resolver(&cfg, 5000, false)
+    let encrypted = matches!(cfg.protocol.as_str(), "dot" | "doh");
+    build_hickory_resolver(&cfg, 5000, false).map(|resolver| (resolver, encrypted))
 }
 
 fn make_resolver_cfg(protocol: &str, addr: &str, port: u16, tls_name: Option<&str>) -> ResolverConfig_ {
@@ -619,9 +725,9 @@ fn make_resolver_cfg(protocol: &str, addr: &str, port: u16, tls_name: Option<&st
         port,
         tls_hostname: tls_name.map(str::to_string),
         doh_path: "/dns-query".into(),
-        doh_method: "post".into(),
+        dnssec_validation: "opportunistic".into(),
+        max_retries: 2,
         timeout_ms: 5000,
-        connect_timeout_ms: 3000,
         tls_pin_sha256: Vec::new(),
     }
 }
@@ -664,9 +770,12 @@ mod tests {
 
     fn route(match_type: &str, match_value: Option<&str>, pool_id: &str, priority: i32) -> RouteConfig {
         RouteConfig {
+            group_id: None,
             match_type: match_type.into(),
             match_value: match_value.map(str::to_string),
             pool_id: pool_id.into(),
+            nxdomain_ttl_override: None,
+            require_dnssec: None,
             priority,
         }
     }
@@ -784,6 +893,27 @@ mod tests {
     }
 
     #[test]
+    fn group_scoped_route_only_matches_its_group() {
+        let mut scoped = route("default", None, "group-pool", 10);
+        scoped.group_id = Some("group-a".into());
+        scoped.nxdomain_ttl_override = Some(15);
+        scoped.require_dnssec = Some(true);
+        let global = route("default", None, "global-pool", 20);
+        let routes = vec![scoped, global];
+
+        let selected = select_route(&routes, "example.com", RecordType::A, &[], Some("group-a")).unwrap();
+        assert_eq!(selected.pool_id, "group-pool");
+        assert_eq!(selected.nxdomain_ttl_override, Some(15));
+        assert_eq!(selected.require_dnssec, Some(true));
+        assert_eq!(
+            select_route(&routes, "example.com", RecordType::A, &[], Some("group-b"))
+                .unwrap()
+                .pool_id,
+            "global-pool"
+        );
+    }
+
+    #[test]
     fn no_routes_returns_none() {
         assert!(evaluate_routes(&[], "x.example", RecordType::A, &[]).is_none());
     }
@@ -833,7 +963,7 @@ mod tests {
         let json = r#"{
             "id": "r1", "protocol": "dot", "address": "203.0.113.5", "port": 853,
             "tls_hostname": "resolver.example", "doh_path": "/dns-query",
-            "doh_method": "post", "timeout_ms": 5000, "connect_timeout_ms": 3000,
+            "timeout_ms": 5000,
             "tls_pin_sha256": ["aabb", "ccdd"]
         }"#;
         let cfg: ResolverConfig_ = serde_json::from_str(json).unwrap();
@@ -846,8 +976,7 @@ mod tests {
         // config in make_resolver_cfg) don't send this field at all.
         let json = r#"{
             "id": "r1", "protocol": "do53", "address": "1.1.1.1", "port": 53,
-            "tls_hostname": null, "doh_path": "/dns-query",
-            "doh_method": "post", "timeout_ms": 5000, "connect_timeout_ms": 3000
+            "tls_hostname": null, "doh_path": "/dns-query", "timeout_ms": 5000
         }"#;
         let cfg: ResolverConfig_ = serde_json::from_str(json).unwrap();
         assert!(cfg.tls_pin_sha256.is_empty());
@@ -861,9 +990,9 @@ mod tests {
             port: 853,
             tls_hostname: Some("resolver.example".into()),
             doh_path: "/dns-query".into(),
-            doh_method: "post".into(),
+            dnssec_validation: "opportunistic".into(),
+            max_retries: 2,
             timeout_ms: 5000,
-            connect_timeout_ms: 3000,
             tls_pin_sha256: pins.into_iter().map(String::from).collect(),
         }
     }

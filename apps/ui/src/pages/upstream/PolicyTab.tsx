@@ -33,8 +33,6 @@ export function PolicyTab() {
     initialValues: {
       require_encrypted: false,
       dnssec_validation: "opportunistic",
-      qname_minimization: true,
-      blocked_response_type: "nxdomain",
       min_ttl_s: 0,
       max_ttl_s: 86400,
       negative_ttl_s: 300,
@@ -47,8 +45,6 @@ export function PolicyTab() {
     form.setValues({
       require_encrypted: policy.require_encrypted,
       dnssec_validation: policy.dnssec_validation,
-      qname_minimization: policy.qname_minimization,
-      blocked_response_type: policy.blocked_response_type,
       min_ttl_s: policy.min_ttl_s,
       max_ttl_s: policy.max_ttl_s,
       negative_ttl_s: policy.negative_ttl_s,
@@ -88,15 +84,6 @@ export function PolicyTab() {
               data={DNSSEC_OPTIONS}
               {...form.getInputProps("dnssec_validation")}
             />
-            <Select
-              label="Blocked query response"
-              data={[
-                { value: "nxdomain", label: "NXDOMAIN (default)" },
-                { value: "refused", label: "REFUSED" },
-                { value: "zero_ip", label: "Zero IP (0.0.0.0)" },
-              ]}
-              {...form.getInputProps("blocked_response_type")}
-            />
             <SimpleGrid cols={3}>
               <NumberInput label="Min TTL (s)" min={0} description="Clamp downstream TTL" {...form.getInputProps("min_ttl_s")} />
               <NumberInput label="Max TTL (s)" min={0} description="Clamp downstream TTL" {...form.getInputProps("max_ttl_s")} />
@@ -105,8 +92,6 @@ export function PolicyTab() {
             <Group>
               <Checkbox label="Require encrypted upstream (reject do53 resolvers)" {...form.getInputProps("require_encrypted", { type: "checkbox" })} />
             </Group>
-            <Checkbox label="QNAME minimization" {...form.getInputProps("qname_minimization", { type: "checkbox" })} />
-
             <Group justify="flex-end">
               <Button type="submit" loading={upsertPolicy.isPending}>Save policy</Button>
             </Group>

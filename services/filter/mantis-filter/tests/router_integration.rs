@@ -21,7 +21,7 @@
 //! distinct OpenVPN client subnets, since the whole 127.0.0.0/8 block is
 //! loopback on both Linux and Windows.
 
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 
 use mantis_bundle::gen::FailurePolicy;
 use mantis_bundle::Bundle;
@@ -70,6 +70,26 @@ impl Forwarder for FixedForwarder {
             qname.parse()?,
             60,
             RData::A(A(self.0)),
+        )]
+        .into())
+    }
+}
+
+struct CountingForwarder(AtomicUsize);
+
+#[async_trait::async_trait]
+impl Forwarder for CountingForwarder {
+    async fn lookup(
+        &self,
+        qname: &str,
+        _qtype: RecordType,
+        _categories: &[String],
+    ) -> anyhow::Result<LookupOutcome> {
+        let call = self.0.fetch_add(1, Ordering::SeqCst) + 1;
+        Ok(vec![Record::from_rdata(
+            qname.parse()?,
+            60,
+            RData::A(A(Ipv4Addr::new(192, 0, 2, call as u8))),
         )]
         .into())
     }
@@ -253,5 +273,40 @@ async fn tenant_routes_isolate_upstream_forwarders_and_caches() {
     assert_eq!(
         query_a("127.0.0.6:0", server_addr, "same.example.com").await,
         Ipv4Addr::new(192, 0, 2, 20)
+    );
+}
+
+#[tokio::test]
+async fn groups_in_one_tenant_do_not_share_cached_answers() {
+    let signing_key = SigningKey::from_bytes(&[14u8; 32]);
+    let public_key = signing_key.verifying_key();
+    let router = Arc::new(TenantRouter::new(
+        public_key,
+        Box::new(CountingForwarder(AtomicUsize::new(0))),
+    ));
+
+    for (cidr, group) in [("127.0.0.7/32", "group-a"), ("127.0.0.8/32", "group-b")] {
+        mantis_filter::test_support::inject_route(
+            &router,
+            cidr.parse().unwrap(),
+            group,
+            signed_bundle_for_tenant(&signing_key, "same-tenant", group, "never.example.net"),
+            &public_key,
+        );
+    }
+
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let server_addr = socket.local_addr().unwrap();
+    tokio::spawn(async move {
+        run_router_udp_server(socket, router).await.ok();
+    });
+
+    assert_eq!(
+        query_a("127.0.0.7:0", server_addr, "same.example.com").await,
+        Ipv4Addr::new(192, 0, 2, 1)
+    );
+    assert_eq!(
+        query_a("127.0.0.8:0", server_addr, "same.example.com").await,
+        Ipv4Addr::new(192, 0, 2, 2)
     );
 }

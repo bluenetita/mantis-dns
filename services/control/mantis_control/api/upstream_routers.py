@@ -71,13 +71,9 @@ class ResolverCreate(BaseModel):
     tls_hostname: str | None = None
     tls_pin_sha256: list[str] = []
     doh_path: str = "/dns-query"
-    doh_method: Literal["get", "post"] = "post"
     dnssec_validation: Literal["strict", "opportunistic", "disabled"] = "opportunistic"
-    qname_minimization: bool = True
-    edns_client_subnet: bool = False
     timeout_ms: int = Field(5000, ge=100, le=30000)
     max_retries: int = Field(2, ge=0, le=5)
-    connect_timeout_ms: int = Field(3000, ge=100, le=15000)
     tags: list[str] = []
     enabled: bool = True
 
@@ -90,13 +86,9 @@ class ResolverUpdate(BaseModel):
     tls_hostname: str | None = None
     tls_pin_sha256: list[str] | None = None
     doh_path: str | None = None
-    doh_method: Literal["get", "post"] | None = None
     dnssec_validation: Literal["strict", "opportunistic", "disabled"] | None = None
-    qname_minimization: bool | None = None
-    edns_client_subnet: bool | None = None
     timeout_ms: int | None = Field(None, ge=100, le=30000)
     max_retries: int | None = Field(None, ge=0, le=5)
-    connect_timeout_ms: int | None = Field(None, ge=100, le=15000)
     tags: list[str] | None = None
     enabled: bool | None = None
 
@@ -110,13 +102,9 @@ class ResolverOut(BaseModel):
     tls_hostname: str | None
     tls_pin_sha256: list[str]
     doh_path: str
-    doh_method: str
     dnssec_validation: str
-    qname_minimization: bool
-    edns_client_subnet: bool
     timeout_ms: int
     max_retries: int
-    connect_timeout_ms: int
     tags: list[str]
     enabled: bool
     created_at: datetime
@@ -232,8 +220,6 @@ class RouteOut(BaseModel):
 class TenantPolicyIn(BaseModel):
     require_encrypted: bool = False
     dnssec_validation: Literal["strict", "opportunistic", "disabled"] = "opportunistic"
-    qname_minimization: bool = True
-    blocked_response_type: Literal["nxdomain", "refused", "zero_ip"] = "nxdomain"
     min_ttl_s: int = Field(0, ge=0)
     max_ttl_s: int = Field(86400, ge=0)
     negative_ttl_s: int = Field(300, ge=0)
@@ -243,8 +229,6 @@ class TenantPolicyOut(BaseModel):
     tenant_id: str
     require_encrypted: bool
     dnssec_validation: str
-    qname_minimization: bool
-    blocked_response_type: str
     min_ttl_s: int
     max_ttl_s: int
     negative_ttl_s: int
@@ -746,8 +730,6 @@ _DEFAULT_POLICY = TenantPolicyOut(
     tenant_id="",
     require_encrypted=False,
     dnssec_validation="opportunistic",
-    qname_minimization=True,
-    blocked_response_type="nxdomain",
     min_ttl_s=0,
     max_ttl_s=86400,
     negative_ttl_s=300,

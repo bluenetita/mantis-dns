@@ -20,7 +20,7 @@ import re
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from mantis_control.audit import write_audit_log
@@ -43,6 +43,62 @@ _ZONE_NAME_RE = re.compile(
     r"^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?)*$",
     re.IGNORECASE,
 )
+_OWNER_LABEL_RE = re.compile(r"^[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?$", re.IGNORECASE)
+
+
+def _validate_dns_name(value: str, label: str, *, wildcard: bool = False) -> str:
+    value = value.strip()
+    absolute = value.endswith(".")
+    bare = value[:-1] if absolute else value
+    if not bare or len(bare) > 253:
+        raise ValueError(f"{label} must be a valid DNS name")
+    labels = bare.split(".")
+    if wildcard and labels[0] == "*":
+        labels = labels[1:]
+    if not labels or any(not _OWNER_LABEL_RE.fullmatch(part) for part in labels):
+        raise ValueError(f"{label} must be a valid DNS name")
+    return value
+
+
+def _validate_record_semantics(record_type: str, data: str, priority: int | None) -> None:
+    if record_type in {"A", "AAAA"}:
+        try:
+            address = ipaddress.ip_address(data)
+        except ValueError as exc:
+            raise ValueError(f"invalid {record_type} address") from exc
+        expected = 4 if record_type == "A" else 6
+        if address.version != expected:
+            raise ValueError(f"invalid {record_type} address")
+    elif record_type in {"CNAME", "NS", "PTR", "MX"}:
+        _validate_dns_name(data, f"{record_type} target")
+    elif record_type == "SRV":
+        parts = data.split()
+        if len(parts) != 3:
+            raise ValueError("SRV data must be 'weight port target'")
+        try:
+            weight, port = int(parts[0]), int(parts[1])
+        except ValueError as exc:
+            raise ValueError("SRV weight and port must be integers") from exc
+        if not (0 <= weight <= 65535 and 0 <= port <= 65535):
+            raise ValueError("SRV weight and port must be between 0 and 65535")
+        _validate_dns_name(parts[2], "SRV target")
+    elif record_type == "CAA":
+        parts = data.split(maxsplit=1)
+        if len(parts) != 2 or parts[0] not in {"issue", "issuewild"}:
+            raise ValueError("CAA data must be '<issue|issuewild> <issuer|;>'")
+        if parts[1].strip() != ";":
+            _validate_dns_name(parts[1].strip(), "CAA issuer")
+    if priority is not None and not 0 <= priority <= 65535:
+        raise ValueError("priority must be between 0 and 65535")
+
+
+def _relative_owner(name: str, zone_name: str) -> str:
+    bare = name.strip().lower().rstrip(".")
+    zone = zone_name.lower().rstrip(".")
+    if bare == zone:
+        return "@"
+    suffix = f".{zone}"
+    return bare[: -len(suffix)] if bare.endswith(suffix) else bare
 
 
 def _validate_record_field(v: str, label: str) -> str:
@@ -157,12 +213,20 @@ class RecordIn(BaseModel):
     @field_validator("name")
     @classmethod
     def _rname(cls, v: str) -> str:
-        return _validate_record_field(v, "Record name")
+        v = _validate_record_field(v, "Record name")
+        if v != "@":
+            _validate_dns_name(v, "Record name", wildcard=True)
+        return v
 
     @field_validator("data")
     @classmethod
     def _rdata(cls, v: str) -> str:
         return _validate_record_field(v, "Record data")
+
+    @model_validator(mode="after")
+    def _semantics(self) -> RecordIn:
+        _validate_record_semantics(self.record_type, self.data, self.priority)
+        return self
 
 
 class RecordUpdate(BaseModel):
@@ -187,7 +251,12 @@ class RecordUpdate(BaseModel):
     @field_validator("name")
     @classmethod
     def _rname(cls, v: str | None) -> str | None:
-        return v if v is None else _validate_record_field(v, "Record name")
+        if v is None:
+            return None
+        v = _validate_record_field(v, "Record name")
+        if v != "@":
+            _validate_dns_name(v, "Record name", wildcard=True)
+        return v
 
     @field_validator("data")
     @classmethod
@@ -392,8 +461,16 @@ def create_record(
     db: Session = Depends(get_db),
     user: models.User = Depends(require_role("operator")),
 ) -> RecordOut:
-    _get_zone_or_403(zone_id, db, user)
-    rec = models.DnsRecord(zone_id=zone_id, **body.model_dump())
+    zone = _get_zone_or_403(zone_id, db, user)
+    values = body.model_dump()
+    values["name"] = _relative_owner(body.name, zone.name)
+    conflicts = db.query(models.DnsRecord).filter_by(zone_id=zone_id, name=values["name"], enabled=True).all()
+    if body.enabled and (
+        any(r.record_type == "CNAME" for r in conflicts)
+        or (body.record_type == "CNAME" and conflicts)
+    ):
+        raise HTTPException(422, "CNAME cannot coexist with other records at the same name")
+    rec = models.DnsRecord(zone_id=zone_id, **values)
     db.add(rec)
     db.commit()
     db.refresh(rec)
@@ -408,11 +485,33 @@ def update_record(
     db: Session = Depends(get_db),
     user: models.User = Depends(require_role("operator")),
 ) -> RecordOut:
-    _get_zone_or_403(zone_id, db, user)
+    zone = _get_zone_or_403(zone_id, db, user)
     rec = db.query(models.DnsRecord).filter_by(id=record_id, zone_id=zone_id).first()
     if not rec:
         raise HTTPException(404, "Record not found")
-    for k, v in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    candidate_name = _relative_owner(changes.get("name", rec.name), zone.name)
+    candidate_type = changes.get("record_type", rec.record_type)
+    candidate_data = changes.get("data", rec.data)
+    candidate_priority = changes.get("priority", rec.priority)
+    try:
+        _validate_record_semantics(candidate_type, candidate_data, candidate_priority)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    conflicts = (
+        db.query(models.DnsRecord)
+        .filter(models.DnsRecord.zone_id == zone_id, models.DnsRecord.name == candidate_name,
+                models.DnsRecord.enabled.is_(True), models.DnsRecord.id != rec.id)
+        .all()
+    )
+    candidate_enabled = changes.get("enabled", rec.enabled)
+    if candidate_enabled and (
+        any(r.record_type == "CNAME" for r in conflicts)
+        or (candidate_type == "CNAME" and conflicts)
+    ):
+        raise HTTPException(422, "CNAME cannot coexist with other records at the same name")
+    changes["name"] = candidate_name
+    for k, v in changes.items():
         setattr(rec, k, v)
     db.commit()
     db.refresh(rec)

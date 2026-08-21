@@ -186,6 +186,48 @@ fn rewrite_owner(record: &Record, new_owner: &str) -> Record {
     rec
 }
 
+fn chase_in_zone_cname(
+    data: &ZoneData,
+    mut answer: Vec<Record>,
+    zone: &str,
+    qtype: RecordType,
+) -> Vec<Record> {
+    let mut seen = answer
+        .first()
+        .map(|record| HashSet::from([normalize(&record.name().to_utf8())]))
+        .unwrap_or_default();
+    for _ in 0..16 {
+        let Some(RData::CNAME(target)) = answer.last().map(Record::data) else {
+            break;
+        };
+        let target = normalize(&target.0.to_utf8());
+        if !seen.insert(target.clone()) || !(target == zone || is_subdomain_of(&target, zone)) {
+            break;
+        }
+        let Some(target_records) = data.records.get(&target) else {
+            break;
+        };
+        let terminal: Vec<Record> = target_records
+            .iter()
+            .filter(|record| record.record_type() == qtype)
+            .cloned()
+            .collect();
+        if !terminal.is_empty() {
+            answer.extend(terminal);
+            break;
+        }
+        let Some(next) = target_records
+            .iter()
+            .find(|record| record.record_type() == RecordType::CNAME)
+            .cloned()
+        else {
+            break;
+        };
+        answer.push(next);
+    }
+    answer
+}
+
 /// Fallback SOA for a tenant zone that didn't ship an explicit one — every
 /// zone must have exactly one for RFC 2308 negative answers to be
 /// meaningful (A4) and for the apex to never read as an empty non-terminal.
@@ -458,7 +500,13 @@ impl ZoneStore {
             let cname: Vec<Record> =
                 recs.iter().filter(|r| r.record_type() == RecordType::CNAME).cloned().collect();
             if !cname.is_empty() {
-                return ZoneLookup::Answer { records: cname, soa };
+                // Follow an in-zone chain and include the terminal RRset in
+                // the same authoritative answer. External targets remain a
+                // CNAME-only answer for the downstream recursive client.
+                return ZoneLookup::Answer {
+                    records: chase_in_zone_cname(data, cname, zone, qtype),
+                    soa,
+                };
             }
             return ZoneLookup::Answer { records: Vec::new(), soa };
         }
@@ -479,11 +527,21 @@ impl ZoneStore {
             let parent = &qname[dot + 1..];
             if parent.len() >= zone.len() {
                 if let Some(recs) = data.wildcards.get(parent) {
-                    let matched: Vec<Record> = recs
+                    let mut matched: Vec<Record> = recs
                         .iter()
                         .filter(|r| r.record_type() == qtype)
                         .map(|r| rewrite_owner(r, qname))
                         .collect();
+                    if matched.is_empty() && qtype != RecordType::CNAME {
+                        matched = recs
+                            .iter()
+                            .filter(|r| r.record_type() == RecordType::CNAME)
+                            .map(|r| rewrite_owner(r, qname))
+                            .collect();
+                        if !matched.is_empty() {
+                            matched = chase_in_zone_cname(data, matched, zone, qtype);
+                        }
+                    }
                     return ZoneLookup::Answer { records: matched, soa };
                 }
             }
@@ -681,6 +739,24 @@ mod tests {
     }
 
     #[test]
+    fn in_zone_cname_includes_terminal_address() {
+        let store = ZoneStore::empty();
+        store.publish(vec![
+            entry("alias.corp.lab", "corp.lab", "CNAME", "target.corp.lab"),
+            entry("target.corp.lab", "corp.lab", "A", "10.0.0.8"),
+        ]);
+
+        match store.lookup("alias.corp.lab.", RecordType::A) {
+            ZoneLookup::Answer { records, .. } => {
+                assert_eq!(records.len(), 2);
+                assert_eq!(records[0].record_type(), RecordType::CNAME);
+                assert_eq!(records[1].record_type(), RecordType::A);
+            }
+            _ => panic!("expected CNAME chain and terminal A record"),
+        }
+    }
+
+    #[test]
     fn wildcard_matches_a_direct_child_and_rewrites_the_owner() {
         let store = ZoneStore::empty();
         store.publish(vec![entry("*.apps.corp.lab", "corp.lab", "A", "10.0.0.9")]);
@@ -702,6 +778,21 @@ mod tests {
         match store.lookup("anything.apps.corp.lab.", RecordType::AAAA) {
             ZoneLookup::Answer { records, .. } => assert!(records.is_empty()),
             _ => panic!("expected empty Answer (NODATA) for a qtype the wildcard doesn't cover"),
+        }
+    }
+
+    #[test]
+    fn wildcard_cname_is_returned_for_address_query() {
+        let store = ZoneStore::empty();
+        store.publish(vec![entry("*.apps.corp.lab", "corp.lab", "CNAME", "target.corp.lab")]);
+
+        match store.lookup("web.apps.corp.lab.", RecordType::A) {
+            ZoneLookup::Answer { records, .. } => {
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].record_type(), RecordType::CNAME);
+                assert_eq!(records[0].name().to_utf8(), "web.apps.corp.lab.");
+            }
+            _ => panic!("expected wildcard CNAME answer"),
         }
     }
 

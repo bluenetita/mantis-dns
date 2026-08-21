@@ -54,8 +54,7 @@ def test_resolver_bundle_fields_exclude_admin_only_metadata():
     assert out == {
         "id": "r1", "name": "cf", "protocol": "dot", "address": "1.1.1.1", "port": 853,
         "tls_hostname": "cloudflare-dns.com", "tls_pin_sha256": ["abc"], "doh_path": "/dns-query",
-        "doh_method": "post", "dnssec_validation": "strict", "qname_minimization": True,
-        "edns_client_subnet": False, "timeout_ms": 5000, "max_retries": 2, "connect_timeout_ms": 3000,
+        "dnssec_validation": "strict", "timeout_ms": 5000, "max_retries": 2,
     }
 
 
@@ -98,8 +97,8 @@ def test_tenant_policy_bundle_fields_exclude_tenant_id():
     )
     out = TenantPolicyOut.model_validate(policy).model_dump(exclude={"tenant_id"})
     assert out == {
-        "require_encrypted": True, "dnssec_validation": "strict", "qname_minimization": False,
-        "blocked_response_type": "refused", "min_ttl_s": 10, "max_ttl_s": 3600, "negative_ttl_s": 60,
+        "require_encrypted": True, "dnssec_validation": "strict",
+        "min_ttl_s": 10, "max_ttl_s": 3600, "negative_ttl_s": 60,
     }
 
 
@@ -111,6 +110,5 @@ def test_tenant_policy_defaults_used_when_no_policy_row():
     out = fallback.model_dump(exclude={"tenant_id"})
     assert out == {
         "require_encrypted": False, "dnssec_validation": "opportunistic",
-        "qname_minimization": True, "blocked_response_type": "nxdomain",
         "min_ttl_s": 0, "max_ttl_s": 86400, "negative_ttl_s": 300,
     }

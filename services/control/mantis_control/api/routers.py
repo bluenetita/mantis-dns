@@ -292,7 +292,13 @@ def get_local_zone_records(
         for rec in zone.records:
             if not rec.enabled:
                 continue
-            fqdn = zone.name if rec.name == "@" else f"{rec.name}.{zone.name}"
+            owner = rec.name.strip().lower().rstrip(".")
+            suffix = f".{zone.name}"
+            if owner == zone.name:
+                owner = "@"
+            elif owner.endswith(suffix):
+                owner = owner[: -len(suffix)]
+            fqdn = zone.name if owner == "@" else f"{owner}.{zone.name}"
             out.append(
                 schemas.LocalZoneRecord(
                     name=fqdn,

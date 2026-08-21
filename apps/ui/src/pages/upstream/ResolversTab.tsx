@@ -19,7 +19,6 @@ import {
   Badge,
   Button,
   Card,
-  Checkbox,
   Group,
   MultiSelect,
   NumberInput,
@@ -68,11 +67,8 @@ function ResolverForm({
       port: initial?.port ?? DEFAULT_PORT_BY_PROTOCOL[initial?.protocol ?? "do53"],
       tls_hostname: initial?.tls_hostname ?? "",
       dnssec_validation: initial?.dnssec_validation ?? "opportunistic",
-      qname_minimization: initial?.qname_minimization ?? true,
-      edns_client_subnet: initial?.edns_client_subnet ?? false,
       timeout_ms: initial?.timeout_ms ?? 5000,
       max_retries: initial?.max_retries ?? 2,
-      connect_timeout_ms: initial?.connect_timeout_ms ?? 3000,
       tags: initial?.tags ?? [],
       enabled: initial?.enabled ?? true,
     },
@@ -122,14 +118,9 @@ function ResolverForm({
           )}
         </SimpleGrid>
         <Select label="DNSSEC validation" data={DNSSEC_OPTIONS} {...form.getInputProps("dnssec_validation")} />
-        <SimpleGrid cols={3}>
+        <SimpleGrid cols={2}>
           <NumberInput label="Timeout (ms)" min={100} max={30000} {...form.getInputProps("timeout_ms")} />
           <NumberInput label="Retries" min={0} max={5} {...form.getInputProps("max_retries")} />
-          <NumberInput label="Connect timeout (ms)" min={100} max={15000} {...form.getInputProps("connect_timeout_ms")} />
-        </SimpleGrid>
-        <SimpleGrid cols={2}>
-          <Checkbox label="QNAME minimization" {...form.getInputProps("qname_minimization", { type: "checkbox" })} />
-          <Checkbox label="EDNS Client Subnet" {...form.getInputProps("edns_client_subnet", { type: "checkbox" })} />
         </SimpleGrid>
         <MultiSelect
           label="Tags"

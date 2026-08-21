@@ -641,13 +641,9 @@ export interface UpstreamResolver {
   tls_hostname: string | null;
   tls_pin_sha256: string[];
   doh_path: string;
-  doh_method: string;
   dnssec_validation: string;
-  qname_minimization: boolean;
-  edns_client_subnet: boolean;
   timeout_ms: number;
   max_retries: number;
-  connect_timeout_ms: number;
   tags: string[];
   enabled: boolean;
   created_at: string;
@@ -699,8 +695,6 @@ export interface UpstreamTenantPolicy {
   tenant_id: string;
   require_encrypted: boolean;
   dnssec_validation: string;
-  qname_minimization: boolean;
-  blocked_response_type: string;
   min_ttl_s: number;
   max_ttl_s: number;
   negative_ttl_s: number;
@@ -1155,4 +1149,3 @@ export function useDhcpLeases6(scopeId: string | undefined) {
     refetchInterval: 30_000,
   });
 }
-

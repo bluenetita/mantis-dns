@@ -143,6 +143,26 @@ pub trait Forwarder: Send + Sync {
         categories: &[String],
     ) -> Result<LookupOutcome>;
 
+    async fn lookup_scoped(
+        &self,
+        qname: &str,
+        qtype: RecordType,
+        categories: &[String],
+        _group_id: Option<&str>,
+    ) -> Result<LookupOutcome> {
+        self.lookup(qname, qtype, categories).await
+    }
+
+    fn negative_ttl_override(
+        &self,
+        _qname: &str,
+        _qtype: RecordType,
+        _categories: &[String],
+        _group_id: Option<&str>,
+    ) -> Option<u32> {
+        None
+    }
+
     fn ttl_policy(&self) -> TtlPolicy {
         TtlPolicy::default()
     }
@@ -968,7 +988,7 @@ pub(crate) async fn build_response(
         // `unmatched_route` overrides this to always ServFail regardless of
         // the env var — see its doc comment above.
         if !unmatched_route && bootstrap_fail_open() {
-            resolve_records(&qname, qtype, &[], recursion_desired, cache, forwarder, &mut response)
+            resolve_records(&qname, qtype, &[], None, recursion_desired, cache, forwarder, &mut response)
                 .await;
         } else {
             // B8: this node will not recurse for this client on this path
@@ -1005,6 +1025,7 @@ pub(crate) async fn build_response(
                     &qname,
                     qtype,
                     &categories,
+                    Some(&bundle.group_id),
                     recursion_desired,
                     cache,
                     forwarder,
@@ -1054,11 +1075,18 @@ pub(crate) fn enforce_udp_size_limit(query: &Message, response: &mut Message) {
     let max_payload = match query.extensions().as_ref() {
         Some(edns) => {
             let negotiated = edns.max_payload().clamp(512, protocol::MAX_UDP_PAYLOAD);
-            // RFC 6891 §6.1.1: echo an OPT record back so the client knows
-            // this server understood EDNS0 and what payload size to expect.
-            let mut resp_edns = Edns::new();
-            resp_edns.set_max_payload(negotiated);
-            response.set_edns(resp_edns);
+            // build_response already negotiated the response OPT and may
+            // have attached DO, EDE, and COOKIE. Only adjust its payload
+            // size here: replacing the whole OPT silently erased all three
+            // options on every UDP response.
+            if let Some(resp_edns) = response.extensions_mut().as_mut() {
+                resp_edns.set_max_payload(negotiated);
+            } else {
+                let mut resp_edns = Edns::new();
+                resp_edns.set_max_payload(negotiated);
+                resp_edns.set_dnssec_ok(edns.flags().dnssec_ok);
+                response.set_edns(resp_edns);
+            }
             negotiated
         }
         None => 512,
@@ -1175,10 +1203,12 @@ fn upstream_soa(err: hickory_resolver::ResolveError) -> Option<Record> {
 /// cache miss with RD=0 must not trigger one — the client explicitly asked
 /// us not to recurse on its behalf, so the honest answer is REFUSED, not a
 /// recursion it opted out of.
+#[allow(clippy::too_many_arguments)]
 async fn resolve_records(
     qname: &str,
     qtype: RecordType,
     categories: &[String],
+    group_id: Option<&str>,
     recursion_desired: bool,
     cache: &DnsCache,
     forwarder: &dyn Forwarder,
@@ -1224,7 +1254,10 @@ async fn resolve_records(
     }
 
     let policy = forwarder.ttl_policy();
-    match forwarder.lookup(qname, qtype, categories).await {
+    let negative_ttl = forwarder
+        .negative_ttl_override(qname, qtype, categories, group_id)
+        .unwrap_or_else(|| policy.negative_ttl());
+    match forwarder.lookup_scoped(qname, qtype, categories, group_id).await {
         Ok(outcome) if outcome.records.is_empty() => {
             // Some Forwarder impls (any custom implementation, and the test
             // MockForwarder) signal NODATA via Ok(vec![]) rather than the
@@ -1239,7 +1272,7 @@ async fn resolve_records(
                 qtype_u16,
                 cache::NegativeKind::NoData,
                 None, // this Forwarder impl has no authority section to offer
-                Duration::from_secs(u64::from(policy.negative_ttl())),
+                Duration::from_secs(u64::from(negative_ttl)),
             );
         }
         Ok(outcome) => {
@@ -1282,7 +1315,10 @@ async fn resolve_records(
             // error path, so no Forwarder trait change is needed to get it.
             match e.downcast::<hickory_resolver::ResolveError>() {
                 Ok(re) if re.is_nx_domain() => {
-                    let soa = upstream_soa(re);
+                    let soa = upstream_soa(re).map(|mut soa| {
+                        soa.set_ttl(negative_ttl);
+                        soa
+                    });
                     response.set_response_code(ResponseCode::NXDomain);
                     if let Some(soa) = &soa {
                         response.add_name_server(soa.clone());
@@ -1292,12 +1328,15 @@ async fn resolve_records(
                         qtype_u16,
                         cache::NegativeKind::NxDomain,
                         soa,
-                        Duration::from_secs(u64::from(policy.negative_ttl())),
+                        Duration::from_secs(u64::from(negative_ttl)),
                     );
                 }
                 Ok(re) if re.is_no_records_found() => {
                     // NODATA: name exists, no records of this type.
-                    let soa = upstream_soa(re);
+                    let soa = upstream_soa(re).map(|mut soa| {
+                        soa.set_ttl(negative_ttl);
+                        soa
+                    });
                     response.set_response_code(ResponseCode::NoError);
                     if let Some(soa) = &soa {
                         response.add_name_server(soa.clone());
@@ -1307,7 +1346,7 @@ async fn resolve_records(
                         qtype_u16,
                         cache::NegativeKind::NoData,
                         soa,
-                        Duration::from_secs(u64::from(policy.negative_ttl())),
+                        Duration::from_secs(u64::from(negative_ttl)),
                     );
                 }
                 Ok(re) => {
@@ -1521,6 +1560,24 @@ mod tests {
     }
 
     #[test]
+    fn udp_size_limit_preserves_negotiated_edns_flags_and_options() {
+        let mut query = a_query("blocked.example.");
+        let mut request_edns = Edns::new();
+        request_edns.set_max_payload(1232).set_dnssec_ok(true);
+        query.set_edns(request_edns);
+
+        let mut response = oversized_response(1);
+        protocol::negotiate_edns(&query, &mut response);
+        protocol::attach_extended_error(&mut response, protocol::EDE_FILTERED, "category=test");
+
+        enforce_udp_size_limit(&query, &mut response);
+
+        let edns = response.extensions().as_ref().expect("response OPT");
+        assert!(edns.flags().dnssec_ok);
+        assert!(edns.options().get(hickory_proto::rr::rdata::opt::EdnsCode::Unknown(15)).is_some());
+    }
+
+    #[test]
     fn udp_size_limit_clamps_edns_payload_to_server_ceiling() {
         // A client advertising an absurdly large payload must not get a
         // response bigger than MAX_UDP_PAYLOAD.
@@ -1603,6 +1660,7 @@ mod tests {
             "empty-ok.example.",
             RecordType::AAAA,
             &[],
+            None,
             true,
             &cache,
             &forwarder,
@@ -1631,6 +1689,7 @@ mod tests {
             "no-recurse.example.",
             RecordType::A,
             &[],
+            None,
             false,
             &cache,
             &forwarder,
@@ -1656,6 +1715,7 @@ mod tests {
             "broken.example.",
             RecordType::A,
             &[],
+            None,
             true,
             &cache,
             &forwarder,
@@ -1671,6 +1731,7 @@ mod tests {
             "broken.example.",
             RecordType::A,
             &[],
+            None,
             true,
             &cache,
             &forwarder,
@@ -1722,6 +1783,16 @@ mod tests {
             );
             Err(hickory_resolver::ResolveError::from(proto_err).into())
         }
+
+        fn negative_ttl_override(
+            &self,
+            _qname: &str,
+            _qtype: RecordType,
+            _categories: &[String],
+            _group_id: Option<&str>,
+        ) -> Option<u32> {
+            Some(7)
+        }
     }
 
     #[tokio::test]
@@ -1737,6 +1808,7 @@ mod tests {
             "gone.example.com.",
             RecordType::A,
             &[],
+            None,
             true,
             &cache,
             &NxDomainWithSoaForwarder,
@@ -1746,6 +1818,7 @@ mod tests {
 
         assert_eq!(response.response_code(), ResponseCode::NXDomain);
         assert_eq!(response.name_servers().len(), 1, "SOA must land in the authority section");
+        assert_eq!(response.name_servers()[0].ttl(), 7, "configured negative TTL must reach clients");
 
         // And a cache hit must carry the same SOA, not just the bare rcode.
         let mut second = Message::new();
@@ -1753,6 +1826,7 @@ mod tests {
             "gone.example.com.",
             RecordType::A,
             &[],
+            None,
             true,
             &cache,
             &NxDomainWithSoaForwarder,
@@ -1839,6 +1913,7 @@ mod tests {
             "secure.example.com.",
             RecordType::A,
             &[],
+            None,
             true,
             &cache,
             &SecureForwarder,
@@ -1852,6 +1927,7 @@ mod tests {
             "secure.example.com.",
             RecordType::A,
             &[],
+            None,
             true,
             &cache,
             &SecureForwarder,
