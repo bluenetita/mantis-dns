@@ -17,8 +17,8 @@
 
 //! Stub-zone store (design.md §7.3, §DNS-Zones): local DNS zone records,
 //! fetched from the control plane's `/api/v1/local-zones` and answered
-//! authoritatively without ever reaching the upstream forwarder or the
-//! Bloom-filter policy engine.
+//! authoritatively. A CNAME chain that leaves all hosted zones is handed
+//! back to the recursive response path for RFC 1034 completion.
 //!
 //! Phase 2 of docs/rfc-compliance.md §3 additionally makes this behave like
 //! a real (if small) zone: empty non-terminals answer NODATA instead of
@@ -58,7 +58,14 @@ pub enum ZoneLookup {
     /// but has no record of the queried type (NODATA); non-empty is a real
     /// answer. `soa` is the zone's apex SOA (A4 / RFC 2308 §3) — callers
     /// should add it to the authority section when `records` is empty.
-    Answer { records: Vec<Record>, soa: Option<Record> },
+    Answer {
+        records: Vec<Record>,
+        soa: Option<Record>,
+        /// The final CNAME target when the chain leaves every hosted zone.
+        /// A recursive caller should resolve this name for the original
+        /// query type and append the resulting RRset.
+        recurse_target: Option<String>,
+    },
     /// qname is inside a local zone but no record exists for that name (or
     /// any wildcard covering it) at any type — authoritative NXDOMAIN, no
     /// upstream fallback. `soa` as above.
@@ -189,9 +196,8 @@ fn rewrite_owner(record: &Record, new_owner: &str) -> Record {
 fn chase_in_zone_cname(
     data: &ZoneData,
     mut answer: Vec<Record>,
-    zone: &str,
     qtype: RecordType,
-) -> Vec<Record> {
+) -> (Vec<Record>, Option<String>) {
     let mut seen = answer
         .first()
         .map(|record| HashSet::from([normalize(&record.name().to_utf8())]))
@@ -201,8 +207,14 @@ fn chase_in_zone_cname(
             break;
         };
         let target = normalize(&target.0.to_utf8());
-        if !seen.insert(target.clone()) || !(target == zone || is_subdomain_of(&target, zone)) {
+        if !seen.insert(target.clone()) {
             break;
+        }
+        if longest_match(BUILTIN_EMPTY_ZONES.iter().copied(), &target).is_some() {
+            break;
+        }
+        if longest_match(data.zones.iter().map(String::as_str), &target).is_none() {
+            return (answer, Some(target));
         }
         let Some(target_records) = data.records.get(&target) else {
             break;
@@ -225,7 +237,7 @@ fn chase_in_zone_cname(
         };
         answer.push(next);
     }
-    answer
+    (answer, None)
 }
 
 /// Fallback SOA for a tenant zone that didn't ship an explicit one — every
@@ -492,7 +504,7 @@ impl ZoneStore {
         if let Some(recs) = data.records.get(qname) {
             let matched: Vec<Record> = recs.iter().filter(|r| r.record_type() == qtype).cloned().collect();
             if !matched.is_empty() || qtype == RecordType::CNAME {
-                return ZoneLookup::Answer { records: matched, soa };
+                return ZoneLookup::Answer { records: matched, soa, recurse_target: None };
             }
             // A8: no record of the requested type, but the name has a
             // CNAME — return that instead of NODATA, per RFC 1034 §4.3.2;
@@ -500,22 +512,21 @@ impl ZoneStore {
             let cname: Vec<Record> =
                 recs.iter().filter(|r| r.record_type() == RecordType::CNAME).cloned().collect();
             if !cname.is_empty() {
-                // Follow an in-zone chain and include the terminal RRset in
-                // the same authoritative answer. External targets remain a
-                // CNAME-only answer for the downstream recursive client.
+                let (records, recurse_target) = chase_in_zone_cname(data, cname, qtype);
                 return ZoneLookup::Answer {
-                    records: chase_in_zone_cname(data, cname, zone, qtype),
+                    records,
                     soa,
+                    recurse_target,
                 };
             }
-            return ZoneLookup::Answer { records: Vec::new(), soa };
+            return ZoneLookup::Answer { records: Vec::new(), soa, recurse_target: None };
         }
 
         if data.ancestors.contains(qname) {
             // A7: an empty non-terminal is NODATA, not NXDOMAIN — RFC 8020
             // makes a downstream resolver treat NXDOMAIN here as "nothing
             // below this name exists either," which is false.
-            return ZoneLookup::Answer { records: Vec::new(), soa };
+            return ZoneLookup::Answer { records: Vec::new(), soa, recurse_target: None };
         }
 
         // B10: single-label wildcard expansion only — "*.parent" matches a
@@ -532,6 +543,7 @@ impl ZoneStore {
                         .filter(|r| r.record_type() == qtype)
                         .map(|r| rewrite_owner(r, qname))
                         .collect();
+                    let mut recurse_target = None;
                     if matched.is_empty() && qtype != RecordType::CNAME {
                         matched = recs
                             .iter()
@@ -539,10 +551,10 @@ impl ZoneStore {
                             .map(|r| rewrite_owner(r, qname))
                             .collect();
                         if !matched.is_empty() {
-                            matched = chase_in_zone_cname(data, matched, zone, qtype);
+                            (matched, recurse_target) = chase_in_zone_cname(data, matched, qtype);
                         }
                     }
-                    return ZoneLookup::Answer { records: matched, soa };
+                    return ZoneLookup::Answer { records: matched, soa, recurse_target };
                 }
             }
         }
@@ -630,7 +642,7 @@ mod tests {
         store.publish(vec![entry("passbolt.bluenetworks.lab", "bluenetworks.lab", "A", "10.0.0.5")]);
 
         match store.lookup("passbolt.bluenetworks.lab.", RecordType::AAAA) {
-            ZoneLookup::Answer { records, soa } => {
+            ZoneLookup::Answer { records, soa, .. } => {
                 assert!(records.is_empty());
                 assert!(soa.is_some(), "NODATA must carry the zone's SOA (A4)");
             }
@@ -714,7 +726,7 @@ mod tests {
         store.publish(vec![entry("_ldap._tcp.corp.lab", "corp.lab", "SRV", "0 389 dc.corp.lab")]);
 
         match store.lookup("_tcp.corp.lab.", RecordType::A) {
-            ZoneLookup::Answer { records, soa } => {
+            ZoneLookup::Answer { records, soa, .. } => {
                 assert!(records.is_empty());
                 assert!(soa.is_some());
             }
@@ -753,6 +765,26 @@ mod tests {
                 assert_eq!(records[1].record_type(), RecordType::A);
             }
             _ => panic!("expected CNAME chain and terminal A record"),
+        }
+    }
+
+    #[test]
+    fn external_cname_exposes_target_for_recursive_completion() {
+        let store = ZoneStore::empty();
+        store.publish(vec![entry(
+            "tracking.bluenetworks.it",
+            "bluenetworks.it",
+            "CNAME",
+            "tracking.dkimbox.com",
+        )]);
+
+        match store.lookup("tracking.bluenetworks.it.", RecordType::A) {
+            ZoneLookup::Answer { records, recurse_target, .. } => {
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].record_type(), RecordType::CNAME);
+                assert_eq!(recurse_target.as_deref(), Some("tracking.dkimbox.com"));
+            }
+            _ => panic!("expected external CNAME target"),
         }
     }
 

@@ -933,16 +933,37 @@ pub(crate) async fn build_response(
     let qtype_str = format!("{qtype:?}");
     let recursion_desired = query.recursion_desired();
 
-    // Stub zones (design.md §7.3, §DNS-Zones) win outright: if the qname
-    // falls under a locally-hosted zone, answer authoritatively without
-    // ever consulting the policy bundle or forwarding upstream.
+    // Stub zones (design.md §7.3, §DNS-Zones) win authoritatively. The one
+    // exception is an external CNAME target: with RD=1 and a loaded tenant
+    // policy, RFC 1034 §4.3.2 requires the recursive server to complete the
+    // original query type at the canonical name.
     match zones.lookup(&qname, qtype) {
-        ZoneLookup::Answer { records, soa } => {
+        ZoneLookup::Answer { records, soa, recurse_target } => {
             response.set_authoritative(true);
             response.set_response_code(ResponseCode::NoError);
             let is_nodata = records.is_empty();
             for rec in records {
                 response.add_answer(rec);
+            }
+            if recursion_desired {
+                if let (Some(target), Some(bundle)) = (recurse_target, bundle) {
+                    let target = format!("{target}.");
+                    let categories = matched_categories(bundle, &target);
+                    resolve_records(
+                        &target,
+                        qtype,
+                        &categories,
+                        Some(&bundle.group_id),
+                        true,
+                        cache,
+                        forwarder,
+                        &mut response,
+                    )
+                    .await;
+                    // The locally-authored CNAME is not DNSSEC-validated,
+                    // even if the external terminal RRset was.
+                    response.set_authentic_data(false);
+                }
             }
             if is_nodata {
                 // A4 / RFC 2308 §3: NODATA needs the zone's SOA in the
@@ -1462,6 +1483,38 @@ mod tests {
         }
     }
 
+    struct ExternalCnameForwarder;
+
+    #[async_trait::async_trait]
+    impl Forwarder for ExternalCnameForwarder {
+        async fn lookup(
+            &self,
+            _qname: &str,
+            _qtype: RecordType,
+            _categories: &[String],
+        ) -> Result<LookupOutcome> {
+            anyhow::bail!("external local CNAME must use the group-scoped lookup")
+        }
+
+        async fn lookup_scoped(
+            &self,
+            qname: &str,
+            qtype: RecordType,
+            _categories: &[String],
+            group_id: Option<&str>,
+        ) -> Result<LookupOutcome> {
+            assert_eq!(qname, "tracking.dkimbox.com.");
+            assert_eq!(qtype, RecordType::A);
+            assert_eq!(group_id, Some("group-a"));
+            Ok(vec![Record::from_rdata(
+                qname.parse()?,
+                60,
+                RData::A(A(std::net::Ipv4Addr::new(203, 0, 113, 8))),
+            )]
+            .into())
+        }
+    }
+
     /// Always errors with something that doesn't downcast to a hickory
     /// `ResolveError` — exercises resolve_records' `_ =>` ServFail branch.
     /// Counts calls so tests can prove a cache hit skipped a second one.
@@ -1936,6 +1989,58 @@ mod tests {
         .await;
         assert!(hit);
         assert!(second.authentic_data(), "cache hit must still assert AD");
+    }
+
+    #[tokio::test]
+    async fn build_response_completes_an_external_local_cname() {
+        let zones = ZoneStore::empty();
+        zones.publish(vec![zone_store::LocalZoneRecordDto {
+            name: "tracking.bluenetworks.it".into(),
+            zone: "bluenetworks.it".into(),
+            record_type: "CNAME".into(),
+            ttl: 300,
+            data: "tracking.dkimbox.com".into(),
+            priority: None,
+        }]);
+        let bundle = Bundle { group_id: "group-a".into(), ..Default::default() };
+
+        let response = build_response(
+            &a_query("tracking.bluenetworks.it."),
+            Some(&bundle),
+            &zones,
+            "127.0.0.1".parse().unwrap(),
+            &DnsCache::new(10),
+            &ExternalCnameForwarder,
+            &TelemetryEmitter::noop(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.response_code(), ResponseCode::NoError);
+        assert!(response.authoritative());
+        assert_eq!(response.answers().len(), 2);
+        assert_eq!(response.answers()[0].record_type(), RecordType::CNAME);
+        assert_eq!(response.answers()[1].record_type(), RecordType::A);
+        assert_eq!(response.answers()[1].name().to_utf8(), "tracking.dkimbox.com.");
+
+        let mut no_recursion = a_query("tracking.bluenetworks.it.");
+        no_recursion.set_recursion_desired(false);
+        let response = build_response(
+            &no_recursion,
+            Some(&bundle),
+            &zones,
+            "127.0.0.1".parse().unwrap(),
+            &DnsCache::new(10),
+            &ExternalCnameForwarder,
+            &TelemetryEmitter::noop(),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.response_code(), ResponseCode::NoError);
+        assert_eq!(response.answers().len(), 1);
+        assert_eq!(response.answers()[0].record_type(), RecordType::CNAME);
     }
 
     #[tokio::test]
