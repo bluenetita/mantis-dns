@@ -27,17 +27,36 @@ use std::time::{Duration, Instant};
 
 use hickory_proto::rr::Record;
 
-/// Which kind of negative answer a cached NXDOMAIN/NODATA result represents,
-/// so a cache hit can set the right response code without re-asking upstream.
+/// Which kind of negative answer a cached NXDOMAIN/NODATA/ServFail result
+/// represents, so a cache hit can set the right response code without
+/// re-asking upstream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NegativeKind {
     NxDomain,
     NoData,
+    /// RFC 9520: caching a resolution failure is a MUST, precisely because
+    /// the uncached case turns one broken upstream zone into a retry storm.
+    /// Callers should use a short, fixed TTL for this — see
+    /// `SERVFAIL_CACHE_TTL_S` in lib.rs — independent of the tenant's
+    /// ordinary negative-TTL policy, since a resolution failure is more
+    /// likely to be transient than a real NXDOMAIN/NODATA.
+    ServFail,
 }
 
 enum CacheEntryKind {
-    Records(Vec<Record>),
-    Negative(NegativeKind),
+    /// `authenticated` mirrors `LookupOutcome::authenticated` (Phase 3 / RFC
+    /// 4035 §4.9): a repeat cache hit must set the client-facing AD bit the
+    /// same way a fresh lookup would, not silently drop back to "not
+    /// authenticated" just because the second query happened to be served
+    /// from cache.
+    Records { records: Vec<Record>, authenticated: bool },
+    /// `soa` is the upstream's authority-section SOA (A4 / RFC 2308 §3),
+    /// when the forwarder's error carried one — `None` for a ServFail, or
+    /// for a NODATA signaled via an empty `Ok(vec![])` rather than a real
+    /// upstream error (see `resolve_records`). Boxed: `Record` is ~280
+    /// bytes and clippy flags the size gap against `Records(Vec<_>)`'s
+    /// 24-byte pointer/len/cap otherwise.
+    Negative { kind: NegativeKind, soa: Option<Box<Record>> },
 }
 
 struct CacheEntry {
@@ -46,10 +65,11 @@ struct CacheEntry {
 }
 
 /// Result of a cache lookup: either the cached positive records, or a
-/// negative answer (NXDOMAIN/NODATA) cached from a prior upstream response.
+/// negative answer (NXDOMAIN/NODATA/ServFail) cached from a prior upstream
+/// response.
 pub enum CacheLookup {
-    Records(Vec<Record>),
-    Negative(NegativeKind),
+    Records { records: Vec<Record>, authenticated: bool },
+    Negative { kind: NegativeKind, soa: Option<Box<Record>> },
 }
 
 pub struct DnsCache {
@@ -83,14 +103,16 @@ impl DnsCache {
         let remaining_ttl = u32::try_from(entry.expires_at.duration_since(now).as_secs())
             .unwrap_or(u32::MAX);
         Some(match &entry.kind {
-            CacheEntryKind::Records(records) => {
+            CacheEntryKind::Records { records, authenticated } => {
                 let mut records = records.clone();
                 for rec in &mut records {
                     rec.set_ttl(remaining_ttl);
                 }
-                CacheLookup::Records(records)
+                CacheLookup::Records { records, authenticated: *authenticated }
             }
-            CacheEntryKind::Negative(kind) => CacheLookup::Negative(*kind),
+            CacheEntryKind::Negative { kind, soa } => {
+                CacheLookup::Negative { kind: *kind, soa: soa.clone() }
+            }
         })
     }
 
@@ -120,19 +142,21 @@ impl DnsCache {
         );
     }
 
-    pub fn put(&self, qname: String, qtype: u16, records: Vec<Record>, ttl: Duration) {
+    pub fn put(&self, qname: String, qtype: u16, records: Vec<Record>, authenticated: bool, ttl: Duration) {
         if records.is_empty() {
             return;
         }
-        self.insert(qname, qtype, CacheEntryKind::Records(records), ttl);
+        self.insert(qname, qtype, CacheEntryKind::Records { records, authenticated }, ttl);
     }
 
-    /// Caches a negative (NXDOMAIN/NODATA) upstream answer. Without this, a
-    /// flood of queries for random non-existent subdomains ("water torture")
-    /// never hits the cache and forces an upstream round-trip on every single
-    /// packet — amplifying attacker traffic straight into the resolver pool.
-    pub fn put_negative(&self, qname: String, qtype: u16, kind: NegativeKind, ttl: Duration) {
-        self.insert(qname, qtype, CacheEntryKind::Negative(kind), ttl);
+    /// Caches a negative (NXDOMAIN/NODATA/ServFail) upstream answer. Without
+    /// this, a flood of queries for random non-existent subdomains ("water
+    /// torture") never hits the cache and forces an upstream round-trip on
+    /// every single packet — amplifying attacker traffic straight into the
+    /// resolver pool. `soa` is cached alongside so a repeat *cache hit* still
+    /// carries the authority-section SOA a fresh miss would (A4).
+    pub fn put_negative(&self, qname: String, qtype: u16, kind: NegativeKind, soa: Option<Record>, ttl: Duration) {
+        self.insert(qname, qtype, CacheEntryKind::Negative { kind, soa: soa.map(Box::new) }, ttl);
     }
 
     pub fn purge_expired(&self) {
@@ -161,11 +185,29 @@ mod tests {
             "example.com".into(),
             u16::from(RecordType::A),
             vec![rec.clone()],
+            false,
             Duration::from_secs(60),
         );
         match cache.get("example.com", u16::from(RecordType::A)) {
-            Some(CacheLookup::Records(records)) => assert_eq!(records.len(), 1),
+            Some(CacheLookup::Records { records, .. }) => assert_eq!(records.len(), 1),
             other => panic!("expected a positive cache hit, got {}", other.is_some()),
+        }
+    }
+
+    #[test]
+    fn put_then_get_carries_the_authenticated_flag() {
+        let cache = DnsCache::new(10);
+        let rec = a_record("secure.example.com", Ipv4Addr::new(1, 2, 3, 4));
+        cache.put(
+            "secure.example.com".into(),
+            u16::from(RecordType::A),
+            vec![rec],
+            true,
+            Duration::from_secs(60),
+        );
+        match cache.get("secure.example.com", u16::from(RecordType::A)) {
+            Some(CacheLookup::Records { authenticated: true, .. }) => {}
+            _ => panic!("expected the cached hit to still report authenticated (Phase 3)"),
         }
     }
 
@@ -176,11 +218,29 @@ mod tests {
             "doesnotexist.example".into(),
             u16::from(RecordType::A),
             NegativeKind::NxDomain,
+            None,
             Duration::from_secs(60),
         );
         match cache.get("doesnotexist.example", u16::from(RecordType::A)) {
-            Some(CacheLookup::Negative(NegativeKind::NxDomain)) => {}
+            Some(CacheLookup::Negative { kind: NegativeKind::NxDomain, .. }) => {}
             _ => panic!("expected a cached NXDOMAIN"),
+        }
+    }
+
+    #[test]
+    fn put_negative_caches_the_soa_alongside_the_kind() {
+        let cache = DnsCache::new(10);
+        let soa = a_record("bluenetworks.lab", Ipv4Addr::LOCALHOST); // stand-in record, only identity matters here
+        cache.put_negative(
+            "doesnotexist.example".into(),
+            u16::from(RecordType::A),
+            NegativeKind::NxDomain,
+            Some(soa),
+            Duration::from_secs(60),
+        );
+        match cache.get("doesnotexist.example", u16::from(RecordType::A)) {
+            Some(CacheLookup::Negative { soa: Some(_), .. }) => {}
+            _ => panic!("expected the cached SOA to survive the round trip (A4)"),
         }
     }
 
@@ -191,6 +251,7 @@ mod tests {
             "doesnotexist.example".into(),
             u16::from(RecordType::A),
             NegativeKind::NoData,
+            None,
             Duration::from_millis(1),
         );
         std::thread::sleep(Duration::from_millis(10));
@@ -205,6 +266,7 @@ mod tests {
             "example.com".into(),
             u16::from(RecordType::A),
             vec![rec],
+            false,
             Duration::from_secs(60),
         );
         // AAAA miss even though A is cached
@@ -219,6 +281,7 @@ mod tests {
             "example.com".into(),
             u16::from(RecordType::A),
             vec![rec],
+            false,
             Duration::from_millis(0),
         );
         std::thread::sleep(Duration::from_millis(5));
@@ -233,6 +296,7 @@ mod tests {
             "Example.com".into(),
             u16::from(RecordType::A),
             vec![rec],
+            false,
             Duration::from_secs(60),
         );
         assert!(cache.get("example.com", u16::from(RecordType::A)).is_some());
@@ -243,9 +307,9 @@ mod tests {
     fn evicts_when_over_capacity() {
         let cache = DnsCache::new(2);
         let dummy = a_record("x.example", Ipv4Addr::LOCALHOST);
-        cache.put("a.example".into(), 1, vec![dummy.clone()], Duration::from_secs(60));
-        cache.put("b.example".into(), 1, vec![dummy.clone()], Duration::from_secs(60));
-        cache.put("c.example".into(), 1, vec![dummy], Duration::from_secs(60));
+        cache.put("a.example".into(), 1, vec![dummy.clone()], false, Duration::from_secs(60));
+        cache.put("b.example".into(), 1, vec![dummy.clone()], false, Duration::from_secs(60));
+        cache.put("c.example".into(), 1, vec![dummy], false, Duration::from_secs(60));
         let map = cache.map.read().unwrap();
         assert!(map.len() <= 2);
     }

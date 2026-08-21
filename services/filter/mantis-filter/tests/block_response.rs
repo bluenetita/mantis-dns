@@ -29,7 +29,7 @@ use hickory_proto::rr::{rdata::A, Name, RData, Record, RecordType};
 use hickory_proto::serialize::binary::{BinDecodable, BinEncodable};
 use mantis_bundle::gen::FailurePolicy;
 use mantis_bundle::{BlockMode, BlockResponse, Bundle};
-use mantis_filter::{run_udp_server, AppState, Forwarder};
+use mantis_filter::{run_udp_server, AppState, Forwarder, LookupOutcome};
 use prost::Message as _;
 use tokio::net::UdpSocket;
 
@@ -42,16 +42,17 @@ impl Forwarder for MockForwarder {
         qname: &str,
         qtype: RecordType,
         _categories: &[String],
-    ) -> anyhow::Result<Vec<Record>> {
+    ) -> anyhow::Result<LookupOutcome> {
         if qtype == RecordType::A {
             let name: Name = qname.parse().unwrap_or_else(|_| "example.com.".parse().unwrap());
             Ok(vec![Record::from_rdata(
                 name,
                 60,
                 RData::A(A(Ipv4Addr::new(198, 51, 100, 1))),
-            )])
+            )]
+            .into())
         } else {
-            Ok(vec![])
+            Ok(vec![].into())
         }
     }
 }
@@ -61,7 +62,7 @@ fn signed_bundle(signing_key: &SigningKey, block: Option<BlockResponse>) -> Bund
         tenant_id: "t".into(),
         group_id: "g".into(),
         version: 1,
-        deny_overrides: vec!["blocked.example".into()],
+        deny_overrides: vec!["blocked.example.com".into()],
         on_load_failure: FailurePolicy::FailOpen as i32,
         block_response: block,
         ..Default::default()
@@ -115,7 +116,7 @@ fn redirect(v4: &str, v6: &str, ttl: u32) -> BlockResponse {
 #[tokio::test]
 async fn default_block_is_nxdomain() {
     let server = start_server(None).await;
-    let resp = query(server, "blocked.example", RecordType::A).await;
+    let resp = query(server, "blocked.example.com", RecordType::A).await;
     assert_eq!(resp.response_code(), ResponseCode::NXDomain);
     assert_eq!(resp.answer_count(), 0);
 }
@@ -123,7 +124,7 @@ async fn default_block_is_nxdomain() {
 #[tokio::test]
 async fn redirect_mode_returns_configured_a_record() {
     let server = start_server(Some(redirect("10.0.0.53", "", 30))).await;
-    let resp = query(server, "blocked.example", RecordType::A).await;
+    let resp = query(server, "blocked.example.com", RecordType::A).await;
 
     assert_eq!(resp.response_code(), ResponseCode::NoError);
     let answers = resp.answers();
@@ -141,7 +142,7 @@ async fn redirect_aaaa_without_v6_is_nodata_not_nxdomain() {
     // NXDOMAIN would tell dual-stack stubs the whole name doesn't exist and
     // poison the A lookup that carries the redirect.
     let server = start_server(Some(redirect("10.0.0.53", "", 30))).await;
-    let resp = query(server, "blocked.example", RecordType::AAAA).await;
+    let resp = query(server, "blocked.example.com", RecordType::AAAA).await;
     assert_eq!(resp.response_code(), ResponseCode::NoError);
     assert_eq!(resp.answer_count(), 0);
 }
@@ -154,7 +155,7 @@ async fn zero_ip_mode_returns_unspecified_address() {
         ..Default::default()
     }))
     .await;
-    let resp = query(server, "blocked.example", RecordType::A).await;
+    let resp = query(server, "blocked.example.com", RecordType::A).await;
     assert_eq!(resp.response_code(), ResponseCode::NoError);
     match resp.answers()[0].data() {
         RData::A(a) => assert_eq!(a.0, Ipv4Addr::UNSPECIFIED),
@@ -167,7 +168,7 @@ async fn redirect_non_address_qtype_is_nodata() {
     // MX/TXT/etc under REDIRECT: the name "exists" (sinkholed) but has no such
     // record — NODATA, so only web navigations (A/AAAA) reach the block page.
     let server = start_server(Some(redirect("10.0.0.53", "", 30))).await;
-    let resp = query(server, "blocked.example", RecordType::MX).await;
+    let resp = query(server, "blocked.example.com", RecordType::MX).await;
     assert_eq!(resp.response_code(), ResponseCode::NoError);
     assert_eq!(resp.answer_count(), 0);
 }
@@ -175,7 +176,7 @@ async fn redirect_non_address_qtype_is_nodata() {
 #[tokio::test]
 async fn allowed_domain_unaffected_by_redirect_mode() {
     let server = start_server(Some(redirect("10.0.0.53", "", 30))).await;
-    let resp = query(server, "allowed.example", RecordType::A).await;
+    let resp = query(server, "allowed.example.com", RecordType::A).await;
     // Resolves through the mock forwarder, not the redirect IP.
     assert_eq!(resp.response_code(), ResponseCode::NoError);
     match resp.answers()[0].data() {

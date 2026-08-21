@@ -41,7 +41,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwapOption;
 use ed25519_dalek::{Signature, VerifyingKey};
-use hickory_proto::rr::{Name, Record, RecordType};
+use hickory_proto::rr::{Name, RecordType};
 use hickory_proto::xfer::Protocol;
 use hickory_resolver::config::{NameServerConfig, ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::TokioConnectionProvider;
@@ -50,7 +50,7 @@ use serde::Deserialize;
 use tracing::{debug, info, warn};
 
 use crate::health_monitor::HealthStore;
-use crate::{tls_pin, Forwarder, TtlPolicy};
+use crate::{dnssec_outcome, tls_pin, Forwarder, LookupOutcome, TtlPolicy};
 
 // ── Bundle JSON types ──────────────────────────────────────────────────────────
 
@@ -409,7 +409,7 @@ impl UpstreamBundleForwarder {
         hit
     }
 
-    async fn lookup_via_fallback(&self, qname: &str, qtype: RecordType) -> Result<Vec<Record>> {
+    async fn lookup_via_fallback(&self, qname: &str, qtype: RecordType) -> Result<LookupOutcome> {
         match &self.fallback {
             Some(r) => do_lookup(qname, qtype, r).await,
             None => bail!(
@@ -421,7 +421,7 @@ impl UpstreamBundleForwarder {
 
 #[async_trait::async_trait]
 impl Forwarder for UpstreamBundleForwarder {
-    async fn lookup(&self, qname: &str, qtype: RecordType, categories: &[String]) -> Result<Vec<Record>> {
+    async fn lookup(&self, qname: &str, qtype: RecordType, categories: &[String]) -> Result<LookupOutcome> {
         let bundle = match self.store.current() {
             Some(b) => b,
             None => return self.lookup_via_fallback(qname, qtype).await,
@@ -474,10 +474,10 @@ async fn do_lookup(
     qname: &str,
     qtype: RecordType,
     resolver: &Resolver<TokioConnectionProvider>,
-) -> Result<Vec<Record>> {
+) -> Result<LookupOutcome> {
     let name: Name = qname.parse().context("invalid qname")?;
     let lookup = resolver.lookup(name, qtype).await?;
-    Ok(lookup.records().to_vec())
+    Ok(dnssec_outcome(lookup))
 }
 
 // ── Builder helpers ────────────────────────────────────────────────────────────

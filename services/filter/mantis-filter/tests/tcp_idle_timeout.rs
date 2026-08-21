@@ -26,10 +26,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ed25519_dalek::{Signer, SigningKey};
-use hickory_proto::rr::{Record, RecordType};
+use hickory_proto::rr::RecordType;
 use mantis_bundle::gen::FailurePolicy;
 use mantis_bundle::Bundle;
-use mantis_filter::{run_tcp_server, AppState, Forwarder};
+use mantis_filter::{run_tcp_server, AppState, Forwarder, LookupOutcome};
 use prost::Message as _;
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -43,8 +43,8 @@ impl Forwarder for MockForwarder {
         _qname: &str,
         _qtype: RecordType,
         _categories: &[String],
-    ) -> anyhow::Result<Vec<Record>> {
-        Ok(vec![])
+    ) -> anyhow::Result<LookupOutcome> {
+        Ok(vec![].into())
     }
 }
 
@@ -127,7 +127,7 @@ async fn connection_that_sends_promptly_is_not_closed_by_the_idle_timer() {
     msg.set_message_type(MessageType::Query);
     msg.set_op_code(OpCode::Query);
     msg.set_recursion_desired(true);
-    msg.add_query(Query::query(Name::from_ascii("still-alive.example.").unwrap(), RecordType::A));
+    msg.add_query(Query::query(Name::from_ascii("still-alive.example.com.").unwrap(), RecordType::A));
     let wire = msg.to_bytes().unwrap();
 
     client.write_u16(wire.len() as u16).await.unwrap();

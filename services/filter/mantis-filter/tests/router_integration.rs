@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use mantis_bundle::gen::FailurePolicy;
 use mantis_bundle::Bundle;
-use mantis_filter::{run_router_udp_server, Forwarder, TenantRouter};
+use mantis_filter::{run_router_udp_server, Forwarder, LookupOutcome, TenantRouter};
 use ed25519_dalek::{Signer, SigningKey};
 use hickory_proto::op::{Message, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::{rdata::A, Name, RData, Record, RecordType};
@@ -38,16 +38,17 @@ struct MockForwarder;
 
 #[async_trait::async_trait]
 impl Forwarder for MockForwarder {
-    async fn lookup(&self, qname: &str, qtype: RecordType, _categories: &[String]) -> anyhow::Result<Vec<Record>> {
+    async fn lookup(&self, qname: &str, qtype: RecordType, _categories: &[String]) -> anyhow::Result<LookupOutcome> {
         if qtype == RecordType::A {
             let name: Name = qname.parse().unwrap_or_else(|_| "example.com.".parse().unwrap());
             Ok(vec![Record::from_rdata(
                 name,
                 60,
                 RData::A(A(Ipv4Addr::new(198, 51, 100, 1))),
-            )])
+            )]
+            .into())
         } else {
-            Ok(vec![])
+            Ok(vec![].into())
         }
     }
 }
@@ -61,15 +62,16 @@ impl Forwarder for FixedForwarder {
         qname: &str,
         qtype: RecordType,
         _categories: &[String],
-    ) -> anyhow::Result<Vec<Record>> {
+    ) -> anyhow::Result<LookupOutcome> {
         if qtype != RecordType::A {
-            return Ok(vec![]);
+            return Ok(vec![].into());
         }
         Ok(vec![Record::from_rdata(
             qname.parse()?,
             60,
             RData::A(A(self.0)),
-        )])
+        )]
+        .into())
     }
 }
 
@@ -153,14 +155,14 @@ async fn routes_different_source_ips_to_different_tenant_policies() {
         &router,
         "127.0.0.2/32".parse().unwrap(),
         "group-a",
-        signed_bundle(&signing_key, "group-a", "blocked-for-a.example"),
+        signed_bundle(&signing_key, "group-a", "blocked-for-a.example.com"),
         &public_key,
     );
     mantis_filter::test_support::inject_route(
         &router,
         "127.0.0.3/32".parse().unwrap(),
         "group-b",
-        signed_bundle(&signing_key, "group-b", "blocked-for-b.example"),
+        signed_bundle(&signing_key, "group-b", "blocked-for-b.example.com"),
         &public_key,
     );
 
@@ -174,22 +176,22 @@ async fn routes_different_source_ips_to_different_tenant_policies() {
 
     // group-a's source IP: its own deny-listed domain is blocked...
     assert_eq!(
-        query_from("127.0.0.2:0", server_addr, "blocked-for-a.example").await,
+        query_from("127.0.0.2:0", server_addr, "blocked-for-a.example.com").await,
         ResponseCode::NXDomain
     );
     // ...but group-b's deny-listed domain is NOT blocked for group-a (wrong tenant's rule).
     assert_eq!(
-        query_from("127.0.0.2:0", server_addr, "blocked-for-b.example").await,
+        query_from("127.0.0.2:0", server_addr, "blocked-for-b.example.com").await,
         ResponseCode::NoError
     );
 
     // And it's symmetric from group-b's source IP.
     assert_eq!(
-        query_from("127.0.0.3:0", server_addr, "blocked-for-b.example").await,
+        query_from("127.0.0.3:0", server_addr, "blocked-for-b.example.com").await,
         ResponseCode::NXDomain
     );
     assert_eq!(
-        query_from("127.0.0.3:0", server_addr, "blocked-for-a.example").await,
+        query_from("127.0.0.3:0", server_addr, "blocked-for-a.example.com").await,
         ResponseCode::NoError
     );
 }
@@ -208,7 +210,7 @@ async fn unmatched_source_ip_fails_open_to_servfail() {
     });
 
     assert_eq!(
-        query_from("127.0.0.4:0", server_addr, "anything.example").await,
+        query_from("127.0.0.4:0", server_addr, "anything.example.com").await,
         ResponseCode::ServFail
     );
 }
@@ -223,7 +225,7 @@ async fn tenant_routes_isolate_upstream_forwarders_and_caches() {
         &router,
         "127.0.0.5/32".parse().unwrap(),
         "group-a",
-        signed_bundle_for_tenant(&signing_key, "tenant-a", "group-a", "never.invalid"),
+        signed_bundle_for_tenant(&signing_key, "tenant-a", "group-a", "never.example.net"),
         &public_key,
         Arc::new(FixedForwarder(Ipv4Addr::new(192, 0, 2, 10))),
     );
@@ -231,7 +233,7 @@ async fn tenant_routes_isolate_upstream_forwarders_and_caches() {
         &router,
         "127.0.0.6/32".parse().unwrap(),
         "group-b",
-        signed_bundle_for_tenant(&signing_key, "tenant-b", "group-b", "never.invalid"),
+        signed_bundle_for_tenant(&signing_key, "tenant-b", "group-b", "never.example.net"),
         &public_key,
         Arc::new(FixedForwarder(Ipv4Addr::new(192, 0, 2, 20))),
     );
@@ -245,11 +247,11 @@ async fn tenant_routes_isolate_upstream_forwarders_and_caches() {
     // Query the exact same cache key from both tenants. A shared cache or
     // shared forwarder would make the second answer equal the first.
     assert_eq!(
-        query_a("127.0.0.5:0", server_addr, "same.example").await,
+        query_a("127.0.0.5:0", server_addr, "same.example.com").await,
         Ipv4Addr::new(192, 0, 2, 10)
     );
     assert_eq!(
-        query_a("127.0.0.6:0", server_addr, "same.example").await,
+        query_a("127.0.0.6:0", server_addr, "same.example.com").await,
         Ipv4Addr::new(192, 0, 2, 20)
     );
 }

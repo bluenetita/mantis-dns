@@ -226,6 +226,43 @@ def get_routing_table(
     ]
 
 
+def _synthesize_apex_records(zone: models.DnsZone) -> list[schemas.LocalZoneRecord]:
+    """Apex SOA (always) + NS (unless the zone already defines one at "@")
+    for docs/rfc-compliance.md A4/B9: every zone needs an authoritative SOA
+    so mantis-filter can put one in the authority section of a negative
+    answer (NXDOMAIN/NODATA) — without it, a downstream resolver can't
+    negative-cache anything from us. mname/rname/refresh/retry/expire mirror
+    export_zone's existing BIND-format convention below, so a zone reads the
+    same however it's produced. There's no admin-authored SOA to collide
+    with: "SOA" isn't in zone_routers.py's `_RECORD_TYPES`, so a record with
+    that type can never reach the database through the normal API.
+    """
+    serial = int(zone.updated_at.timestamp())
+    records = [
+        schemas.LocalZoneRecord(
+            name=zone.name,
+            zone=zone.name,
+            record_type="SOA",
+            ttl=zone.ttl_default,
+            data=f"ns1.{zone.name}. hostmaster.{zone.name}. {serial} 3600 900 604800 {zone.ttl_default}",
+            priority=None,
+        )
+    ]
+    has_apex_ns = any(r.enabled and r.record_type == "NS" and r.name == "@" for r in zone.records)
+    if not has_apex_ns:
+        records.append(
+            schemas.LocalZoneRecord(
+                name=zone.name,
+                zone=zone.name,
+                record_type="NS",
+                ttl=zone.ttl_default,
+                data=f"ns1.{zone.name}.",
+                priority=None,
+            )
+        )
+    return records
+
+
 @router.get("/local-zones", response_model=list[schemas.LocalZoneRecord])
 def get_local_zone_records(
     group_id: str,
@@ -251,6 +288,7 @@ def get_local_zone_records(
     )
     out: list[schemas.LocalZoneRecord] = []
     for zone in zones:
+        out.extend(_synthesize_apex_records(zone))
         for rec in zone.records:
             if not rec.enabled:
                 continue

@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use mantis_bundle::gen::{Action, BloomParams, FailurePolicy};
 use mantis_bundle::{Bundle, CategorySet};
-use mantis_filter::{run_udp_server, AppState, Forwarder};
+use mantis_filter::{run_udp_server, AppState, Forwarder, LookupOutcome};
 use ed25519_dalek::{Signer, SigningKey};
 use hickory_proto::op::{Message, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::{rdata::A, Name, RData, Record, RecordType};
@@ -38,16 +38,17 @@ struct MockForwarder;
 
 #[async_trait::async_trait]
 impl Forwarder for MockForwarder {
-    async fn lookup(&self, qname: &str, qtype: RecordType, _categories: &[String]) -> anyhow::Result<Vec<Record>> {
+    async fn lookup(&self, qname: &str, qtype: RecordType, _categories: &[String]) -> anyhow::Result<LookupOutcome> {
         if qtype == RecordType::A {
             let name: Name = qname.parse().unwrap_or_else(|_| "example.com.".parse().unwrap());
             Ok(vec![Record::from_rdata(
                 name,
                 60,
                 RData::A(A(Ipv4Addr::new(198, 51, 100, 1))),
-            )])
+            )]
+            .into())
         } else {
-            Ok(vec![])
+            Ok(vec![].into())
         }
     }
 }
@@ -57,8 +58,8 @@ fn signed_test_bundle(signing_key: &SigningKey) -> Bundle {
         tenant_id: "t".into(),
         group_id: "g".into(),
         version: 1,
-        allow_overrides: vec!["allowed-explicitly.example".into()],
-        deny_overrides: vec!["blocked-explicitly.example".into()],
+        allow_overrides: vec!["allowed-explicitly.example.com".into()],
+        deny_overrides: vec!["blocked-explicitly.example.com".into()],
         on_load_failure: FailurePolicy::FailOpen as i32,
         categories: vec![CategorySet {
             category_id: "adult".into(),
@@ -70,7 +71,7 @@ fn signed_test_bundle(signing_key: &SigningKey) -> Bundle {
                 num_bits: 4096,
                 seed: 1234,
             }),
-            bloom_bits: build_bloom_with("category-blocked.example"),
+            bloom_bits: build_bloom_with("category-blocked.example.com"),
             action: Action::Block as i32,
             exact_hashes: vec![],
         }],
@@ -159,7 +160,7 @@ async fn query(server: std::net::SocketAddr, domain: &str) -> ResponseCode {
 async fn allow_override_wins() {
     let (server, _) = start_test_server().await;
     assert_eq!(
-        query(server, "allowed-explicitly.example").await,
+        query(server, "allowed-explicitly.example.com").await,
         ResponseCode::NoError
     );
 }
@@ -168,7 +169,7 @@ async fn allow_override_wins() {
 async fn deny_override_blocks() {
     let (server, _) = start_test_server().await;
     assert_eq!(
-        query(server, "blocked-explicitly.example").await,
+        query(server, "blocked-explicitly.example.com").await,
         ResponseCode::NXDomain
     );
 }
@@ -177,7 +178,7 @@ async fn deny_override_blocks() {
 async fn category_bloom_blocks() {
     let (server, _) = start_test_server().await;
     assert_eq!(
-        query(server, "category-blocked.example").await,
+        query(server, "category-blocked.example.com").await,
         ResponseCode::NXDomain
     );
 }
@@ -186,7 +187,7 @@ async fn category_bloom_blocks() {
 async fn unknown_domain_allowed_by_default() {
     let (server, _) = start_test_server().await;
     assert_eq!(
-        query(server, "totally-unrelated.example").await,
+        query(server, "totally-unrelated.example.com").await,
         ResponseCode::NoError
     );
 }

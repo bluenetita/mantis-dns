@@ -70,6 +70,37 @@ def test_returns_records_for_apex_and_subdomain(db, tenant_and_group):
     assert names == {"bluenetworks.lab", "passbolt.bluenetworks.lab"}
 
 
+def test_zone_gets_a_synthesized_apex_soa_and_ns(db, tenant_and_group):
+    """A4/B9 (docs/rfc-compliance.md): every zone needs an authoritative SOA
+    so mantis-filter can put one in a negative answer's authority section —
+    synthesized here since there's no admin-facing way to author one
+    ("SOA" isn't in zone_routers._RECORD_TYPES)."""
+    zone = DnsZone(tenant_id=tenant_and_group.tenant_id, name="bluenetworks.lab", zone_type="local", enabled=True)
+    db.add(zone)
+    db.commit()
+
+    out = get_local_zone_records(group_id=tenant_and_group.id, db=db, node=_node())
+    by_type = {r.record_type: r for r in out}
+
+    assert set(by_type) == {"SOA", "NS"}
+    assert by_type["SOA"].name == "bluenetworks.lab"
+    assert by_type["SOA"].data.startswith("ns1.bluenetworks.lab. hostmaster.bluenetworks.lab. ")
+    assert by_type["NS"].data == "ns1.bluenetworks.lab."
+
+
+def test_explicit_apex_ns_record_suppresses_the_synthesized_one(db, tenant_and_group):
+    zone = DnsZone(tenant_id=tenant_and_group.tenant_id, name="bluenetworks.lab", zone_type="local", enabled=True)
+    db.add(zone)
+    db.flush()
+    db.add(DnsRecord(zone_id=zone.id, name="@", record_type="NS", data="ns.elsewhere.example.", enabled=True))
+    db.commit()
+
+    out = get_local_zone_records(group_id=tenant_and_group.id, db=db, node=_node())
+    ns_records = [r for r in out if r.record_type == "NS"]
+    assert len(ns_records) == 1
+    assert ns_records[0].data == "ns.elsewhere.example."
+
+
 def test_disabled_record_is_excluded(db, tenant_and_group):
     zone = DnsZone(tenant_id=tenant_and_group.tenant_id, name="bluenetworks.lab", zone_type="local", enabled=True)
     db.add(zone)
@@ -77,7 +108,12 @@ def test_disabled_record_is_excluded(db, tenant_and_group):
     db.add(DnsRecord(zone_id=zone.id, name="old", record_type="A", data="10.0.0.9", enabled=False))
     db.commit()
 
-    assert get_local_zone_records(group_id=tenant_and_group.id, db=db, node=_node()) == []
+    out = get_local_zone_records(group_id=tenant_and_group.id, db=db, node=_node())
+    # The disabled record itself must not appear — but the zone still gets
+    # its synthesized apex SOA/NS (A4/B9) regardless of whether any of its
+    # explicit records are enabled, so the feed isn't empty outright.
+    assert "old.bluenetworks.lab" not in {r.name for r in out}
+    assert {r.record_type for r in out} == {"SOA", "NS"}
 
 
 def test_disabled_zone_is_excluded(db, tenant_and_group):

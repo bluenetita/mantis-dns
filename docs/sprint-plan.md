@@ -48,6 +48,10 @@ Epic N: SIEM syslog export                     (Sprint 22) — see design.md §2
 Epic P: Foundation hardening                   (Sprints 23-25) — see design.md §26, next
 Epic Q: Enterprise entry ticket                (Sprints 26-28) — see design.md §26.10-26.11
 Epic O: Fleet observability / per-node stats   (Sprint 29) — see design.md §23  ← blocked on P, Q
+Epic R: DNS protocol conformance               (Sprints 30-33) — see design.md §27; Phases 1-2 land
+                                                before Epic O Sprint 29 starts, same precedent as P/Q
+                                                jumping ahead of O above — Sprint 29's per-rcode
+                                                counters would otherwise baseline a pre-fix rcode mix
 ```
 
 **2026-07-25 architecture review re-sequenced everything below this line.**
@@ -458,6 +462,163 @@ This epic also unblocks the one item Epic L could not finish: `HealthTab.tsx` (S
 **Exit criteria:** kill one filter node → its row goes stale in the Nodes page within 30 s and stays (never auto-pruned); pin a node to an old bundle → skew banner names it and its version lag; saturate the telemetry channel → drop count is visible in the UI, not just in `journalctl`; a node whose egress to one upstream is blackholed shows that resolver unhealthy *for that node alone*; hot-path benchmark (Epic P Sprint 23, now a real, running check rather than an aspirational reference) shows no p99 regression beyond 10%.
 
 **Deliberately out of scope:** in-flight query gauge (the one metric that can't be derived at the `emit` choke point — needs guards in all four server loops, and QPS + p99 covers saturation for now); alerting delivery (every input a rule wants is now exposed, but the channel decision belongs to §11's open alerting work); per-tenant counter labels on node stats (cardinality the hot path would pay for, already free from `query_events`); node control actions — drain, restart, force refresh — which are a write path to the fleet and a separate security surface; a control-plane fleet-aggregate Prometheus endpoint.
+
+---
+
+## Epic R — DNS protocol conformance (Sprints 30–33)
+
+Full audit and rationale: [`design.md` §27](design.md#27-dns-protocol-conformance)
+and [`docs/rfc-compliance.md`](rfc-compliance.md). Nothing in mantis-filter's
+hand-rolled UDP/TCP listeners had been checked against RFC 1035/6891/2308/7766
+end to end before this epic; the audit found 9 findings that are wrong on the
+wire today (answering QR=1 messages, no SOA on negative answers, empty
+non-terminals returning NXDOMAIN instead of NODATA, among others).
+
+**Sequencing:** Phases 1–2 (Sprints 30–31) must land *before* Epic O Sprint 29
+begins collecting its per-rcode baseline — the same reordering precedent
+Epic P/Q already set against Epic O above. Phases 3–4 (Sprints 32–33) have no
+such constraint and can slip without blocking anything else in this plan.
+
+### Sprint 30 — Phase 1: query sanity + EDNS (**built**, shipped ahead of formal sequencing)
+
+- [x] `services/filter/mantis-filter/src/protocol.rs`: `validate_query`
+  (opcode/class/QDCOUNT/qtype dispatch), `should_process` (QR=1 → drop, no
+  reply), `negotiate_edns` (OPT echo on both UDP and TCP, BADVERS on an
+  unsupported EDNS version), `formerr_for_unparseable` (best-effort FORMERR
+  when a packet's 12-byte header parses but the body doesn't).
+- [x] `build_response` (`lib.rs`) returns `Option<Message>`; all four
+  listener loops (`run_udp_server`, `run_tcp_server`, `run_router_udp_server`,
+  `run_router_tcp_server`) route through the shared module so none of the
+  four can drift from another the way they previously did.
+- [x] RD=0 honored on a cache miss (REFUSED, no outbound lookup); RA cleared
+  on the closed-bootstrap/unmatched-route ServFail path.
+- [x] `enforce_udp_size_limit` truncation reworked: sheds the additional
+  section first, then empties the answer section entirely (TC=1) rather than
+  popping records one at a time — closer to what RFC 6891 §7 and common
+  resolver practice expect from a truncated response.
+
+**Exit criteria (partial — see Not built):** unit + integration test coverage
+for every Phase 1 finding in `protocol.rs` and `lib.rs`'s test module;
+`cargo clippy -D warnings` and the full workspace test suite pass.
+
+**Not built this sprint:** the `ednscomp`/`dig`-based `scripts/conformance.sh`
+gate described in rfc-compliance.md §4 — needs a running compose stack, which
+this pass didn't stand up. Until that script exists and runs in CI, Phase 1's
+correctness rests on the unit/integration suite alone, not a wire-level tool.
+
+### Sprint 31 — Phase 2: negative answers + local zone correctness (**built**)
+
+- [x] Apex SOA/NS synthesis for local zones — control-plane-authored
+  (`get_local_zone_records` in `routers.py`, serial from `DnsZone.updated_at`,
+  see rfc-compliance.md B9 for why control-plane over filter-node-synthesized),
+  with a filter-node-side fallback (`zone_store::synthesize_soa`) so the
+  authority section is never silently empty either way.
+- [x] SOA in the authority section of every NXDOMAIN/NODATA, all three
+  answer paths (stub zone, upstream). **The predicted `Forwarder`
+  trait-signature change didn't happen**: `hickory_resolver::ResolveError`
+  already carries the upstream's SOA on the exact error path both forwarders
+  return through (`into_soa()`) — `resolve_records` just needed to ask.
+  (Block-path SOA stays out of scope — see D3, no real zone backs a blocked
+  name; EDE in Phase 4 is the right mitigation there instead.)
+- [x] Empty non-terminals → NODATA, CNAME returned instead of NODATA at a
+  different qtype, single-label wildcard support in local zones (deliberate
+  simplification — not the full RFC 4592 closest-encloser algorithm).
+  ANY's local half needed no change (already NODATA, never forwarded); ANY
+  forwarding stays Phase 4 (B5).
+- [x] TXT record chunking past the 255-byte character-string limit.
+- [x] Built-in special-use/RFC 6303 empty zones (`.onion`, `.local`,
+  `10.in-addr.arpa`, etc.) as an always-present `ZoneStore` layer, overridden
+  by a same-apex tenant zone if one exists.
+- [x] SERVFAIL caching (`NegativeKind::ServFail`, fixed 30s TTL per RFC 9520).
+
+**Exit criteria (verified):** a non-existent name under a local zone returns
+NXDOMAIN *with* SOA; an empty non-terminal returns NOERROR/NODATA; `.onion`
+and `10.in-addr.arpa` never appear in an upstream packet capture (unit-tested
+against `ZoneStore::empty()`); a blackholed upstream produces exactly one
+attempt per SERVFAIL TTL (`resolve_records_caches_servfail_...` test). SOA
+extraction from a real `hickory_resolver::ResolveError` (not a mock) is
+pinned by `resolve_records_attaches_the_upstreams_own_soa_on_nxdomain`.
+`cargo clippy -D warnings`, the full Rust workspace test suite (mantis-filter,
+mantis-bundle, mantis-policy), `ruff`, and `mypy` all pass. `scripts/conformance.sh`
+(live `dig`/`ednscomp` gate) remains unbuilt, same gap Sprint 30 left open.
+
+### Sprint 32 — Phase 3: DNSSEC transparency (**partially built**)
+
+- [x] AD propagated to the client — but honestly, from *this resolver's own*
+  validation, not a pass-through of upstream's raw AD bit (hickory's
+  `Resolver::lookup()` doesn't expose that). `Forwarder::lookup` now returns
+  `LookupOutcome { records, authenticated }`; `authenticated` reflects
+  `dnssec_record_iter()`'s per-record `Proof`, only ever `true` when
+  `dnssec_strict` (§21.5) is on and every record proved `Secure`. Cached
+  alongside the record set so a cache hit still asserts AD. Filtering stays
+  a synthesized unsigned answer + Extended DNS Error (Phase 4), not a fake
+  signature — see design.md §27.2.
+- [x] DO echoed back on our own response (`protocol::negotiate_edns`).
+- [ ] **Not built, and re-scoped as separate future work, not a Sprint 32
+  remainder:** RRSIG/NSEC/NSEC3 pass-through and per-query CD-driven bypass
+  of `dnssec_strict`. Both need a lower-level DNS client
+  (`hickory-client`'s `AsyncClient`/raw `DnsHandle`) as a second resolution
+  path alongside the existing `hickory-resolver`-based one — `Resolver::lookup()`
+  filters every answer down to the single requested record type by design,
+  so DO on the wire can't make RRSIG data appear through it regardless of
+  anything this sprint could add. See design.md §27.2 for the full
+  explanation; **neither of the two options this sprint originally listed
+  (transparent pass-through vs. local validation) had this right** — track
+  the real fix as its own item if a customer needs a validating stub
+  resolver downstream of a Mantis node.
+
+**Exit criteria (for the shipped half):** a query with `dnssec_strict` on
+against a domain with a valid chain gets AD=1; the same query against a
+domain with a broken chain (or with `dnssec_strict` off) gets AD=0; a cache
+hit preserves whichever of those the original lookup produced — all pinned
+by `dnssec_outcome_authenticated_only_when_every_record_is_secure` and
+`resolve_records_sets_authentic_data_and_caches_it`. No regression in
+`dnssec_strict` health-probe behavior (§21.5) — unaffected, since no new
+validation was added. The originally-planned `dnsviz` exit criterion doesn't
+apply to what shipped; it's relevant again once RRSIG pass-through exists.
+
+### Sprint 33 — Phase 4: hardening (**partially built**)
+
+- [x] Extended DNS Errors (RFC 8914) on blocked answers — info-code 17
+  (Filtered), the client-visible signal that a filtering deviation, not a
+  lookup failure, produced this answer. `protocol::attach_extended_error`,
+  called from `build_response`'s block path.
+- [x] `edns-tcp-keepalive` (RFC 7828) on TCP responses.
+- [x] TCP out-of-order pipelining (RFC 7766 §6.2.1.1, §7) — both TCP
+  listener loops split into a reader that spawns each query onto its own
+  task (bounded, `MAX_PIPELINED_TCP_QUERIES_PER_CONN` = 16) and a writer
+  task draining an mpsc channel in completion order. Proved with a real
+  client in `tests/tcp_pipelining.rs`: pipelines a slow query then a fast
+  one with no read in between, asserts the fast answer comes off the wire
+  first.
+- [x] DNS Cookies (RFC 7873) — compute/verify only, no enforcement. **Scope
+  correction found while implementing**: the plan assumed
+  BADCOOKIE-on-mismatch was the point; RFC 7873 §5.2 actually makes that an
+  optional under-load policy, and enforcing it unconditionally would reject
+  legitimate clients on every one of this process's own restarts (which
+  rotate the cookie secret by design). See design.md §27.3.
+- [ ] **Not started, re-scoped as its own future item, not a Sprint 33
+  remainder:** `IP_PKTINFO`/`IPV6_RECVPKTINFO` source-address selection on
+  multi-homed nodes — real bug, but needs `sendmsg`/`recvmsg` ancillary-data
+  support tokio's `UdpSocket` doesn't expose, unsafe platform-specific code,
+  and real multi-homed hardware to verify against, none of which this
+  sprint had. See design.md §27.3.
+- [ ] **Not started, paired with the item above as its own future epic:**
+  response rate limiting (BCP 140) — a full feature (memory-bounded
+  per-source tracking under real attack load), not a hardening-pass line
+  item; also the load signal the cookie foundation above needs before
+  BADCOOKIE enforcement means anything. See design.md §27.3.
+
+**Exit criteria (for the shipped half):** a blocked domain's response
+carries an EDE record a client resolver can surface to a user
+(`build_response_attaches_an_extended_error_to_a_blocked_answer`); a TCP
+client pipelining a slow query behind a fast one gets the fast answer first
+(`tests/tcp_pipelining.rs`); a client sending a COOKIE option gets one back,
+correctly bound to its own address
+(`negotiate_cookie_echoes_client_cookie_and_attaches_a_server_cookie`,
+`negotiate_cookie_server_cookie_differs_by_client_ip`). The originally
+planned `dig`-from-a-second-address exit criterion doesn't apply to what
+shipped; it's relevant again once C5 exists.
 
 ---
 

@@ -2106,3 +2106,156 @@ don't get silently assumed away by "Epic O ships eventually."
 | Response-rate limiting (RRL) | The filter node is effectively an open resolver on `:53`/`:1053` with no RRL — a participant in reflection/amplification without it (§9). |
 
 ---
+
+## 27. DNS protocol conformance
+
+Full audit, phased plan, and finding-by-finding rationale:
+[`docs/rfc-compliance.md`](rfc-compliance.md). This section is the permanent
+summary; that file is the point-in-time audit it was built from.
+
+**Status:** all four phases touched 2026-08-21. Phases 1–2 shipped in full.
+Phase 1 (query sanity + EDNS) lives in
+`services/filter/mantis-filter/src/protocol.rs`, shared by all four listener
+loops. Phase 2 (negative-answer SOA, zone correctness) is split across
+`zone_store.rs`, `cache.rs`, `lib.rs`'s `resolve_records`, and one
+control-plane change in `routers.py`. Phase 3 shipped AD propagation and DO
+echo; RRSIG/NSEC/NSEC3 pass-through and per-query CD bypass turned out to
+need a lower-level DNS client as new infrastructure, not a fix that fits this
+epic — see §27.2 and rfc-compliance.md Phase 3 for why. Phase 4 shipped
+Extended DNS Errors, TCP keepalive, TCP out-of-order pipelining, and a DNS
+Cookie foundation; source-address selection on multi-homed nodes and
+response rate limiting remain — see §27.3.
+
+**Phase 1, as built:** a response (QR=1) is dropped, never answered; a
+non-QUERY opcode gets NOTIMP; a non-`IN` class gets REFUSED, except `CH`
+`version.bind`/`id.server`/`hostname.bind`, answered locally; more than one
+question gets FORMERR; AXFR/IXFR get REFUSED and OPT/TSIG as a QTYPE get
+FORMERR; EDNS is echoed on TCP as well as UDP and an unsupported version gets
+BADVERS; RD=0 on a cache miss gets REFUSED instead of recursing; RA is
+cleared on the ServFail/unmatched-route path; an unparseable packet whose
+12-byte header still parses gets FORMERR instead of silence; UDP truncation
+sheds additionals before the answer section and, if still oversized, empties
+the answer section entirely (TC=1) rather than dropping records one at a
+time.
+
+**Phase 2, as built:** every local zone gets an apex SOA — synthesized by the
+control plane (`get_local_zone_records`, serial from `DnsZone.updated_at`)
+with a filter-node-side fallback (`zone_store::synthesize_soa`) if one is
+ever missing — plus an apex NS unless the zone already defines one. NXDOMAIN
+and NODATA carry that SOA in the authority section on all three answer paths:
+stub zone, and upstream (via `hickory_resolver::ResolveError::into_soa()` —
+already tracked by the resolver crate, so `Forwarder::lookup`'s signature
+didn't need to change after all). Empty non-terminals answer NODATA instead
+of NXDOMAIN; a name with only a CNAME answers the CNAME instead of NODATA;
+single-label wildcards (`*.foo` matching a direct child of `foo`, not deeper
+expansions) are supported; TXT values over 255 bytes are chunked into
+multiple character-strings; a fixed list of RFC 6761/6303 special-use and
+private-reverse zones is always locally empty, even with no tenant zone
+configured, so `.onion`/`.local`/RFC 1918 reverse lookups/etc. never reach
+the upstream pool; SERVFAIL responses are now cached too (30s, RFC 9520).
+
+**Phase 3, as built (partial):** the client-facing AD bit is now set
+honestly — `Forwarder::lookup` returns `LookupOutcome { records,
+authenticated }`, where `authenticated` reflects whether every record in the
+answer proved `Proof::Secure` per `hickory_resolver::lookup::Lookup::dnssec_record_iter()`
+(data the resolver already computed whenever `dnssec_strict` turned on
+`ResolverOpts::validate`, previously discarded on the way to `Vec<Record>`).
+Cached alongside the record set so a repeat cache hit still asserts AD
+correctly. DO is echoed back on our own response (`protocol::negotiate_edns`).
+**Not built**, and not a small remainder: RRSIG/NSEC/NSEC3 pass-through and
+per-query CD-driven bypass of `dnssec_strict`, both of which need a
+lower-level DNS client (`hickory-client`, not `hickory-resolver`'s
+type-filtered `Resolver`) as a second resolution path — see §27.2.
+
+**Phase 4, as built (partial):** every blocked answer now carries an
+Extended DNS Error (RFC 8914, info-code 17 "Filtered") naming the matched
+category or override rule, so a blocked name is no longer indistinguishable
+from a broken one to the client's own resolver
+(`protocol::attach_extended_error`). TCP responses advertise
+`edns-tcp-keepalive` (RFC 7828). Both TCP listener loops
+(`lib.rs::handle_tcp_connection`, `router.rs::run_router_tcp_server`) now
+process pipelined queries on one connection concurrently — bounded,
+`MAX_PIPELINED_TCP_QUERIES_PER_CONN` = 16 — and write answers back in
+completion order rather than arrival order (RFC 7766 §6.2.1.1, §7), so one
+slow upstream lookup no longer head-of-line-blocks every query pipelined
+behind it; verified with a real client that pipelines a slow and a fast
+query and asserts the fast one's answer arrives first
+(`tests/tcp_pipelining.rs`). DNS Cookies (RFC 7873) are computed and
+verified, but this is foundation only — no query is currently rejected on a
+cookie mismatch. See §27.3 for why, and for the two remaining Phase 4 items.
+
+### 27.1 Deliberate deviations (not gaps — decided, not fixed)
+
+| Deviation | Where | Note |
+|---|---|---|
+| `min_ttl_s` raises a positive TTL above the authoritative value | `mantis-filter/src/lib.rs` `TtlPolicy::clamp_positive` | RFC 2181 §8 makes TTL an upper bound; extending it is a deviation. Unbound's `cache-min-ttl` does the same and documents it the same way. |
+| All records in a forwarded response are flattened to one TTL (the minimum across the set, including a CNAME chain's separate RRsets) | `mantis-filter/src/lib.rs` `resolve_records` | Safe direction, coarser than RFC 2181 §5.2 requires. |
+| Block answers are synthesized, not signed | `mantis-filter/src/lib.rs` `apply_block_response` | A blocked name that is DNSSEC-signed upstream cannot validate — inherent to DNS filtering. RFC 8914 Extended DNS Error codes (planned, §26 rfc-compliance.md B1) are the mitigation: signal *why*, not fake a signature. |
+| `www.` is stripped during policy normalization | `mantis-filter/src/lib.rs` `normalize` | Deliberate (§18.3) and not a protocol behavior — affects the policy decision only, never the name on the wire. |
+| DDNS from mantis-dhcp is a direct database write, not an RFC 2136 UPDATE | `mantis-dhcp/src/ddns.rs` | Correct for a system that owns both ends of the update; noted because "DDNS" normally implies 2136. |
+
+### 27.2 What "fully compliant" cannot mean here
+
+Filtering is a synthesized answer for a name that may be signed upstream —
+by construction, that is a protocol lie DNSSEC-wise (27.1's third row). The
+achievable target is *conformant except where the product's purpose requires
+a documented deviation, with every deviation signalled to the client* — the
+job of RFC 8914 Extended DNS Errors, tracked as rfc-compliance.md B1.
+
+**Why RRSIG pass-through didn't ship with the rest of Phase 3.** Every
+`Forwarder` impl in `mantis-filter` (`DotForwarder`, `UpstreamBundleForwarder`)
+is built on `hickory_resolver::Resolver::lookup()`, which by design filters
+its answer down to the single requested `RecordType` — RRSIG/NSEC/NSEC3
+records are a different type than the one asked for, so they never reach
+`Lookup.records()` regardless of what the client's DO bit requested. That's
+not a missing flag; it's the shape of the API this crate resolves through.
+Real pass-through needs a lower-level client — `hickory-client`'s
+`AsyncClient`/raw `DnsHandle`, which exposes the full `DnsResponse` including
+every section — as a second resolution path alongside the existing one.
+Per-query CD-driven bypass of `dnssec_strict` hits the same wall from a
+different angle: `dnssec_strict` is baked into one `Resolver` instance per
+upstream pool at build time (`upstream_bundle.rs:532`), not a per-query
+knob, so honoring a client's CD would need a second, non-validating resolver
+instance selectable per request. Both are real, self-contained pieces of
+future work — track them as their own item if a customer needs a validating
+stub resolver downstream of a Mantis node, rather than treating them as an
+open Phase 3 checkbox.
+
+### 27.3 Why Phase 4's cookie foundation doesn't reject anything yet, and what's still missing
+
+**DNS Cookies without enforcement is a deliberate, RFC-correct stopping
+point, not an unfinished feature.** The original plan for C1 assumed
+rejecting a mismatched cookie (BADCOOKIE) was the point of implementing
+cookies at all. Re-reading RFC 7873 §5.2 before writing that enforcement
+code found that assumption wrong: BADCOOKIE-on-mismatch is described as an
+*optional* policy a server MAY apply specifically when it detects load
+suggesting spoofing, not a default response to any mismatch. A mismatch by
+itself is the ordinary, expected result of this process restarting (which
+rotates the cookie secret — §5 explicitly sanctions that as the rotation
+mechanism) or a client's address changing mid-session. Enforcing rejection
+unconditionally would have been non-compliant *and* would have broken every
+client on every routine deploy. What shipped — compute, verify, and always
+answer regardless of the outcome — is the correct machinery for a future
+load-triggered policy to consult; it is not that policy itself.
+
+**The two items still open, C5 and C6, are each a project, not a patch:**
+
+- **C5 (`IP_PKTINFO` source-address selection).** On a multi-homed filter
+  node, a reply currently leaves from whichever local address the kernel's
+  routing table picks, not the address the query actually arrived on — a
+  real bug. Fixing it needs `sendmsg`/`recvmsg` with ancillary
+  control-message data, which tokio's `UdpSocket` doesn't expose
+  (`recv_from`/`send_to` only) — the fix means raw socket-fd syscalls or a
+  new dependency, platform-specific unsafe code, and real multi-homed
+  hardware to verify it against, none of which this pass had.
+- **C6 (response rate limiting, BCP 140).** A genuine standalone feature —
+  per-source tracking that stays memory-bounded under a real flood, with a
+  "similar responses" grouping heuristic BCP 140 deliberately leaves
+  implementation-defined. Done carelessly it becomes a new DoS vector
+  itself, in either direction (unbounded memory, or legitimate clients
+  throttled) — worse than the gap it closes. This is also the load signal
+  C1's cookie foundation is waiting for; the two belong together as one
+  scoped piece of future work, not squeezed into a hardening pass that
+  already covered four unrelated items.
+
+---

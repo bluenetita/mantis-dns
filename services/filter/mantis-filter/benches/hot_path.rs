@@ -64,6 +64,7 @@ fn bench_cache_hit() -> (u64, u64) {
         "example.com".into(),
         u16::from(RecordType::A),
         vec![a_record("example.com")],
+        false,
         Duration::from_secs(300),
     );
     measure(|| {
@@ -89,7 +90,7 @@ fn bench_zone_blocked_lookup() -> (u64, u64) {
         priority: None,
     }]);
     measure(|| match store.lookup("host.internal.bluenetworks.lab.", RecordType::A) {
-        ZoneLookup::NotLocal | ZoneLookup::NxDomain | ZoneLookup::Answer(_) => {}
+        ZoneLookup::NotLocal | ZoneLookup::NxDomain { .. } | ZoneLookup::Answer { .. } => {}
     })
 }
 

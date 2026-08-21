@@ -345,9 +345,10 @@ pub async fn run_router_tcp_server(listener: TcpListener, router: Arc<TenantRout
     let local_addr = listener.local_addr()?;
     info!("mantis-filter multi-tenant TCP DNS listener bound on {local_addr}");
     let sem = Arc::new(tokio::sync::Semaphore::new(crate::MAX_TCP_CONNECTIONS));
+    let empty_zones: Arc<ZoneStore> = Arc::new(ZoneStore::empty());
 
     loop {
-        let (mut stream, peer) = listener.accept().await?;
+        let (stream, peer) = listener.accept().await?;
         let permit = match sem.clone().try_acquire_owned() {
             Ok(p) => p,
             Err(_) => {
@@ -356,10 +357,27 @@ pub async fn run_router_tcp_server(listener: TcpListener, router: Arc<TenantRout
             }
         };
         let router = router.clone();
+        let empty_zones = empty_zones.clone();
         tokio::spawn(async move {
             let _permit = permit;
+            let (mut read_half, mut write_half) = stream.into_split();
+            // C3 / RFC 7766 §6.2.1.1, §7: see lib.rs::handle_tcp_connection's
+            // identical structure — one query's slow upstream lookup must
+            // not head-of-line-block every query pipelined behind it.
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(crate::MAX_PIPELINED_TCP_QUERIES_PER_CONN);
+            let writer = tokio::spawn(async move {
+                while let Some(bytes) = rx.recv().await {
+                    if write_half.write_u16(bytes.len() as u16).await.is_err()
+                        || write_half.write_all(&bytes).await.is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+            let query_sem = Arc::new(tokio::sync::Semaphore::new(crate::MAX_PIPELINED_TCP_QUERIES_PER_CONN));
+
             loop {
-                let msg_len = match tokio::time::timeout(crate::TCP_IDLE_TIMEOUT, stream.read_u16()).await {
+                let msg_len = match tokio::time::timeout(crate::TCP_IDLE_TIMEOUT, read_half.read_u16()).await {
                     Ok(Ok(n)) => n as usize,
                     Ok(Err(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                     Ok(Err(e)) => {
@@ -376,7 +394,7 @@ pub async fn run_router_tcp_server(listener: TcpListener, router: Arc<TenantRout
                 }
 
                 let mut buf = vec![0u8; msg_len];
-                match tokio::time::timeout(crate::TCP_BODY_TIMEOUT, stream.read_exact(&mut buf)).await {
+                match tokio::time::timeout(crate::TCP_BODY_TIMEOUT, read_half.read_exact(&mut buf)).await {
                     Ok(Ok(_)) => {}
                     Ok(Err(e)) => {
                         debug!("TCP read_exact from {peer}: {e}");
@@ -392,52 +410,66 @@ pub async fn run_router_tcp_server(listener: TcpListener, router: Arc<TenantRout
                     Ok(m) => m,
                     Err(e) => {
                         debug!("unparseable TCP DNS message from {peer}: {e}");
-                        break;
+                        // B11/A1: see lib.rs::handle_tcp_connection's identical
+                        // handling — the length prefix already bounded this
+                        // message, so keep the connection open.
+                        if let Some(formerr) = crate::protocol::formerr_for_unparseable(&buf) {
+                            if let Ok(bytes) = formerr.to_bytes() {
+                                if tx.send(bytes).await.is_err() {
+                                    break; // writer task ended; connection is dead
+                                }
+                            }
+                        }
+                        continue;
                     }
                 };
 
-                let matched = router.match_route(peer.ip());
-                let unmatched_route = matched.is_none();
-                if unmatched_route {
-                    debug!("no tenant route matched source IP {}", peer.ip());
-                }
-                let bundle = matched.as_ref().and_then(|route| route.store.current());
-                let empty_zones = ZoneStore::empty();
-                let zones = matched
-                    .as_ref()
-                    .map(|route| route.zones.as_ref())
-                    .unwrap_or(&empty_zones);
-                let upstream = matched
-                    .as_ref()
-                    .map(|route| route.upstream.as_ref())
-                    .unwrap_or(router.fallback_upstream.as_ref());
+                let Ok(permit) = query_sem.clone().acquire_owned().await else {
+                    break;
+                };
+                let router = router.clone();
+                let empty_zones = empty_zones.clone();
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    let matched = router.match_route(peer.ip());
+                    let unmatched_route = matched.is_none();
+                    if unmatched_route {
+                        debug!("no tenant route matched source IP {}", peer.ip());
+                    }
+                    let bundle = matched.as_ref().and_then(|route| route.store.current());
+                    let zones = matched.as_ref().map(|route| route.zones.clone()).unwrap_or(empty_zones);
+                    let upstream = matched
+                        .as_ref()
+                        .map(|route| route.upstream.clone())
+                        .unwrap_or_else(|| router.fallback_upstream.clone());
 
-                let response = build_response(
-                    &query,
-                    bundle.as_deref(),
-                    zones,
-                    peer.ip(),
-                    upstream.cache.as_ref(),
-                    upstream.forwarder.as_ref(),
-                    &router.telemetry,
-                    unmatched_route,
-                )
-                .await;
-
-                match response.to_bytes() {
-                    Ok(bytes) => {
-                        if stream.write_u16(bytes.len() as u16).await.is_err()
-                            || stream.write_all(&bytes).await.is_err()
-                        {
-                            break;
+                    let Some(mut response) = build_response(
+                        &query,
+                        bundle.as_deref(),
+                        &zones,
+                        peer.ip(),
+                        upstream.cache.as_ref(),
+                        upstream.forwarder.as_ref(),
+                        &router.telemetry,
+                        unmatched_route,
+                    )
+                    .await
+                    else {
+                        return; // A1: query was itself a response — never reply.
+                    };
+                    crate::protocol::attach_tcp_keepalive(&mut response);
+                    match response.to_bytes() {
+                        Ok(bytes) => {
+                            let _ = tx.send(bytes).await;
                         }
+                        Err(e) => warn!("failed to encode TCP DNS response for {peer}: {e}"),
                     }
-                    Err(e) => {
-                        warn!("failed to encode TCP DNS response for {peer}: {e}");
-                        break;
-                    }
-                }
+                });
             }
+
+            drop(tx);
+            let _ = writer.await;
         });
     }
 }
@@ -461,7 +493,13 @@ pub async fn run_router_udp_server(socket: UdpSocket, router: Arc<TenantRouter>)
         let query = match Message::from_bytes(&buf[..len]) {
             Ok(m) => m,
             Err(e) => {
-                debug!("dropping unparseable packet from {peer}: {e}");
+                debug!("unparseable UDP packet from {peer}: {e}");
+                // B11: see lib.rs::run_udp_server's identical handling.
+                if let Some(formerr) = crate::protocol::formerr_for_unparseable(&buf[..len]) {
+                    if let Ok(bytes) = formerr.to_bytes() {
+                        let _ = socket.send_to(&bytes, peer).await;
+                    }
+                }
                 continue;
             }
         };
@@ -495,7 +533,7 @@ pub async fn run_router_udp_server(socket: UdpSocket, router: Arc<TenantRouter>)
         let socket = socket.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            let mut response = build_response(
+            let Some(mut response) = build_response(
                 &query,
                 bundle.as_deref(),
                 &zones,
@@ -505,7 +543,10 @@ pub async fn run_router_udp_server(socket: UdpSocket, router: Arc<TenantRouter>)
                 &router.telemetry,
                 unmatched_route,
             )
-            .await;
+            .await
+            else {
+                return; // A1: query was itself a response — never reply.
+            };
             crate::enforce_udp_size_limit(&query, &mut response);
             match response.to_bytes() {
                 Ok(bytes) => {
